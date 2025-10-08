@@ -1,0 +1,108 @@
+\documentclass[german,master,buw]{webisthesis} % Weimar
+% \documentclass[german,bachelor,fsu]{webisthesis} % Jena
+% \documentclass[german,bachelor,ul]{webisthesis} % Leipzig
+% \documentclass[german,master,buw,web]{webisthesis} % Weimar, for web page
+% \documentclass[german,bachelor,fsu,web]{webisthesis} % Jena, for web page
+% \documentclass[german,bachelor,ul,web]{webisthesis} % Leipzig, for web page
+%
+% Non-default programme
+% ---------------------
+% \documentclass[english,master,buw]{webisthesis}\global\thesisprogramme{Human-Computer Interaction}
+% \documentclass[english,master,buw]{webisthesis}\global\thesisfrontpagefaculty{Faculty of Civil Engineering/Faculty of Media}\global\thesisprogramme{Digital Engineering}
+% \documentclass[german,bachelor,buw]{webisthesis}\global\thesisprogramme{Informatik\\Schwerpunkt Medieninformatik}
+% \documentclass[german,bachelor,buw]{webisthesis}\global\thesisprogramme{Informatik\\Schwerpunkt Security and Data Science}
+%
+% When you change the language, pdflatex may halt on recompilation.
+% Just hit enter to continue and recompile again. This should fix it.
+
+
+%
+% Values
+% ------
+\ThesisSetTitle{The Title of the Thesis}
+\ThesisSetKeywords{These, are, my, Keywords} % only for PDF meta attributes
+\ThesisSetLocation{Where  I Live} 
+
+\ThesisSetAuthor{FirstName LastName}
+\ThesisSetStudentNumber{01234}
+\ThesisSetDateOfBirth{1}{1}{1984}
+\ThesisSetPlaceOfBirth{Duckburg}
+
+% Supervisors should usually be Professors from the candidate's university. A second supervisor is not always needed. 
+\ThesisSetSupervisors{Prof.\ Dr.\ Unkown Yet,Prof.\ Dr.\ Also Unknown}
+
+\ThesisSetSubmissionDate{31}{2}{2022}
+
+%
+% Suggested Packages
+% ------------------
+\usepackage[sort&compress]{natbib}
+%   Allows citing in different ways (e.g., only the authors if you use the
+%   citation again within a short time).
+%
+\usepackage{booktabs}
+%    For tables ``looking the right way''.
+%
+% \usepackage{tabularx}
+%    Enables tables with columns that automatically fill the page width.
+%
+% \usepackage[ruled,algochapter]{algorithm2e}
+%    A package for pseudo code algorithms.
+%
+% \usepackage{amsmath}
+%    For tabular-style formatting of mathematical environments.
+%
+
+\usepackage{fontawesome}
+%    For lots of awesome glyphs: https://mirror.physik.tu-berlin.de/pub/CTAN/fonts/fontawesome/doc/fontawesome.pdf
+
+%
+% Commenting (by your supervisor)
+% -------------------------------
+\usepackage{xcolor}
+\usepackage{soul}
+\newcommand{\bscom}[2]{%
+  % #1 Original text.
+  % #2 Replacement text.
+    \st{\scriptsize\,#1}{\color{blue}\scriptsize\,#2}%
+  }
+
+% Create links in the pdf document
+% Hyperref has some incompatibilities with other packages
+% Some other packages must be loaded before, some after hyperref
+% Additional options to the hyperref package can be provided in the braces [], like in
+% \usehyperref[backref] % This will add back references in the bibliography that some people like ... some don't ... so better ask your supervisor ;-)
+\usehyperref
+
+\begin{document}
+\begin{frontmatter}
+\begin{abstract}
+This is the \LaTeX{} template for Bachelor and Master theses at Webis. This template contains several hints and conventions on how to structure a thesis, how to cite the work of others, and how to display your results besides plain text. 
+\end{abstract}
+
+\tableofcontents
+
+% \chapter*{Acknowledgements} % optional
+% I thank the authors of the webisthesis template for their excellent work!
+
+% \listoffigures % optional, usually not needed
+
+% \listoftables % optional, usually not needed
+
+% \listofalgorithms % optional, usually not needed
+%    requires package algorithm2e
+
+% optional: list of symbols/notation (e.g., using the nomencl package) but usually not needed
+\end{frontmatter}
+
+\include{chapter1}
+\include{chapter2}
+
+\include{appendixA}
+
+% Bibliography
+\bibliographystyle{plainnat} % requires package natbib. An alternative is apalike
+\bibliography{literature}    % load file literature.bib
+
+\end{document}
+

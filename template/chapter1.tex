@@ -1,0 +1,19 @@
+\chapter{The Structure of a Thesis in Computer Science}\label{structure}
+
+A thesis in computer science follows the structure of academic writing and consists of several chapters, each chapter contains several sections, and each section can contain several subsections. Sections an subsections contain several paragraphs of text as well as, for example, lists, tables, and figures. It is recommended to start your thesis by studying the scientific toolbox~\footnote{Find our notes on scientific work at \url{https://webis.de/lecturenotes.html\#part-scientific-toolbox}}.
+
+\enlargethispage{\baselineskip}
+
+\section{References}\label{references}
+
+Elements like sections, figures, or tables can be referenced (see Section~\ref{references}) by assigning a \texttt{\textbackslash label\{label-name\}} after the  \texttt{\textbackslash section} command or within a \texttt{\textbackslash begin\{\dots\}} environment and referencing the label with \texttt{\textbackslash ref\{label-name\}}. 
+
+\section{Links and Citations}
+
+In scientific work, all external sources must be cited or linked. 
+
+\paragraph{Scientific Articles} Papers, Textbooks, theses, or other scientific work should always be cited as \texttt{\@Article, \@InProceedings, or \@Book} via bibtex. To cite a work, add a corresponding bibtex-entry to your \texttt{literature.bib} and cite this entry with \texttt{\textbackslash cite\{bib-key\}}: \cite{manning:2001}, \texttt{\textbackslash citep\{bib-key\}}: \citep{manning:2001}, \texttt{\textbackslash citet\{bib-key\}}: \citet{manning:2001}, or \texttt{\textbackslash citeauthor\{bib-key\}}: \citeauthor{manning:2001}. 
+
+\paragraph{Non-scientific Articles} Journalistic articles, books, blog-posts, and various web sources with a known author and title should generally be cited as a \texttt{\@Article, \@Book, or \@Misc} bibtex-entry. For web-sources, provide a url and a date of last access.
+
+\paragraph{Other Sources} Other sources, like images, illustrations, libraries, or source code can be cited by proving a link an a date of last access in a footnote on the page.  
