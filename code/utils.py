@@ -24,8 +24,10 @@ def load_graph(file_path):
 
 @lru_cache(maxsize=None)
 def embed_text(text):
-    return np.array(ollama.embed(model="nomic-embed-text:latest", input=text.replace("_", "")).embeddings)
+    return np.array(ollama.embed(model="nomic-embed-text:latest", input=text.replace("_", "")).embeddings).squeeze()
 
 
 def get_embedding_distance(embedding1, embedding2):
-    return np.linalg.norm(embedding1 - embedding2)
+    dot = np.dot(embedding1, embedding2)
+    norm = np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
+    return 1 - (dot / norm)
