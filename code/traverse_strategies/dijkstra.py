@@ -6,15 +6,14 @@ import networkx as nx
 from utils import embed_text, get_embedding_distance
 
 
-def astar_traverse(graph: nx.DiGraph, start_node: str, end_node: str) -> tuple[list[Any], int]:
-    # Priority queue: (f_score, g_score, current_node, path)
-    open_set = [(0, 0, start_node, [start_node])]
+def dijkstra_traverse(graph: nx.DiGraph, start_node: str, end_node: str) -> tuple[list[Any], int]:
+    # Priority queue: (distance, current_node, path)
+    open_set = [(0, start_node, [start_node])]
     visited = set()
-
-    end_node_embed = embed_text(end_node)
+    distances = {start_node: 0}
 
     while open_set:
-        f_score, g_score, current_node, path = heapq.heappop(open_set)
+        distance, current_node, path = heapq.heappop(open_set)
 
         if current_node == end_node:
             return path, len(visited)
@@ -32,11 +31,10 @@ def astar_traverse(graph: nx.DiGraph, start_node: str, end_node: str) -> tuple[l
             successor_embed = embed_text(successor)
 
             edge_cost = get_embedding_distance(current_node_embed, successor_embed)
-            tentative_g = g_score + edge_cost
+            new_distance = distance + edge_cost
 
-            heuristic = get_embedding_distance(successor_embed, end_node_embed)
-            tentative_f = tentative_g + heuristic
-
-            heapq.heappush(open_set, (tentative_f, tentative_g, successor, path + [successor]))
+            if successor not in distances or new_distance < distances[successor]:
+                distances[successor] = new_distance
+                heapq.heappush(open_set, (new_distance, successor, path + [successor]))
 
     return [], len(visited)

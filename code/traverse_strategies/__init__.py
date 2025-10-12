@@ -1,4 +1,5 @@
-from .bfs import bfs_traverse
 from .astar import astar_traverse
+from .bfs import bfs_traverse
+from .dijkstra import dijkstra_traverse
 
-__all__ = ["bfs_traverse", "astar_traverse"]
+__all__ = ["astar_traverse", "bfs_traverse", "dijkstra_traverse"]

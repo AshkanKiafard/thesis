@@ -20,3 +20,5 @@ if __name__ == "__main__":
     print(f"BFS path found: {path}\nVisited nodes: {visited_nodes}")
     path, visited_nodes = traverse_graph(causal_graph, "study", "success", ts.astar_traverse)
     print(f"A* path found: {path}\nVisited nodes: {visited_nodes}")
+    path, visited_nodes = traverse_graph(causal_graph, "study", "success", ts.dijkstra_traverse)
+    print(f"Dijkstra path found: {path}\nVisited nodes: {visited_nodes}")
