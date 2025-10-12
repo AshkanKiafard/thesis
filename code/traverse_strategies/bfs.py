@@ -23,7 +23,7 @@ def bfs_traverse(graph: nx.DiGraph, start_node: str, end_node: str) -> tuple[lis
                 key=lambda x: -x[1]
             )
 
-            for successor, _ in sorted_successors[:10]:
+            for successor, _ in sorted_successors:
                 if successor not in visited:
                     queue.append((successor, path + [successor]))
 
