@@ -5,7 +5,6 @@ from typing import Any
 import networkx as nx
 import numpy as np
 import ollama
-from sortedcontainers import SortedList
 
 
 @lru_cache(maxsize=None)
@@ -35,12 +34,7 @@ def astar_traverse(graph: nx.DiGraph, start_node: str, end_node: str) -> tuple[l
             continue
         visited.add(current_node)
 
-        sorted_successors = SortedList(
-            [(s, graph.get_edge_data(current_node, s)["support"]) for s in graph.successors(current_node)],
-            key=lambda x: -x[1]
-        )
-
-        for successor, _ in sorted_successors:
+        for successor in graph.successors(current_node):
             if successor in visited:
                 continue
 
