@@ -15,10 +15,15 @@ def traverse_graph(graph: nx.DiGraph, start_node: str, end_node: str, strategy_f
 
 if __name__ == "__main__":
     causal_graph = load_graph("data/causenet-precision.jsonl")
-    print(f"Graph loaded with {causal_graph.number_of_nodes()} nodes and {causal_graph.number_of_edges()} edges.")
-    path, visited_nodes = traverse_graph(causal_graph, "study", "success", ts.bfs_traverse)
+
+    cause = "study"
+    effect = "success"
+
+    path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.bfs_traverse)
     print(f"BFS path found: {path}\nVisited nodes: {visited_nodes}")
-    path, visited_nodes = traverse_graph(causal_graph, "study", "success", ts.astar_traverse)
+
+    path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.astar_traverse)
     print(f"A* path found: {path}\nVisited nodes: {visited_nodes}")
-    path, visited_nodes = traverse_graph(causal_graph, "study", "success", ts.dijkstra_traverse)
+
+    path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.dijkstra_traverse)
     print(f"Dijkstra path found: {path}\nVisited nodes: {visited_nodes}")
