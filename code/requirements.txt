@@ -2,3 +2,4 @@ networkx~=3.5
 sortedcontainers~=2.4.0
 ollama~=0.6.0
 numpy~=2.3.3
+torch~=2.9.0
