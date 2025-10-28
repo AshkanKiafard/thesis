@@ -3,9 +3,20 @@ import networkx as nx
 import torch
 import torch.nn.functional as F
 import numpy as np
+import zipfile
 
 from traverse_strategies.rl_agent import LSTMActorCriticAgent
-from utils import load_embeddings
+
+
+def load_embeddings(file_path="data/embeddings/glove.6B.zip"):
+    embeddings_dict = {}
+    with zipfile.ZipFile(file_path) as z:
+        with z.open("glove.6B.300d.txt", 'r') as f:
+            for line in f:
+                line = line.decode('utf-8').strip().split(' ')
+                embeddings_dict[line[0]] = [float(value) for value in line[1:]]
+    return embeddings_dict
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

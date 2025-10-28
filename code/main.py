@@ -17,18 +17,21 @@ if __name__ == "__main__":
     causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
     print("Causal graph loaded.")
 
-    cause = "study"
-    effect = "success"
-
-    print("Starting RL traversal...")
-    path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.rl_traverse)
-    print(f"RL path found: {path}\nVisited nodes: {visited_nodes}")
-
-    # path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.bfs_traverse)
-    # print(f"BFS path found: {path}\nVisited nodes: {visited_nodes}")
-
-    # path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.astar_traverse)
-    # print(f"A* path found: {path}\nVisited nodes: {visited_nodes}")
+    cause = "money"
+    effect = "happiness"
     #
+    # print("Starting RL traversal...")
+    # path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.rl_traverse)
+    # print(f"RL path found: {path}\nVisited nodes: {visited_nodes}")
+    #
+    print("Starting BFS traversal...")
+    path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.bfs_traverse)
+    print(f"BFS path found: {path}\nVisited nodes: {visited_nodes}")
+
+    print("Starting A* traversal...")
+    path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.astar_traverse)
+    print(f"A* path found: {path}\nVisited nodes: {visited_nodes}")
+    #
+    # print("Starting Dijkstra traversal...")
     # path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.dijkstra_traverse)
     # print(f"Dijkstra path found: {path}\nVisited nodes: {visited_nodes}")
