@@ -1,9 +1,9 @@
 import json
-from functools import lru_cache
+from typing import Callable
 
 import networkx as nx
-import numpy as np
-import ollama
+
+from embeddings import Embeder
 
 
 def load_graph(file_path):
@@ -18,14 +18,21 @@ def load_graph(file_path):
                 }
             )
             for d in map(json.loads, f)
-            if (c := d["causal_relation"]["cause"]["concept"].replace('_', ' ')) != (e := d["causal_relation"]["effect"]["concept"].replace('_', ' '))
+            if (c := d["causal_relation"]["cause"]["concept"].replace('_', ' ')) != (
+                e := d["causal_relation"]["effect"]["concept"].replace('_', ' '))
         ])
 
 
-@lru_cache(maxsize=None)
-def embed_text(text, model="nomic-embed-text:latest"):
-    return np.array(ollama.embed(model=model, input=text.replace("_", "")).embeddings)
+def traverse_graph(graph: nx.DiGraph, start_node: str, end_node: str, embeder: Embeder, strategy_fn: Callable):
+    if start_node not in graph.nodes or end_node not in graph.nodes:
+        return [], 0
+
+    return strategy_fn(graph, start_node, end_node, embeder)
 
 
-def get_embedding_distance(embedding1, embedding2):
-    return np.linalg.norm(embedding1 - embedding2)
+def get_concept(question: dict, concept_type: int) -> str:
+    start = question['query'][concept_type][0]
+    end = question['query'][concept_type][1] + 1
+    concept = [t[0] for t in question['question:POS'][start:end]]
+    concept = ' '.join(concept)
+    return concept

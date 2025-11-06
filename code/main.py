@@ -1,37 +1,25 @@
-from typing import Callable
-
-import networkx as nx
-
 import traverse_strategies as ts
-from utils import load_graph
-
-
-def traverse_graph(graph: nx.DiGraph, start_node: str, end_node: str, strategy_fn: Callable):
-    if start_node not in graph or end_node not in graph:
-        raise ValueError("Both start_node and end_node must exist in the graph.")
-
-    return strategy_fn(graph, start_node, end_node)
-
+from embeddings import Embeder
+from utils import load_graph, traverse_graph
 
 if __name__ == "__main__":
+    nomic_embeder = Embeder(model_name='nomic-embed-text', distance_metric='cosine')
+    print("Embeder initialized.")
+
     causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
     print("Causal graph loaded.")
 
-    cause = "money"
-    effect = "happiness"
-    #
-    # print("Starting RL traversal...")
-    # path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.rl_traverse)
-    # print(f"RL path found: {path}\nVisited nodes: {visited_nodes}")
-    #
+    cause = "jaw clenching"
+    effect = "swelling"
+
     print("Starting BFS traversal...")
-    path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.bfs_traverse)
+    path, visited_nodes = traverse_graph(causal_graph, cause, effect, nomic_embeder, ts.bfs_traverse)
     print(f"BFS path found: {path}\nVisited nodes: {visited_nodes}")
 
     print("Starting A* traversal...")
-    path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.astar_traverse)
+    path, visited_nodes = traverse_graph(causal_graph, cause, effect, nomic_embeder, ts.astar_traverse)
     print(f"A* path found: {path}\nVisited nodes: {visited_nodes}")
-    #
-    # print("Starting Dijkstra traversal...")
-    # path, visited_nodes = traverse_graph(causal_graph, cause, effect, ts.dijkstra_traverse)
-    # print(f"Dijkstra path found: {path}\nVisited nodes: {visited_nodes}")
+
+    print("Starting Dijkstra traversal...")
+    path, visited_nodes = traverse_graph(causal_graph, cause, effect, nomic_embeder, ts.dijkstra_traverse)
+    print(f"Dijkstra path found: {path}\nVisited nodes: {visited_nodes}")

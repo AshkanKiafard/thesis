@@ -4,10 +4,12 @@ from typing import Any
 import networkx as nx
 from sortedcontainers import SortedList
 
+from embeddings import Embeder
 
-def bfs_traverse(graph: nx.DiGraph, start_node: str, end_node: str) -> tuple[list[Any], int]:
-    visited = set()
+
+def bfs_traverse(graph: nx.DiGraph, start_node: str, end_node: str, _embeder: Embeder) -> tuple[list[Any], int]:
     queue = deque([(start_node, [start_node])])
+    visited = set()
 
     while queue:
         current_node, path = queue.popleft()

@@ -3,15 +3,15 @@ from typing import Any
 
 import networkx as nx
 
-from utils import embed_text, get_embedding_distance
+from embeddings import Embeder
 
 
-def astar_traverse(graph: nx.DiGraph, start_node: str, end_node: str) -> tuple[list[Any], int]:
+def astar_traverse(graph: nx.DiGraph, start_node: str, end_node: str, embeder: Embeder) -> tuple[list[Any], int]:
     # Priority queue: (f_score, g_score, current_node, path)
     open_set = [(0, 0, start_node, [start_node])]
     visited = set()
 
-    end_node_embed = embed_text(end_node)
+    end_node_embed = embeder.embed(end_node)
 
     while open_set:
         f_score, g_score, current_node, path = heapq.heappop(open_set)
@@ -23,18 +23,18 @@ def astar_traverse(graph: nx.DiGraph, start_node: str, end_node: str) -> tuple[l
             continue
         visited.add(current_node)
 
-        current_node_embed = embed_text(current_node)
+        current_node_embed = embeder.embed(current_node)
 
         for successor in graph.successors(current_node):
             if successor in visited:
                 continue
 
-            successor_embed = embed_text(successor)
+            successor_embed = embeder.embed(successor)
 
-            edge_cost = get_embedding_distance(current_node_embed, successor_embed)
+            edge_cost = embeder.get_distance(current_node_embed, successor_embed)
             tentative_g = g_score + edge_cost
 
-            heuristic = get_embedding_distance(successor_embed, end_node_embed)
+            heuristic = embeder.get_distance(successor_embed, end_node_embed)
             tentative_f = tentative_g + heuristic
 
             heapq.heappush(open_set, (tentative_f, tentative_g, successor, path + [successor]))
