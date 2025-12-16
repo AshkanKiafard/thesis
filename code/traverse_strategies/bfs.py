@@ -9,16 +9,18 @@ from embeddings import Embeder
 
 def bfs_traverse(graph: nx.DiGraph, start_node: str, end_node: str, _embeder: Embeder) -> tuple[list[Any], int]:
     queue = deque([(start_node, [start_node])])
-    visited = set()
+    nx.set_node_attributes(graph, False, "visited")
+    visited_count = 0
 
     while queue:
         current_node, path = queue.popleft()
 
         if current_node == end_node:
-            return path, len(visited)
+            return path, visited_count
 
-        if current_node not in visited:
-            visited.add(current_node)
+        if not graph.nodes[current_node]["visited"]:
+            nx.set_node_attributes(graph, {current_node: {"visited": True}})
+            visited_count += 1
 
             sorted_successors = SortedList(
                 [(s, graph.get_edge_data(current_node, s)["support"]) for s in graph.successors(current_node)],
@@ -26,7 +28,7 @@ def bfs_traverse(graph: nx.DiGraph, start_node: str, end_node: str, _embeder: Em
             )
 
             for successor, _ in sorted_successors:
-                if successor not in visited:
+                if not graph.nodes[successor]["visited"]:
                     queue.append((successor, path + [successor]))
 
-    return [], len(visited)
+    return [], visited_count
