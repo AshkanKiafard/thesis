@@ -1,88 +1,202 @@
+import gc
 import json
+import os
+import time
+
 import numpy as np
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
+import torch
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
+)
 
 import traverse_strategies as ts
-from embeddings import Embeder
+from embeddings import Embeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
-# Load test data
-with open("data/datasets/msmarco_test.json") as f:
-    test_data = json.load(f)
-print("Test data loaded.")
 
-model_path = "data/models/sentence-transformers/multi-qa-mpnet-base-cos-v1_fine-tuned"
-distance_metric = 'cosine'
-embeder = Embeder(model_path=model_path, distance_metric=distance_metric)
-print("Embeder initialized.")
+GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+TEST = False
+if TEST:
+    OUTPUT_FILE = "data/evaluation/evaluation_results_test.json"
+    VALID_DATA_PATH = "data/datasets/msmarco_test.json"
+else:
+    OUTPUT_FILE = "data/evaluation/evaluation_results_valid.json"
+    VALID_DATA_PATH = "data/datasets/msmarco_valid.json"
 
-causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
-print("Causal graph loaded.")
+base_models = [
+    "sentence-transformers/all-mpnet-base-v2",
+    # "sentence-transformers/all-MiniLM-L12-v2",
+    # "sentence-transformers/multi-qa-mpnet-base-cos-v1"
+]
 
-strategies = {
-    "BFS": ts.bfs_traverse,
-    "A*": ts.astar_traverse,
-    "Dijkstra": ts.dijkstra_traverse
-}
+lightning_dir = "data/models/lightning"
+fine_tuned_models = []
 
-# TODO save time needed!
-results = {
-    name: {"y_true": [], "y_pred": [], "nodes_visited": [], "path_lengths": []}
-    for name in strategies.keys()
-}
+if os.path.exists(lightning_dir):
+    fine_tuned_models = [
+        os.path.join(lightning_dir, name).replace("\\", "/")
+        for name in os.listdir(lightning_dir)
+        if os.path.isdir(os.path.join(lightning_dir, name))
+    ]
+    print(f"Found {len(fine_tuned_models)} fine-tuned models in {lightning_dir}")
+else:
+    print(f"Warning: Directory {lightning_dir} not found.")
 
-# Evaluation loop
-for i, item in enumerate(test_data):
-    print(f"Evaluating item {i + 1}/{len(test_data)}")
+model_queue = base_models + fine_tuned_models
 
-    cause = get_concept(item, 0)
-    effect = get_concept(item, 1)
-    true_label = item['answer:Extracted'][0] == 'Yes'
 
-    for name, strategy in strategies.items():
-        path, visited_nodes = traverse_graph(causal_graph, cause, effect, embeder, strategy)
-        pred_label = bool(path)
+def load_results_file():
+    if os.path.exists(OUTPUT_FILE):
+        with open(OUTPUT_FILE, "r") as f:
+            return json.load(f)
+    return []
 
-        results[name]["y_true"].append(true_label)
-        results[name]["y_pred"].append(pred_label)
-        results[name]["nodes_visited"].append(visited_nodes)
-        results[name]["path_lengths"].append(len(path))
 
-# Compute metrics
-summary = {}
+def save_result(result_entry):
+    current_results = load_results_file()
+    current_results.append(result_entry)
+    with open(OUTPUT_FILE, "w") as f:
+        json.dump(current_results, f, indent=4)
+    print(f"Saved results for '{result_entry['model']}'")
 
-for name in strategies.keys():
-    y_true = np.array(results[name]["y_true"])
-    y_pred = np.array(results[name]["y_pred"])
-    nodes_visited = np.array(results[name]["nodes_visited"], dtype=int)
-    path_lengths = np.array(results[name]["path_lengths"], dtype=int)
 
-    acc = accuracy_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-    precision = precision_score(y_true, y_pred)
-    recall = recall_score(y_true, y_pred)
+def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times):
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+    nodes_visited = np.array(nodes_visited, dtype=int)
+    path_lengths = np.array(path_lengths, dtype=int)
+    times = np.array(times, dtype=float)
 
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    avg_nodes = nodes_visited.mean()
-    avg_path_len = path_lengths[path_lengths > 0].mean()
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[False, True]).ravel()
 
-    metrics = {
-        "accuracy": float(acc),
-        "f1_score": float(f1),
-        "recall": float(recall),
-        "precision": float(precision),
-        "tp": int(tp),
-        "fn": int(fn),
-        "fp": int(fp),
-        "tn": int(tn),
-        "nodes": float(avg_nodes),
-        "path_length": float(avg_path_len)
+    valid_paths = path_lengths[path_lengths > 0]
+    avg_path_len = valid_paths.mean() if len(valid_paths) > 0 else 0.0
+
+    return {
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "f1_score": float(f1_score(y_true, y_pred)),
+        "recall": float(recall_score(y_true, y_pred)),
+        "precision": float(precision_score(y_true, y_pred)),
+        "tp": int(tp), "fn": int(fn), "fp": int(fp), "tn": int(tn),
+        "avg_nodes_visited": float(nodes_visited.mean()),
+        "avg_path_length": float(avg_path_len),
+        "avg_time_sec": float(times.mean())
     }
 
-    summary[name] = metrics
 
-    print(f"--- {name} ---")
-    for k, v in metrics.items():
-        print(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}")
-    print()
+def run_evaluation_loop(data, graph, embeder, strategies, description):
+    results = {
+        name: {"y_true": [], "y_pred": [], "nodes_visited": [], "path_lengths": [], "times": []}
+        for name in strategies.keys()
+    }
 
+    print(f"Starting evaluation: {description}")
+
+    for i, item in enumerate(data):
+        if i % 100 == 0: print(f"  Eval {i}/{len(data)}...")
+
+        cause = get_concept(item, 0)
+        effect = get_concept(item, 1)
+        true_label = item['answer:Extracted'][0] == 'Yes'
+
+        for name, strategy in strategies.items():
+            start_time = time.time()
+            path, visited_nodes = traverse_graph(graph, cause, effect, embeder, strategy)
+            end_time = time.time()
+
+            elapsed = end_time - start_time
+            pred_label = bool(path)  # True if path found, False otherwise
+
+            results[name]["y_true"].append(true_label)
+            results[name]["y_pred"].append(pred_label)
+            results[name]["nodes_visited"].append(visited_nodes)
+            results[name]["path_lengths"].append(len(path))
+            results[name]["times"].append(elapsed)
+
+    summary = {}
+    for name in strategies.keys():
+        metrics = calculate_metrics(
+            results[name]["y_true"],
+            results[name]["y_pred"],
+            results[name]["nodes_visited"],
+            results[name]["path_lengths"],
+            results[name]["times"]
+        )
+        summary[name] = metrics
+
+        print(f"--- {name} Results ---")
+        print(
+            f"Acc: {metrics['accuracy']:.3f} | F1: {metrics['f1_score']:.3f} | Avg Nodes: {metrics['avg_nodes_visited']:.1f}")
+
+    return summary
+
+
+
+if __name__ == "__main__":
+    print("Loading test data...")
+    with open(VALID_DATA_PATH) as f:
+        valid_data = json.load(f)
+
+    print("Loading causal graph...")
+    causal_graph = load_graph(GRAPH_PATH)
+
+    existing_results = load_results_file()
+    bfs_done = any(entry['model'] == "BFS_Baseline" for entry in existing_results)
+
+    if not bfs_done:
+        print("\n=== Running BFS Baseline (One-off) ===")
+        bfs_strategies = {"BFS": ts.bfs_traverse}
+        bfs_summary = run_evaluation_loop(valid_data, causal_graph, None, bfs_strategies, "BFS Baseline")
+
+        save_result({
+            "model": "BFS_Baseline",
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "evaluation": bfs_summary
+        })
+    else:
+        print("\n=== BFS Baseline already exists. Skipping. ===")
+
+    semantic_strategies = {
+        "A*": ts.astar_traverse,
+        "Dijkstra": ts.dijkstra_traverse
+    }
+
+    for model_path in model_queue:
+        print(f"\n{'=' * 60}")
+        print(f"EVALUATING MODEL: {model_path}")
+        print(f"{'=' * 60}")
+
+        existing_results = load_results_file()
+        model_name = model_path.split("/")[-1]
+
+        if any(entry['model'] == model_name for entry in existing_results):
+            print(f"Skipping {model_name} (already in results).")
+            continue
+
+        try:
+            main_embeder = Embeder(model_path=model_path, distance_metric=DistanceMetric.COSINE)
+
+            main_summary = run_evaluation_loop(valid_data, causal_graph, main_embeder, semantic_strategies, model_path)
+
+            save_result({
+                "model": model_name,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "evaluation": main_summary
+            })
+
+            print(f"Cleaning up memory for {model_path}...")
+            del main_embeder
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        except Exception as e:
+            print(f"Error evaluating {model_path}: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+    print("\nAll evaluations complete.")
