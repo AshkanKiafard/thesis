@@ -1,9 +1,10 @@
-torch~=2.9.1
-pytorch-lightning~=2.6.0
 datasets~=4.4.1
-sentence-transformers~=5.1.2
-numpy~=2.3.5
 networkx~=3.6
+numpy~=2.3.5
+optuna~=4.6.0
+pytorch-lightning~=2.6.0
 scikit-learn~=1.7.2
+sentence-transformers~=5.1.2
 sortedcontainers~=2.4.0
+torch~=2.9.1
 transformers~=4.57.3

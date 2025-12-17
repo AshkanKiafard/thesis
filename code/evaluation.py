@@ -28,9 +28,9 @@ else:
     VALID_DATA_PATH = "data/datasets/msmarco_valid.json"
 
 base_models = [
-    "sentence-transformers/all-mpnet-base-v2",
-    # "sentence-transformers/all-MiniLM-L12-v2",
-    # "sentence-transformers/multi-qa-mpnet-base-cos-v1"
+    "all-mpnet-base-v2",
+    # "all-MiniLM-L12-v2",
+    # "multi-qa-mpnet-base-cos-v1"
 ]
 
 lightning_dir = "data/models/lightning"
