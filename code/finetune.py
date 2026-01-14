@@ -8,6 +8,7 @@ from optuna.integration import PyTorchLightningPruningCallback
 
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 from datasets import Dataset, load_from_disk
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -48,7 +49,8 @@ class AStarLoss(nn.Module):
     def forward_text(self, texts):
         features = self.model.tokenize(texts)
         features = {key: val.to(self.model.device) for key, val in features.items()}
-        return self.model(features)["sentence_embedding"]
+        embeddings = self.model(features)["sentence_embedding"]
+        return F.normalize(embeddings, p=2, dim=1)
 
     def forward(self, sentence_features):
         c_emb = self.forward_text(sentence_features[0])
@@ -62,17 +64,13 @@ class AStarLoss(nn.Module):
         d_ne = self.distance(n_emb, e_emb)
 
         diff = (d_cp + d_pe) - (d_cn + d_ne)
-        embeddings_sum = (torch.linalg.vector_norm(c_emb, dim=-1) - 1) ** 2 + \
-                         (torch.linalg.vector_norm(e_emb, dim=-1) - 1) ** 2 + \
-                         (torch.linalg.vector_norm(p_emb, dim=-1) - 1) ** 2 + \
-                         (torch.linalg.vector_norm(n_emb, dim=-1) - 1) ** 2
 
         if self.activation_func == ActivationFunc.RELU:
-            loss = self.relu(diff + embeddings_sum + self.margin).mean()
+            loss = self.relu(diff + self.margin).mean()
         else:
-            loss = self.gelu(diff + embeddings_sum + self.margin).mean()
+            loss = self.gelu(diff + self.margin).mean()
 
-        return loss, diff.mean(), embeddings_sum.mean()
+        return loss
 
 
 class LitAStar(pl.LightningModule):
@@ -85,29 +83,43 @@ class LitAStar(pl.LightningModule):
         self.loss_fn = AStarLoss(self.embedding_model, activation_func, distance_metric, margin)
 
     def training_step(self, batch, batch_idx):
-        loss, diff_val, emb_sum = self.loss_fn([
+        loss = self.loss_fn([
             batch["start_nodes"], batch["end_nodes"],
-            batch["successors"], batch["negatives"]
+            batch["positives"], batch["negatives"]
         ])
         batch_size = len(batch["start_nodes"])
         self.log("train_loss", loss, prog_bar=True, batch_size=batch_size)
-        self.log("train_diff", diff_val, prog_bar=False, batch_size=batch_size)
-        self.log("train_reg", emb_sum, prog_bar=False, batch_size=batch_size)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss, diff_val, emb_sum = self.loss_fn([
+        loss = self.loss_fn([
             batch["start_nodes"], batch["end_nodes"],
-            batch["successors"], batch["negatives"]
+            batch["positives"], batch["negatives"]
         ])
         batch_size = len(batch["start_nodes"])
         self.log("val_loss", loss, prog_bar=True, batch_size=batch_size)
-        self.log("val_diff", diff_val, prog_bar=False, batch_size=batch_size)
-        self.log("val_reg", emb_sum, prog_bar=False, batch_size=batch_size)
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
+
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=0.5,
+            patience=1,
+            verbose=True
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val_loss",
+                "interval": "epoch",
+                "frequency": 1,
+            },
+        }
 
 
 def create_dataset(data, graph, embeder):
@@ -137,13 +149,13 @@ def create_dataset(data, graph, embeder):
 
     return Dataset.from_dict({
         "start_nodes": start_nodes, "end_nodes": end_nodes,
-        "successors": positives, "negatives": negatives
+        "positives": positives, "negatives": negatives
     })
 
 
 def objective(trial, model_name, train_loader, val_loader, activation_func, distance_metric):
-    lr = trial.suggest_float("lr", 1e-6, 1e-4, log=True)
-    margin = trial.suggest_float("margin", 0.0, 2.0, log=False)
+    lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
+    margin = trial.suggest_float("margin", 0.0, 0.01, log=False)
 
     model = LitAStar(
         model_name=model_name,
@@ -178,8 +190,12 @@ if __name__ == "__main__":
     CFG_ACTIVATION_FUNC = ActivationFunc.RELU
 
     causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
+
     with open("data/datasets/msmarco_train.json") as f:
         train_data = json.load(f)
+
+    with open("data/datasets/msmarco_valid.json") as f:
+        valid_data = json.load(f)
 
     model_list = ["all-mpnet-base-v2"]
 
@@ -195,26 +211,45 @@ if __name__ == "__main__":
 
         print(f"\nOptimization starting for: {trained_model_str}")
 
-        ds_path = f"data/datasets/train_{curr_model_name.replace('/', '_')}"
+        train_ds_path = f"data/datasets/train_{curr_model_name.replace('/', '_')}"
+        valid_ds_path = f"data/datasets/valid_{curr_model_name.replace('/', '_')}"
 
-        if os.path.exists(ds_path):
-            print(f"Loading cached dataset: {ds_path}")
-            full_dataset = load_from_disk(ds_path)
-        else:
-            print(f"Creating dataset for {curr_model_name} ...")
+        train_exists = os.path.exists(train_ds_path)
+        valid_exists = os.path.exists(valid_ds_path)
+
+        main_embeder = None
+        if not train_exists or not valid_exists:
+            print(f"Initializing Embedder for {curr_model_name}...")
             main_embeder = Embeder(model_path, CFG_DISTANCE_METRIC)
-            full_dataset = create_dataset(train_data, causal_graph, main_embeder)
-            full_dataset.save_to_disk(ds_path)
-            print(f"Dataset saved to: {ds_path}")
+
+        if train_exists:
+            print(f"Loading cached TRAIN dataset: {train_ds_path}")
+            train_dataset = load_from_disk(train_ds_path)
+        else:
+            print(f"Creating TRAIN dataset for {curr_model_name} ...")
+            train_dataset = create_dataset(train_data, causal_graph, main_embeder)
+            train_dataset.save_to_disk(train_ds_path)
+            print(f"TRAIN Dataset saved to: {train_ds_path}")
+
+        if valid_exists:
+            print(f"Loading cached VAL dataset: {valid_ds_path}")
+            valid_dataset = load_from_disk(valid_ds_path)
+        else:
+            print(f"Creating VAL dataset for {curr_model_name} ...")
+            valid_dataset = create_dataset(valid_data, causal_graph, main_embeder)
+            valid_dataset.save_to_disk(valid_ds_path)
+            print(f"VAL Dataset saved to: {valid_ds_path}")
+
+        if main_embeder:
             del main_embeder
 
-        print(f"Total examples: {len(full_dataset)}")
+        print(f"Total Train examples: {len(train_dataset)}")
+        print(f"Total Val examples: {len(valid_dataset)}")
 
-        split = full_dataset.train_test_split(test_size=0.1)
-
-        main_train_loader = DataLoader(split["train"], batch_size=128, shuffle=True, num_workers=4,
+        main_train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4,
                                        persistent_workers=True)
-        main_val_loader = DataLoader(split["test"], batch_size=128, shuffle=False, num_workers=4,
+
+        main_valid_loader = DataLoader(valid_dataset, batch_size=128, shuffle=False, num_workers=4,
                                      persistent_workers=True)
 
         optuna.logging.set_verbosity(optuna.logging.INFO)
@@ -227,30 +262,18 @@ if __name__ == "__main__":
             pruner=pruner
         )
 
+        print("Finetuning parameters ...")
         study.optimize(
-            lambda trial: objective(trial, model_path, main_train_loader, main_val_loader, CFG_ACTIVATION_FUNC,
+            lambda trial: objective(trial, model_path, main_train_loader, main_valid_loader, CFG_ACTIVATION_FUNC,
                                     CFG_DISTANCE_METRIC),
             n_trials=30,
             gc_after_trial=True
         )
 
-        print(f"Best params for {curr_model_name}: {study.best_params}")
-
-        importances = optuna.importance.get_param_importances(study)
-        print("\n--- Parameter Importance ---")
-        for param, score in importances.items():
-            print(f"  - {param}: {score:.2%}")
-
-        df = study.trials_dataframe()
-        completed = df[df["state"] == "COMPLETE"]
-        if not completed.empty:
-            print("\n--- Top 3 Best Trials ---")
-            print(completed.nsmallest(3, "value")[["number", "value", "params_lr", "params_margin"]])
-
         best_lr = study.best_params["lr"]
         best_margin = study.best_params["margin"]
 
-        print(f"Retraining final model with LR={best_lr}, Margin={best_margin}...")
+        print(f"Training model with LR={best_lr}, Margin={best_margin}...")
 
         final_model = LitAStar(model_path, CFG_ACTIVATION_FUNC, CFG_DISTANCE_METRIC, best_margin, best_lr)
 
@@ -263,10 +286,9 @@ if __name__ == "__main__":
             logger=logger
         )
 
-        main_trainer.fit(final_model, main_train_loader, main_val_loader)
+        main_trainer.fit(final_model, main_train_loader, main_valid_loader)
         final_model.embedding_model.save(save_path)
 
-        # Cleanup
         del final_model, main_trainer, study
         gc.collect()
         torch.cuda.empty_cache()
