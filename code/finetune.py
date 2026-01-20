@@ -114,6 +114,7 @@ class LitAStar(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        # TODO optimize
         starts = batch["start_nodes"]
         ends = batch["end_nodes"]
 
