@@ -29,14 +29,12 @@ class ActivationFunc(Enum):
 
 
 class AStarLoss(nn.Module):
-    def __init__(self, model, activation_func, distance_metric: DistanceMetric, margin: float):
+    def __init__(self, model, activation_func, distance_metric: DistanceMetric, normalize: bool):
         super().__init__()
         self.model = model
         self.distance_metric = distance_metric
-        self.margin = margin
-        self.activation_func = activation_func
-        self.relu = nn.ReLU()
-        self.gelu = nn.GELU()
+        self.activation_func = nn.ReLU() if activation_func == ActivationFunc.RELU else nn.GELU()
+        self.normalize = normalize
 
     def distance(self, a, b):
         if self.distance_metric == DistanceMetric.COSINE:
@@ -50,7 +48,7 @@ class AStarLoss(nn.Module):
         features = self.model.tokenize(texts)
         features = {key: val.to(self.model.device) for key, val in features.items()}
         embeddings = self.model(features)["sentence_embedding"]
-        return F.normalize(embeddings, p=2, dim=1)
+        return F.normalize(embeddings, p=2, dim=1) if self.normalize else embeddings
 
     def forward(self, sentence_features):
         c_emb = self.forward_text(sentence_features[0])
@@ -65,22 +63,46 @@ class AStarLoss(nn.Module):
 
         diff = (d_cp + d_pe) - (d_cn + d_ne)
 
-        if self.activation_func == ActivationFunc.RELU:
-            loss = self.relu(diff + self.margin).mean()
-        else:
-            loss = self.gelu(diff + self.margin).mean()
+        embeddings_sum = (torch.linalg.vector_norm(c_emb, dim=-1) - 1) ** 2 + \
+                         (torch.linalg.vector_norm(e_emb, dim=-1) - 1) ** 2 + \
+                         (torch.linalg.vector_norm(p_emb, dim=-1) - 1) ** 2 + \
+                         (torch.linalg.vector_norm(n_emb, dim=-1) - 1) ** 2
+        regularization = embeddings_sum.mean() if not self.normalize else 0
+
+        loss = self.activation_func(diff).mean() + regularization
 
         return loss
 
 
 class LitAStar(pl.LightningModule):
-    def __init__(self, model_name, activation_func, distance_metric, margin, lr):
+    def __init__(self, model_name, activation_func, distance_metric, normalize, lr, graph):
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=['graph'])
         self.lr = lr
+        self.graph = graph
         self.embedding_model = SentenceTransformer(model_name)
         self.embedding_model.train()
-        self.loss_fn = AStarLoss(self.embedding_model, activation_func, distance_metric, margin)
+        self.loss_fn = AStarLoss(self.embedding_model, activation_func, distance_metric, normalize)
+        self.val_cache = {}
+        self.result_cache = {}
+
+    def on_validation_epoch_start(self):
+        self.val_cache.clear()
+        self.result_cache.clear()
+
+    def on_validation_epoch_end(self):
+        self.val_cache.clear()
+        self.result_cache.clear()
+
+    def embed(self, text: str):
+        if text in self.val_cache:
+            return self.val_cache[text]
+        emb = self.loss_fn.forward_text([text])
+        self.val_cache[text] = emb
+        return emb
+
+    def get_distance(self, emb_a, emb_b):
+        return self.loss_fn.distance(emb_a, emb_b).item()
 
     def training_step(self, batch, batch_idx):
         loss = self.loss_fn([
@@ -92,13 +114,32 @@ class LitAStar(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        loss = self.loss_fn([
-            batch["start_nodes"], batch["end_nodes"],
-            batch["positives"], batch["negatives"]
-        ])
-        batch_size = len(batch["start_nodes"])
-        self.log("val_loss", loss, prog_bar=True, batch_size=batch_size)
-        return loss
+        starts = batch["start_nodes"]
+        ends = batch["end_nodes"]
+
+        total_visits = 0
+        seen_in_batch = set()
+        check_limit = 10
+        for i, (u, v) in enumerate(zip(starts, ends)):
+            if len(seen_in_batch) >= check_limit:
+                break
+
+            if (u, v) in seen_in_batch:
+                continue
+
+            if (u, v) in self.result_cache:
+                visits = self.result_cache[(u, v)]
+            else:
+                print(f"Validating pair {i}: {u} -> {v}")
+                _, visits = traverse_graph(self.graph, u, v, self, ts.astar_traverse)
+                self.result_cache[(u, v)] = visits
+
+            seen_in_batch.add((u, v))
+            total_visits += visits
+
+        avg_visited = total_visits / max(len(seen_in_batch), 1)
+        self.log("val_loss", avg_visited, prog_bar=True, batch_size=len(seen_in_batch))
+        return avg_visited
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
@@ -108,7 +149,6 @@ class LitAStar(pl.LightningModule):
             mode='min',
             factor=0.5,
             patience=1,
-            verbose=True
         )
 
         return {
@@ -135,7 +175,7 @@ def create_dataset(data, graph, embeder):
             path, _ = traverse_graph(graph, cause, effect, embeder, ts.astar_traverse)
             astar_cache[(cause, effect)] = path
 
-        if not path or len(path) < 2: continue
+        if len(path) < 2: continue
 
         for j, node in enumerate(path[:-1]):
             next_node = path[j + 1]
@@ -153,16 +193,17 @@ def create_dataset(data, graph, embeder):
     })
 
 
-def objective(trial, model_name, train_loader, val_loader, activation_func, distance_metric):
+def objective(trial, model_name, train_loader, val_loader, activation_func, distance_metric, graph):
+    # TODO hyperparameter matryoshka
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
-    margin = trial.suggest_float("margin", 0.0, 0.01, log=False)
 
     model = LitAStar(
         model_name=model_name,
         activation_func=activation_func,
         distance_metric=distance_metric,
-        margin=margin,
-        lr=lr
+        normalize=False,
+        lr=lr,
+        graph=graph
     )
 
     pruning_callback = PyTorchLightningPruningCallback(trial, monitor="val_loss")
@@ -186,6 +227,7 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
 
 
 if __name__ == "__main__":
+    VERSION = 2
     CFG_DISTANCE_METRIC = DistanceMetric.COSINE
     CFG_ACTIVATION_FUNC = ActivationFunc.RELU
 
@@ -203,13 +245,13 @@ if __name__ == "__main__":
         curr_model_name = model_path.split("/")[-1]
         activation_func_str = 'relu' if CFG_ACTIVATION_FUNC == ActivationFunc.RELU else 'gelu'
         distance_metric_str = 'cosine' if CFG_DISTANCE_METRIC == DistanceMetric.COSINE else 'euclid'
-        trained_model_str = f"{curr_model_name}_{activation_func_str}_{distance_metric_str}"
+        trained_model_str = f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_v{VERSION}"
         save_path = f"data/models/lightning/{trained_model_str}_finetuned"
         if os.path.exists(save_path):
             print(f"Model already exists at: {save_path}")
             continue
 
-        print(f"\nOptimization starting for: {trained_model_str}")
+        print(f"Optimization starting for: {trained_model_str}")
 
         train_ds_path = f"data/datasets/train_{curr_model_name.replace('/', '_')}"
         valid_ds_path = f"data/datasets/valid_{curr_model_name.replace('/', '_')}"
@@ -250,7 +292,7 @@ if __name__ == "__main__":
                                        persistent_workers=True)
 
         main_valid_loader = DataLoader(valid_dataset, batch_size=128, shuffle=False, num_workers=4,
-                                     persistent_workers=True)
+                                       persistent_workers=True)
 
         optuna.logging.set_verbosity(optuna.logging.INFO)
         pruner = optuna.pruners.MedianPruner()
@@ -264,18 +306,16 @@ if __name__ == "__main__":
 
         print("Finetuning parameters ...")
         study.optimize(
-            lambda trial: objective(trial, model_path, main_train_loader, main_valid_loader, CFG_ACTIVATION_FUNC,
-                                    CFG_DISTANCE_METRIC),
+            lambda trial: objective(trial, model_path, main_train_loader, main_valid_loader, CFG_ACTIVATION_FUNC, CFG_DISTANCE_METRIC, causal_graph),
             n_trials=30,
             gc_after_trial=True
         )
 
         best_lr = study.best_params["lr"]
-        best_margin = study.best_params["margin"]
 
-        print(f"Training model with LR={best_lr}, Margin={best_margin}...")
+        print(f"Training model with LR={best_lr} ...")
 
-        final_model = LitAStar(model_path, CFG_ACTIVATION_FUNC, CFG_DISTANCE_METRIC, best_margin, best_lr)
+        final_model = LitAStar(model_path, CFG_ACTIVATION_FUNC, CFG_DISTANCE_METRIC, False, best_lr, causal_graph)
 
         logger = TensorBoardLogger("data/tb_logs", name=save_path)
 

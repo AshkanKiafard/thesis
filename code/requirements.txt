@@ -7,4 +7,3 @@ scikit-learn~=1.7.2
 sentence-transformers~=5.1.2
 sortedcontainers~=2.4.0
 torch~=2.9.1
-transformers~=4.57.3
