@@ -99,16 +99,20 @@ class MatryoshkaAStarLoss(nn.Module):
 class LitAStar(pl.LightningModule):
     def __init__(self, model_name, activation_func, distance_metric, normalize, lr, matryoshka_dims, graph):
         super().__init__()
+
         self.save_hyperparameters(ignore=['graph'])
         self.lr = lr
         self.graph = graph
+
         self.embedding_model = SentenceTransformer(model_name)
         self.embedding_model.train()
+
         self.loss_fn = MatryoshkaAStarLoss(self.embedding_model,
                                            activation_func,
                                            distance_metric,
                                            normalize,
                                            matryoshka_dims)
+
         self.val_cache = {}
         self.result_cache = {}
 
@@ -116,21 +120,33 @@ class LitAStar(pl.LightningModule):
         self.val_cache.clear()
         self.result_cache.clear()
 
+        all_nodes = list(self.graph.nodes())
+
+        if not all_nodes:
+            return
+
+        self.embedding_model.eval()
+        with torch.no_grad():
+            embeddings = self.embedding_model.encode(
+                all_nodes,
+                batch_size=2048,
+                convert_to_tensor=True,
+                normalize_embeddings=self.loss_fn.normalize,
+                show_progress_bar=False,
+                device=self.device
+            )
+
+        self.val_cache = dict(zip(all_nodes, embeddings))
+
     def on_validation_epoch_end(self):
         self.val_cache.clear()
         self.result_cache.clear()
 
     def embed(self, text: str):
-        if text in self.val_cache:
-            return self.val_cache[text]
-        emb = self.loss_fn.get_raw_embeddings([text])
-        if self.loss_fn.normalize:
-            emb = F.normalize(emb, p=2, dim=1)
-        self.val_cache[text] = emb
-        return emb
+        return self.val_cache[text]
 
     def get_distance(self, emb_a, emb_b):
-        return self.loss_fn.distance(emb_a, emb_b).item()
+        return self.loss_fn.distance(emb_a.unsqueeze(0), emb_b.unsqueeze(0)).item()
 
     def training_step(self, batch, batch_idx):
         loss = self.loss_fn([
@@ -142,41 +158,33 @@ class LitAStar(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        # TODO optimize
-        # starts = batch["start_nodes"]
-        # ends = batch["end_nodes"]
-        #
-        # total_visits = 0
-        # seen_in_batch = set()
-        # check_limit = 10
-        # for i, (u, v) in enumerate(zip(starts, ends)):
-        #     if len(seen_in_batch) >= check_limit:
-        #         break
-        #
-        #     if (u, v) in seen_in_batch:
-        #         continue
-        #
-        #     if (u, v) in self.result_cache:
-        #         visits = self.result_cache[(u, v)]
-        #     else:
-        #         print(f"Validating pair {i}: {u} -> {v}")
-        #         _, visits = traverse_graph(self.graph, u, v, self, ts.astar_traverse)
-        #         self.result_cache[(u, v)] = visits
-        #
-        #     seen_in_batch.add((u, v))
-        #     total_visits += visits
-        #
-        # avg_visited = total_visits / max(len(seen_in_batch), 1)
-        # self.log("val_loss", avg_visited, prog_bar=True, batch_size=len(seen_in_batch))
-        # return avg_visited
+        starts = batch["start_nodes"]
+        ends = batch["end_nodes"]
 
-        loss = self.loss_fn([
+        unique_pairs = list(set(zip(starts, ends)))
+        total_visits = 0
+        pairs_validated = 0
+
+        for i, (u, v) in enumerate(unique_pairs):
+            if (u, v) in self.result_cache:
+                visits = self.result_cache[(u, v)]
+            else:
+                path, visits = traverse_graph(self.graph, u, v, self, ts.astar_traverse)
+                self.result_cache[(u, v)] = visits
+
+            total_visits += visits
+            pairs_validated += 1
+
+        avg_visited = total_visits / max(pairs_validated, 1)
+        self.log("val_astar_cost", avg_visited, prog_bar=True, batch_size=pairs_validated)
+
+        val_loss = self.loss_fn([
             batch["start_nodes"], batch["end_nodes"],
             batch["positives"], batch["negatives"]
         ])
-        batch_size = len(batch["start_nodes"])
-        self.log("val_loss", loss, prog_bar=True, batch_size=batch_size)
-        return loss
+        self.log("val_embedding_loss", val_loss, prog_bar=True, batch_size=len(starts))
+
+        return avg_visited
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
@@ -192,7 +200,7 @@ class LitAStar(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_loss",
+                "monitor": "val_astar_cost",
                 "interval": "epoch",
                 "frequency": 1,
             },
@@ -244,9 +252,9 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
         graph=graph
     )
 
-    pruning_callback = PyTorchLightningPruningCallback(trial, monitor="val_loss")
+    pruning_callback = PyTorchLightningPruningCallback(trial, monitor="val_astar_cost")
 
-    early_stop = EarlyStopping(monitor="val_loss", patience=3, mode="min")
+    early_stop = EarlyStopping(monitor="val_astar_cost", patience=3, mode="min")
 
     trainer = pl.Trainer(
         logger=True,
@@ -256,12 +264,12 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
         accelerator="gpu",
         devices=1,
         callbacks=[early_stop, pruning_callback],
-        enable_progress_bar=True
+        num_sanity_val_steps=0,
     )
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
-    return trainer.callback_metrics["val_loss"].item()
+    return trainer.callback_metrics["val_astar_cost"].item()
 
 
 if __name__ == "__main__":
@@ -374,8 +382,9 @@ if __name__ == "__main__":
         main_trainer = pl.Trainer(
             max_epochs=10,
             accelerator="gpu",
-            callbacks=[EarlyStopping(monitor="val_loss", patience=3, mode="min")],
-            logger=logger
+            callbacks=[EarlyStopping(monitor="val_astar_cost", patience=3, mode="min")],
+            logger=logger,
+            num_sanity_val_steps=0
         )
 
         main_trainer.fit(final_model, main_train_loader, main_valid_loader)
