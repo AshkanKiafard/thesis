@@ -1,4 +1,3 @@
-# Start with plain Python 3.11 (No pre-installed PyTorch)
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
