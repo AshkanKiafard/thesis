@@ -239,7 +239,6 @@ def create_dataset(data, graph, embeder):
 
 
 def objective(trial, model_name, train_loader, val_loader, activation_func, distance_metric, matryoshka_dims, graph):
-    # TODO hyperparameter matryoshka
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
 
     model = LitAStar(
@@ -274,6 +273,7 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
 
 if __name__ == "__main__":
     VERSION = 2
+    TOTAL_TARGET_TRIALS = 30
     CFG_DISTANCE_METRIC = DistanceMetric.COSINE
     CFG_ACTIVATION_FUNC = ActivationFunc.RELU
     MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
@@ -343,27 +343,47 @@ if __name__ == "__main__":
 
         optuna.logging.set_verbosity(optuna.logging.INFO)
         pruner = optuna.pruners.MedianPruner()
+        study_name = f"{trained_model_str}_optimization"
         study = optuna.create_study(
             storage="sqlite:///data/optuna_studies/db.sqlite3",
-            study_name=f"{trained_model_str}_optimization",
+            study_name=study_name,
             load_if_exists=True,
             direction="minimize",
             pruner=pruner
         )
 
-        print("Finetuning parameters ...")
-        study.optimize(
-            lambda trial: objective(trial,
-                                    model_path,
-                                    main_train_loader,
-                                    main_valid_loader,
-                                    CFG_ACTIVATION_FUNC,
-                                    CFG_DISTANCE_METRIC,
-                                    MATRYOSHKA_DIMS,
-                                    causal_graph),
-            n_trials=30,
-            gc_after_trial=True
-        )
+        print("Cleaning zombie trials ...")
+        running_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.RUNNING]
+        if running_trials:
+            print(f"Found {len(running_trials)} interrupted trials (Zombies). Cleaning them up...")
+            for trial in running_trials:
+                try:
+                    study.tell(trial.number, state=optuna.trial.TrialState.FAIL)
+                    print(f"Marked interrupted Trial {trial.number} as FAILED.")
+                except Exception as e:
+                    print(f"Warning: Could not update status for Trial {trial.number}: {e}")
+
+        valid_trials = [
+            t for t in study.trials
+            if t.state in (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)
+        ]
+        current_valid_count = len(valid_trials)
+        trials_to_run = TOTAL_TARGET_TRIALS - current_valid_count
+
+        if trials_to_run > 0:
+            print(f"Resuming study. Running {trials_to_run} more trials...")
+            study.optimize(
+                lambda trial: objective(trial,
+                                        model_path,
+                                        main_train_loader,
+                                        main_valid_loader,
+                                        CFG_ACTIVATION_FUNC,
+                                        CFG_DISTANCE_METRIC,
+                                        MATRYOSHKA_DIMS,
+                                        causal_graph),
+                n_trials=trials_to_run,
+                gc_after_trial=True
+            )
 
         best_lr = study.best_params["lr"]
 
