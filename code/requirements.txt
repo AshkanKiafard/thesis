@@ -1,9 +1,10 @@
+datasets~=4.4.1
 gradio~=5.49.1
 networkx~=3.6
 optuna~=4.6.0
 optuna-integration~=4.6.0
 pytorch-lightning~=2.6.0
-datasets~=4.4.1
 sentence-transformers~=5.1.2
 scikit-learn~=1.7.2
 sortedcontainers~=2.4.0
+tensorboard~=2.20.0
