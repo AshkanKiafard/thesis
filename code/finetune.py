@@ -10,7 +10,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from datasets import Dataset, load_from_disk
-from pytorch_lightning.callbacks import EarlyStopping
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from sentence_transformers import SentenceTransformer
 from torch import nn
@@ -294,6 +294,7 @@ if __name__ == "__main__":
         distance_metric_str = 'cosine' if CFG_DISTANCE_METRIC == DistanceMetric.COSINE else 'euclid'
         trained_model_str = f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_v{VERSION}"
         save_path = f"data/models/lightning/{trained_model_str}_finetuned"
+        ckpt_dir = f"data/checkpoints/{trained_model_str}"
         if os.path.exists(save_path):
             print(f"Model already exists at: {save_path}")
             continue
@@ -389,27 +390,43 @@ if __name__ == "__main__":
 
         print(f"Training model with LR={best_lr} ...")
 
-        final_model = LitAStar(model_path,
-                               CFG_ACTIVATION_FUNC,
-                               CFG_DISTANCE_METRIC,
-                               False,
-                               best_lr,
-                               MATRYOSHKA_DIMS,
-                               causal_graph)
+        final_model = LitAStar(model_path, CFG_ACTIVATION_FUNC, CFG_DISTANCE_METRIC,
+                               False, best_lr, MATRYOSHKA_DIMS, causal_graph)
 
         logger = TensorBoardLogger("data/tb_logs", name=save_path)
 
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=ckpt_dir,
+            filename="{epoch}-{val_astar_cost:.4f}",
+            monitor="val_astar_cost",
+            mode="min",
+            save_top_k=1,
+            save_last=False,
+            verbose=True
+        )
+
+        early_stop_callback = EarlyStopping(monitor="val_astar_cost", patience=10, mode="min")
+
         main_trainer = pl.Trainer(
-            max_epochs=10,
+            max_epochs=50,
             accelerator="gpu",
-            callbacks=[EarlyStopping(monitor="val_astar_cost", patience=3, mode="min")],
+            callbacks=[early_stop_callback, checkpoint_callback],
             logger=logger,
             num_sanity_val_steps=0
         )
 
         main_trainer.fit(final_model, main_train_loader, main_valid_loader)
-        final_model.embedding_model.save(save_path)
 
-        del final_model, main_trainer, study
+        print(f"Loading best model from checkpoint: {checkpoint_callback.best_model_path}")
+
+        best_model = LitAStar.load_from_checkpoint(
+            checkpoint_callback.best_model_path,
+            graph=causal_graph
+        )
+
+        print(f"Saving best SentenceTransformer model to: {save_path}")
+        best_model.embedding_model.save(save_path)
+
+        del final_model, best_model, main_trainer, study
         gc.collect()
         torch.cuda.empty_cache()
