@@ -80,18 +80,18 @@ class MatryoshkaAStarLoss(nn.Module):
         total_loss = 0.0
 
         for dim in self.matryoshka_dims:
-            c = c_raw[:, :dim]
-            e = e_raw[:, :dim]
-            p = p_raw[:, :dim]
-            n = n_raw[:, :dim]
+            cf = c_raw[:, :dim]
+            ef = e_raw[:, :dim]
+            pf = p_raw[:, :dim]
+            nf = n_raw[:, :dim]
 
             if self.normalize:
-                c = F.normalize(c, p=2, dim=1)
-                e = F.normalize(e, p=2, dim=1)
-                p = F.normalize(p, p=2, dim=1)
-                n = F.normalize(n, p=2, dim=1)
+                cf = F.normalize(cf, p=2, dim=1)
+                ef = F.normalize(ef, p=2, dim=1)
+                pf = F.normalize(pf, p=2, dim=1)
+                nf = F.normalize(nf, p=2, dim=1)
 
-            total_loss += self.compute_sub_loss(c, e, p, n)
+            total_loss += self.compute_sub_loss(cf, ef, pf, nf)
 
         return total_loss
 
@@ -357,12 +357,12 @@ if __name__ == "__main__":
         running_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.RUNNING]
         if running_trials:
             print(f"Found {len(running_trials)} interrupted trials (Zombies). Cleaning them up...")
-            for trial in running_trials:
+            for r_trial in running_trials:
                 try:
-                    study.tell(trial.number, state=optuna.trial.TrialState.FAIL)
-                    print(f"Marked interrupted Trial {trial.number} as FAILED.")
+                    study.tell(r_trial.number, state=optuna.trial.TrialState.FAIL)
+                    print(f"Marked interrupted Trial {r_trial.number} as FAILED.")
                 except Exception as e:
-                    print(f"Warning: Could not update status for Trial {trial.number}: {e}")
+                    print(f"Warning: Could not update status for Trial {r_trial.number}: {e}")
 
         valid_trials = [
             t for t in study.trials
@@ -374,7 +374,7 @@ if __name__ == "__main__":
         if trials_to_run > 0:
             print(f"Resuming study. Running {trials_to_run} more trials...")
             study.optimize(
-                lambda trial: objective(trial,
+                lambda l_trial: objective(l_trial,
                                         model_path,
                                         main_train_loader,
                                         main_valid_loader,
