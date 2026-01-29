@@ -10,7 +10,6 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from datasets import Dataset, load_from_disk
-from lightning.pytorch.utilities import grad_norm
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from sentence_transformers import SentenceTransformer
@@ -155,7 +154,7 @@ class LitAStar(pl.LightningModule):
             batch["positives"], batch["negatives"]
         ])
         batch_size = len(batch["start_nodes"])
-        self.log("train_loss", loss, prog_bar=True, batch_size=batch_size)
+        self.log("train/loss", loss, prog_bar=True, batch_size=batch_size)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -177,13 +176,13 @@ class LitAStar(pl.LightningModule):
             pairs_validated += 1
 
         avg_visited = total_visits / max(pairs_validated, 1)
-        self.log("val_astar_cost", avg_visited, prog_bar=True, batch_size=pairs_validated)
+        self.log("val/astar_cost", avg_visited, prog_bar=True, batch_size=pairs_validated)
 
         val_loss = self.loss_fn([
             batch["start_nodes"], batch["end_nodes"],
             batch["positives"], batch["negatives"]
         ])
-        self.log("val_embedding_loss", val_loss, prog_bar=True, batch_size=len(starts))
+        self.log("val/embedding_loss", val_loss, prog_bar=True, batch_size=len(starts))
 
         return avg_visited
 
@@ -208,8 +207,10 @@ class LitAStar(pl.LightningModule):
         }
 
     def on_before_optimizer_step(self, optimizer):
-        norms = grad_norm(self.layer, norm_type=2)
-        self.log_dict(norms)
+        grads = [p.grad for p in self.parameters() if p.grad is not None]
+        if len(grads) > 0:
+            grad_norm = torch.norm(torch.stack([torch.norm(g.detach(), 2) for g in grads]), 2)
+            self.log("train/grad_norm", grad_norm, prog_bar=True)
 
 
 def create_dataset(data, graph, embeder):
