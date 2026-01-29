@@ -402,7 +402,7 @@ if __name__ == "__main__":
             mode="min",
             save_top_k=1,
             save_last=True,
-            verbose=True
+            verbose=True,
         )
 
         early_stop_callback = EarlyStopping(monitor="val_astar_cost", patience=10, mode="min")
@@ -412,7 +412,8 @@ if __name__ == "__main__":
             accelerator="gpu",
             callbacks=[early_stop_callback, checkpoint_callback],
             logger=logger,
-            num_sanity_val_steps=0
+            num_sanity_val_steps=0,
+            track_grad_norm=2
         )
 
         checkpoint_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')] if os.path.exists(ckpt_dir) else []
