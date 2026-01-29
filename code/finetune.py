@@ -200,7 +200,7 @@ class LitAStar(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_astar_cost",
+                "monitor": "val/astar_cost",
                 "interval": "epoch",
                 "frequency": 1,
             },
@@ -257,9 +257,9 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
         graph=graph
     )
 
-    pruning_callback = PyTorchLightningPruningCallback(trial, monitor="val_astar_cost")
+    pruning_callback = PyTorchLightningPruningCallback(trial, monitor="val/astar_cost")
 
-    early_stop = EarlyStopping(monitor="val_astar_cost", patience=3, mode="min")
+    early_stop = EarlyStopping(monitor="val/astar_cost", patience=3, mode="min")
 
     trainer = pl.Trainer(
         logger=True,
@@ -274,7 +274,7 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
-    return trainer.callback_metrics["val_astar_cost"].item()
+    return trainer.callback_metrics["val/astar_cost"].item()
 
 
 if __name__ == "__main__":
@@ -403,15 +403,15 @@ if __name__ == "__main__":
 
         checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,
-            filename="{epoch}-{val_astar_cost:.4f}",
-            monitor="val_astar_cost",
+            filename="{epoch}-{val/astar_cost:.4f}",
+            monitor="val/astar_cost",
             mode="min",
             save_top_k=1,
             save_last=True,
             verbose=True,
         )
 
-        early_stop_callback = EarlyStopping(monitor="val_astar_cost", patience=10, mode="min")
+        early_stop_callback = EarlyStopping(monitor="val/astar_cost", patience=10, mode="min")
 
         main_trainer = pl.Trainer(
             max_epochs=50,
