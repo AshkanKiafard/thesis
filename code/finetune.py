@@ -10,6 +10,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from datasets import Dataset, load_from_disk
+from lightning.pytorch.utilities import grad_norm
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from sentence_transformers import SentenceTransformer
@@ -206,6 +207,10 @@ class LitAStar(pl.LightningModule):
             },
         }
 
+    def on_before_optimizer_step(self, optimizer):
+        norms = grad_norm(self.layer, norm_type=2)
+        self.log_dict(norms)
+
 
 def create_dataset(data, graph, embeder):
     astar_cache = {}
@@ -375,13 +380,13 @@ if __name__ == "__main__":
             print(f"Resuming study. Running {trials_to_run} more trials...")
             study.optimize(
                 lambda l_trial: objective(l_trial,
-                                        model_path,
-                                        main_train_loader,
-                                        main_valid_loader,
-                                        CFG_ACTIVATION_FUNC,
-                                        CFG_DISTANCE_METRIC,
-                                        MATRYOSHKA_DIMS,
-                                        causal_graph),
+                                          model_path,
+                                          main_train_loader,
+                                          main_valid_loader,
+                                          CFG_ACTIVATION_FUNC,
+                                          CFG_DISTANCE_METRIC,
+                                          MATRYOSHKA_DIMS,
+                                          causal_graph),
                 n_trials=trials_to_run,
                 gc_after_trial=True
             )
@@ -413,7 +418,6 @@ if __name__ == "__main__":
             callbacks=[early_stop_callback, checkpoint_callback],
             logger=logger,
             num_sanity_val_steps=0,
-            track_grad_norm=2
         )
 
         checkpoint_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')] if os.path.exists(ckpt_dir) else []
