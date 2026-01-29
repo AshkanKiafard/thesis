@@ -401,7 +401,7 @@ if __name__ == "__main__":
             monitor="val_astar_cost",
             mode="min",
             save_top_k=1,
-            save_last=False,
+            save_last=True,
             verbose=True
         )
 
@@ -415,10 +415,16 @@ if __name__ == "__main__":
             num_sanity_val_steps=0
         )
 
-        main_trainer.fit(final_model, main_train_loader, main_valid_loader)
+        checkpoint_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')] if os.path.exists(ckpt_dir) else []
+        ckpt_path = None
+        if checkpoint_files:
+            ckpt_path = os.path.join(ckpt_dir, checkpoint_files[0])
+            print(f"Found checkpoint! Resuming from: {ckpt_path}")
+        else:
+            print(f"No checkpoints found! Training from scratch.")
+        main_trainer.fit(final_model, main_train_loader, main_valid_loader, ckpt_path=ckpt_path)
 
         print(f"Loading best model from checkpoint: {checkpoint_callback.best_model_path}")
-
         best_model = LitAStar.load_from_checkpoint(
             checkpoint_callback.best_model_path,
             graph=causal_graph
