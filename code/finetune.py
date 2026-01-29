@@ -420,13 +420,20 @@ if __name__ == "__main__":
             num_sanity_val_steps=0,
         )
 
-        checkpoint_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')] if os.path.exists(ckpt_dir) else []
         ckpt_path = None
-        if checkpoint_files:
-            ckpt_path = os.path.join(ckpt_dir, checkpoint_files[0])
-            print(f"Found checkpoint! Resuming from: {ckpt_path}")
+        if os.path.exists(ckpt_dir):
+            checkpoint_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')]
+
+            if checkpoint_files:
+                checkpoint_files.sort(key=lambda x: os.path.getmtime(os.path.join(ckpt_dir, x)), reverse=True)
+                ckpt_path = os.path.join(ckpt_dir, checkpoint_files[0])
+                print(f"Found checkpoint! Resuming from: {ckpt_path}")
+            else:
+                print("No .ckpt files found in directory. Training from scratch.")
         else:
-            print(f"No checkpoints found! Training from scratch.")
+            print("Checkpoint directory not found. Training from scratch.")
+
+        torch.serialization.add_safe_globals([ActivationFunc, DistanceMetric])
         main_trainer.fit(final_model, main_train_loader, main_valid_loader, ckpt_path=ckpt_path)
 
         print(f"Loading best model from checkpoint: {checkpoint_callback.best_model_path}")
