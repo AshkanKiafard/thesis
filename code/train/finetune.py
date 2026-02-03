@@ -17,7 +17,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 import traverse_strategies as ts
-from embeddings import Embeder, DistanceMetric
+from embeddings import STEmbeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
 torch.set_float32_matmul_precision('medium')
@@ -263,7 +263,7 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
 
     trainer = pl.Trainer(
         logger=True,
-        default_root_dir="data/lightning_logs",
+        default_root_dir="../data/lightning_logs",
         enable_checkpointing=False,
         max_epochs=5,
         accelerator="gpu",
@@ -284,12 +284,12 @@ if __name__ == "__main__":
     CFG_ACTIVATION_FUNC = ActivationFunc.RELU
     MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
 
-    causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
+    causal_graph = load_graph("../data/graphs/causenet-precision.jsonl")
 
-    with open("data/datasets/msmarco_train.json") as f:
+    with open("../data/datasets/msmarco_train.json") as f:
         train_data = json.load(f)
 
-    with open("data/datasets/msmarco_valid.json") as f:
+    with open("../data/datasets/msmarco_valid.json") as f:
         valid_data = json.load(f)
 
     model_list = ["all-mpnet-base-v2"]
@@ -316,7 +316,7 @@ if __name__ == "__main__":
         main_embeder = None
         if not train_exists or not valid_exists:
             print(f"Initializing Embedder for {curr_model_name}...")
-            main_embeder = Embeder(model_path, CFG_DISTANCE_METRIC)
+            main_embeder = STEmbeder(model_path, CFG_DISTANCE_METRIC)
 
         if train_exists:
             print(f"Loading cached TRAIN dataset: {train_ds_path}")
@@ -399,7 +399,7 @@ if __name__ == "__main__":
         final_model = LitAStar(model_path, CFG_ACTIVATION_FUNC, CFG_DISTANCE_METRIC,
                                False, best_lr, MATRYOSHKA_DIMS, causal_graph)
 
-        logger = TensorBoardLogger("data/tb_logs", name=save_path)
+        logger = TensorBoardLogger("../data/tb_logs", name=save_path)
 
         checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,

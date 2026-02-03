@@ -14,18 +14,20 @@ from sklearn.metrics import (
 )
 
 import traverse_strategies as ts
-from embeddings import Embeder, DistanceMetric
+from embeddings import STEmbeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
 
-GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
 TEST = False
 if TEST:
-    OUTPUT_FILE = "data/evaluation/evaluation_results_test.json"
-    VALID_DATA_PATH = "data/datasets/msmarco_test.json"
+    OUTPUT_FILE = "../data/evaluation/evaluation_results_test.json"
+    VALID_DATA_PATH = "../data/datasets/msmarco_test.json"
 else:
-    OUTPUT_FILE = "data/evaluation/evaluation_results_valid.json"
-    VALID_DATA_PATH = "data/datasets/msmarco_valid.json"
+    OUTPUT_FILE = "../data/evaluation/evaluation_results_valid.json"
+    VALID_DATA_PATH = "../data/datasets/msmarco_valid.json"
+
+MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
 
 base_models = [
     "all-mpnet-base-v2",
@@ -33,7 +35,7 @@ base_models = [
     # "multi-qa-mpnet-base-cos-v1"
 ]
 
-lightning_dir = "data/models/lightning"
+lightning_dir = "../data/models/lightning"
 fine_tuned_models = []
 
 if os.path.exists(lightning_dir):
@@ -178,15 +180,21 @@ if __name__ == "__main__":
             continue
 
         try:
-            main_embeder = Embeder(model_path=model_path, distance_metric=DistanceMetric.COSINE)
+            main_embeder = STEmbeder(model_path=model_path, distance_metric=DistanceMetric.COSINE)
 
-            main_summary = run_evaluation_loop(valid_data, causal_graph, main_embeder, semantic_strategies, model_path)
+            for dim in MATRYOSHKA_DIMS:
+                print(f"\n--- Evaluating Dim: {dim} ---")
 
-            save_result({
-                "model": model_name,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "evaluation": main_summary
-            })
+                main_embeder.set_matryoshka_dim(dim)
+
+                main_summary = run_evaluation_loop(valid_data, causal_graph, main_embeder, semantic_strategies, model_path)
+
+                save_result({
+                    "model": model_name,
+                    "dimension": dim,
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "evaluation": main_summary
+                })
 
             print(f"Cleaning up memory for {model_path}...")
             del main_embeder

@@ -2,7 +2,7 @@ import os
 import time
 import gradio as gr
 import traverse_strategies as ts
-from embeddings import Embeder, DistanceMetric
+from embeddings import STEmbeder, DistanceMetric
 from utils import load_graph, traverse_graph
 
 # ==========================================
@@ -88,7 +88,7 @@ def infer(model, cause, effect):
     if not cause or not effect:
         return [["Error", "Please select both Cause and Effect", 0, 0.0]]
 
-    embeder = Embeder(model, DistanceMetric.COSINE)
+    embeder = STEmbeder(model, DistanceMetric.COSINE)
     algorithms = ["BFS", "A*", "Dijkstra"]
     results = []
 

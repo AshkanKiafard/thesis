@@ -4,10 +4,10 @@ from typing import Any
 import networkx as nx
 from sortedcontainers import SortedList
 
-from embeddings import Embeder
+from embeddings import STEmbeder
 
 
-def bfs_traverse(graph: nx.DiGraph, start_node: str, end_node: str, _embeder: Embeder) -> tuple[list[Any], int]:
+def bfs_traverse(graph: nx.DiGraph, start_node: str, end_node: str, _embeder: STEmbeder) -> tuple[list[Any], int]:
     queue = deque([(start_node, [start_node])])
     nx.set_node_attributes(graph, False, "visited")
     visited_count = 0

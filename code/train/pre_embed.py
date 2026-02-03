@@ -2,12 +2,12 @@ import os
 import gc
 import torch
 import numpy as np
-from embeddings import Embeder
+from embeddings import STEmbeder
 from utils import load_graph
 
-os.makedirs("data/embeddings", exist_ok=True)
+os.makedirs("../data/embeddings", exist_ok=True)
 
-graph = load_graph("data/graphs/causenet-precision.jsonl")
+graph = load_graph("../data/graphs/causenet-precision.jsonl", False)
 
 base_models = [
     "all-mpnet-base-v2",
@@ -15,7 +15,7 @@ base_models = [
     # "multi-qa-mpnet-base-cos-v1"
 ]
 
-lightning_dir = "data/models/lightning"
+lightning_dir = "../data/models/lightning"
 fine_tuned_models = []
 
 if os.path.exists(lightning_dir):
@@ -56,7 +56,7 @@ for model_path in model_queue:
 
     if len(uncached_nodes) > 0:
         print("Loading model...")
-        embeder = Embeder(model_path=model_path, distance_metric='cosine')
+        embeder = STEmbeder(model_path=model_path, distance_metric='cosine')
 
         total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
 

@@ -3,10 +3,10 @@ from typing import Callable
 
 import networkx as nx
 
-from embeddings import Embeder
+from embeddings import STEmbeder
 
 
-def load_graph(file_path):
+def load_graph(file_path, remove_self_loops=True):
     with open(file_path) as f:
         return nx.DiGraph([
             (
@@ -18,12 +18,12 @@ def load_graph(file_path):
                 }
             )
             for d in map(json.loads, f)
-            if (c := d["causal_relation"]["cause"]["concept"].replace('_', ' ')) != (
-                e := d["causal_relation"]["effect"]["concept"].replace('_', ' '))
+            if ((c := d["causal_relation"]["cause"]["concept"].replace('_', ' ')) !=
+                (e := d["causal_relation"]["effect"]["concept"].replace('_', ' '))) or not remove_self_loops
         ])
 
 
-def traverse_graph(graph: nx.DiGraph, start_node: str, end_node: str, embeder: Embeder, strategy_fn: Callable):
+def traverse_graph(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder, strategy_fn: Callable):
     if start_node not in graph.nodes or end_node not in graph.nodes:
         return [], 0
 
