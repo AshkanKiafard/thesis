@@ -14,9 +14,8 @@ from sklearn.metrics import (
 )
 
 import traverse_strategies as ts
-from embeddings import STEmbeder, DistanceMetric
+from embeddings import STEmbeder, GloveEmbeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
-
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 TEST = False
@@ -90,7 +89,7 @@ def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times):
     }
 
 
-def run_evaluation_loop(data, graph, embeder, strategies, description):
+def run_evaluation_loop(data, graph, embeder, strategies, description, config=None):
     results = {
         name: {"y_true": [], "y_pred": [], "nodes_visited": [], "path_lengths": [], "times": []}
         for name in strategies.keys()
@@ -107,11 +106,11 @@ def run_evaluation_loop(data, graph, embeder, strategies, description):
 
         for name, strategy in strategies.items():
             start_time = time.time()
-            path, visited_nodes = traverse_graph(graph, cause, effect, embeder, strategy)
+            path, visited_nodes = traverse_graph(graph, cause, effect, embeder, config, strategy)
             end_time = time.time()
 
             elapsed = end_time - start_time
-            pred_label = bool(path)  # True if path found, False otherwise
+            pred_label = bool(path)
 
             results[name]["y_true"].append(true_label)
             results[name]["y_pred"].append(pred_label)
@@ -137,7 +136,6 @@ def run_evaluation_loop(data, graph, embeder, strategies, description):
     return summary
 
 
-
 if __name__ == "__main__":
     print("Loading test data...")
     with open(VALID_DATA_PATH) as f:
@@ -147,8 +145,8 @@ if __name__ == "__main__":
     causal_graph = load_graph(GRAPH_PATH)
 
     existing_results = load_results_file()
-    bfs_done = any(entry['model'] == "BFS_Baseline" for entry in existing_results)
 
+    bfs_done = any(entry['model'] == "BFS_Baseline" for entry in existing_results)
     if not bfs_done:
         print("\n=== Running BFS Baseline (One-off) ===")
         bfs_strategies = {"BFS": ts.bfs_traverse}
@@ -161,6 +159,46 @@ if __name__ == "__main__":
         })
     else:
         print("\n=== BFS Baseline already exists. Skipping. ===")
+
+    rl_done = any(entry['model'] == "RL_Baseline" for entry in existing_results)
+    if not rl_done:
+        print("\n=== Running RL Baseline (One-off) ===")
+        try:
+            rl_embeder = GloveEmbeder('data/embeddings/glove.6B/glove.6B.300d.txt', DistanceMetric.COSINE)
+
+            rl_strategies = {"RL": ts.rl_traverse}
+
+            rl_config = {
+                'rl_model_path': "data/models/rl/msmarco_evaluation_state_dict.pt",
+                'rl_beam_width': 5,
+                'rl_max_path_len': 20
+            }
+
+            rl_summary = run_evaluation_loop(
+                valid_data,
+                causal_graph,
+                rl_embeder,
+                rl_strategies,
+                "RL Baseline",
+                config=rl_config
+            )
+
+            save_result({
+                "model": "RL_Baseline",
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "evaluation": rl_summary
+            })
+
+            del rl_embeder
+            gc.collect()
+
+        except Exception as e:
+            print(f"Failed to run RL Baseline: {e}")
+            import traceback
+
+            traceback.print_exc()
+    else:
+        print("\n=== RL Baseline already exists. Skipping. ===")
 
     semantic_strategies = {
         "A*": ts.astar_traverse,
@@ -180,6 +218,7 @@ if __name__ == "__main__":
             continue
 
         try:
+            # Re-initialize embedder for each model
             main_embeder = STEmbeder(model_path=model_path, distance_metric=DistanceMetric.COSINE)
 
             for dim in MATRYOSHKA_DIMS:
@@ -187,7 +226,8 @@ if __name__ == "__main__":
 
                 main_embeder.set_matryoshka_dim(dim)
 
-                main_summary = run_evaluation_loop(valid_data, causal_graph, main_embeder, semantic_strategies, model_path)
+                main_summary = run_evaluation_loop(valid_data, causal_graph, main_embeder, semantic_strategies,
+                                                   model_path)
 
                 save_result({
                     "model": model_name,

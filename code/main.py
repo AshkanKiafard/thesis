@@ -10,8 +10,8 @@ if __name__ == "__main__":
     causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
     print("Causal graph loaded.")
 
-    cause = "study"
-    effect = "success"
+    cause = "birth"
+    effect = "death"
 
     print("Starting BFS traversal...")
     path, visited_nodes = traverse_graph(causal_graph, cause, effect, st_embeder, None, ts.bfs_traverse)
