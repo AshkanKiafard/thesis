@@ -6,7 +6,7 @@ import networkx as nx
 from embeddings import STEmbeder
 
 
-def astar_traverse(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder) -> tuple[list[Any], int]:
+def astar_traverse(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder, _config=None) -> tuple[list[Any], int]:
     # Priority queue: (f_score, g_score, current_node, path)
     open_set = [(0, 0, start_node, [start_node])]
     nx.set_node_attributes(graph, False, "visited")

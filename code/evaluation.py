@@ -18,14 +18,14 @@ from embeddings import STEmbeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
 
-GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
+GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 TEST = False
 if TEST:
-    OUTPUT_FILE = "../data/evaluation/evaluation_results_test.json"
-    VALID_DATA_PATH = "../data/datasets/msmarco_test.json"
+    OUTPUT_FILE = "data/evaluation/evaluation_results_test.json"
+    VALID_DATA_PATH = "data/datasets/msmarco_test.json"
 else:
-    OUTPUT_FILE = "../data/evaluation/evaluation_results_valid.json"
-    VALID_DATA_PATH = "../data/datasets/msmarco_valid.json"
+    OUTPUT_FILE = "data/evaluation/evaluation_results_valid.json"
+    VALID_DATA_PATH = "data/datasets/msmarco_valid.json"
 
 MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
 
@@ -35,7 +35,7 @@ base_models = [
     # "multi-qa-mpnet-base-cos-v1"
 ]
 
-lightning_dir = "../data/models/lightning"
+lightning_dir = "data/models/lightning"
 fine_tuned_models = []
 
 if os.path.exists(lightning_dir):

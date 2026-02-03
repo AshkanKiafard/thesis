@@ -5,9 +5,9 @@ import numpy as np
 from embeddings import STEmbeder
 from utils import load_graph
 
-os.makedirs("../data/embeddings", exist_ok=True)
+os.makedirs("data/embeddings", exist_ok=True)
 
-graph = load_graph("../data/graphs/causenet-precision.jsonl", False)
+graph = load_graph("data/graphs/causenet-precision.jsonl", False)
 
 base_models = [
     "all-mpnet-base-v2",
@@ -15,7 +15,7 @@ base_models = [
     # "multi-qa-mpnet-base-cos-v1"
 ]
 
-lightning_dir = "../data/models/lightning"
+lightning_dir = "data/models/lightning"
 fine_tuned_models = []
 
 if os.path.exists(lightning_dir):

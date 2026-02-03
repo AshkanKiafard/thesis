@@ -263,7 +263,7 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
 
     trainer = pl.Trainer(
         logger=True,
-        default_root_dir="../data/lightning_logs",
+        default_root_dir="data/lightning_logs",
         enable_checkpointing=False,
         max_epochs=5,
         accelerator="gpu",
@@ -284,12 +284,12 @@ if __name__ == "__main__":
     CFG_ACTIVATION_FUNC = ActivationFunc.RELU
     MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
 
-    causal_graph = load_graph("../data/graphs/causenet-precision.jsonl")
+    causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
 
-    with open("../data/datasets/msmarco_train.json") as f:
+    with open("data/datasets/msmarco_train.json") as f:
         train_data = json.load(f)
 
-    with open("../data/datasets/msmarco_valid.json") as f:
+    with open("data/datasets/msmarco_valid.json") as f:
         valid_data = json.load(f)
 
     model_list = ["all-mpnet-base-v2"]
@@ -399,7 +399,7 @@ if __name__ == "__main__":
         final_model = LitAStar(model_path, CFG_ACTIVATION_FUNC, CFG_DISTANCE_METRIC,
                                False, best_lr, MATRYOSHKA_DIMS, causal_graph)
 
-        logger = TensorBoardLogger("../data/tb_logs", name=save_path)
+        logger = TensorBoardLogger("data/tb_logs", name=save_path)
 
         checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,

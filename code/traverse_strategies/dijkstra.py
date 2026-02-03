@@ -6,7 +6,7 @@ import networkx as nx
 from embeddings import STEmbeder
 
 
-def dijkstra_traverse(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder) -> tuple[list[Any], int]:
+def dijkstra_traverse(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder, _config=None) -> tuple[list[Any], int]:
     # Priority queue: (distance, current_node, path)
     open_set = [(0, start_node, [start_node])]
     nx.set_node_attributes(graph, False, "visited")

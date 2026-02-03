@@ -23,11 +23,11 @@ def load_graph(file_path, remove_self_loops=True):
         ])
 
 
-def traverse_graph(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder, strategy_fn: Callable):
+def traverse_graph(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder, config, strategy_fn: Callable):
     if start_node not in graph.nodes or end_node not in graph.nodes:
         return [], 0
 
-    return strategy_fn(graph, start_node, end_node, embeder)
+    return strategy_fn(graph, start_node, end_node, embeder, config)
 
 
 def get_concept(question: dict, concept_type: int) -> str:
