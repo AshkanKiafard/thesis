@@ -23,7 +23,8 @@ def load_graph(file_path, remove_self_loops=True):
         ])
 
 
-def traverse_graph(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder, config, strategy_fn: Callable):
+def traverse_graph(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder, strategy_fn: Callable,
+                   config: dict = None):
     if start_node not in graph.nodes or end_node not in graph.nodes:
         return [], 0
 

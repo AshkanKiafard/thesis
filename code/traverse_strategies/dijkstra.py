@@ -1,12 +1,17 @@
 import heapq
-from typing import Any
+from typing import Any, Dict
 
 import networkx as nx
 
 from embeddings import STEmbeder
 
 
-def dijkstra_traverse(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder, _config=None) -> tuple[list[Any], int]:
+def dijkstra_traverse(graph: nx.DiGraph, start_node: str, end_node: str, embeder: STEmbeder,
+                      config: Dict[str, Any] = None) -> tuple[list[Any], int]:
+    if config is None: config = {}
+
+    max_visits = config.get('dijkstra_max_visits', -1)
+
     # Priority queue: (distance, current_node, path)
     open_set = [(0, start_node, [start_node])]
     nx.set_node_attributes(graph, False, "visited")
@@ -23,6 +28,8 @@ def dijkstra_traverse(graph: nx.DiGraph, start_node: str, end_node: str, embeder
             continue
         nx.set_node_attributes(graph, {current_node: {"visited": True}})
         visited_count += 1
+        if max_visits != -1 and visited_count > max_visits:
+            return [], visited_count
 
         current_node_embed = embeder.embed(current_node)
 

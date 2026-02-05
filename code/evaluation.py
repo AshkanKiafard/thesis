@@ -2,7 +2,6 @@ import gc
 import json
 import os
 import time
-
 import numpy as np
 import torch
 from sklearn.metrics import (
@@ -28,11 +27,7 @@ else:
 
 MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
 
-base_models = [
-    "all-mpnet-base-v2",
-    # "all-MiniLM-L12-v2",
-    # "multi-qa-mpnet-base-cos-v1"
-]
+base_models = ["all-mpnet-base-v2"]
 
 lightning_dir = "data/models/lightning"
 fine_tuned_models = []
@@ -43,9 +38,6 @@ if os.path.exists(lightning_dir):
         for name in os.listdir(lightning_dir)
         if os.path.isdir(os.path.join(lightning_dir, name))
     ]
-    print(f"Found {len(fine_tuned_models)} fine-tuned models in {lightning_dir}")
-else:
-    print(f"Warning: Directory {lightning_dir} not found.")
 
 model_queue = base_models + fine_tuned_models
 
@@ -66,17 +58,11 @@ def save_result(result_entry):
 
 
 def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times):
-    y_true = np.array(y_true)
-    y_pred = np.array(y_pred)
-    nodes_visited = np.array(nodes_visited, dtype=int)
-    path_lengths = np.array(path_lengths, dtype=int)
-    times = np.array(times, dtype=float)
-
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    nodes_visited, path_lengths, times = np.array(nodes_visited), np.array(path_lengths), np.array(times)
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[False, True]).ravel()
-
     valid_paths = path_lengths[path_lengths > 0]
     avg_path_len = valid_paths.mean() if len(valid_paths) > 0 else 0.0
-
     return {
         "accuracy": float(accuracy_score(y_true, y_pred)),
         "f1_score": float(f1_score(y_true, y_pred)),
@@ -99,14 +85,16 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
 
     for i, item in enumerate(data):
         if i % 100 == 0: print(f"  Eval {i}/{len(data)}...")
-
         cause = get_concept(item, 0)
         effect = get_concept(item, 1)
+        if cause not in graph.nodes or effect not in graph.nodes:
+            continue
+
         true_label = item['answer:Extracted'][0] == 'Yes'
 
         for name, strategy in strategies.items():
             start_time = time.time()
-            path, visited_nodes = traverse_graph(graph, cause, effect, embeder, config, strategy)
+            path, visited_nodes = traverse_graph(graph, cause, effect, embeder, strategy, config)
             end_time = time.time()
 
             elapsed = end_time - start_time
@@ -121,130 +109,80 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
     summary = {}
     for name in strategies.keys():
         metrics = calculate_metrics(
-            results[name]["y_true"],
-            results[name]["y_pred"],
-            results[name]["nodes_visited"],
-            results[name]["path_lengths"],
+            results[name]["y_true"], results[name]["y_pred"],
+            results[name]["nodes_visited"], results[name]["path_lengths"],
             results[name]["times"]
         )
         summary[name] = metrics
-
         print(f"--- {name} Results ---")
         print(
             f"Acc: {metrics['accuracy']:.3f} | F1: {metrics['f1_score']:.3f} | Avg Nodes: {metrics['avg_nodes_visited']:.1f}")
-
     return summary
 
 
 if __name__ == "__main__":
+    MASTER_CONFIG = {
+        'rl_model_path': "data/models/rl/msmarco_evaluation_state_dict.pt",
+        'rl_beam_width': 5,
+        'rl_max_path_len': -1,
+        'rl_max_visits': 445,
+        'astar_max_visits': 399,
+        'dijkstra_max_visits': 5987
+    }
+
     print("Loading test data...")
     with open(VALID_DATA_PATH) as f:
         valid_data = json.load(f)
 
     print("Loading causal graph...")
     causal_graph = load_graph(GRAPH_PATH)
-
     existing_results = load_results_file()
 
-    bfs_done = any(entry['model'] == "BFS_Baseline" for entry in existing_results)
-    if not bfs_done:
-        print("\n=== Running BFS Baseline (One-off) ===")
-        bfs_strategies = {"BFS": ts.bfs_traverse}
-        bfs_summary = run_evaluation_loop(valid_data, causal_graph, None, bfs_strategies, "BFS Baseline")
+    # BFS Baseline
+    if not any(entry['model'] == "BFS_Baseline" for entry in existing_results):
+        print("\n=== Running BFS Baseline ===")
+        bfs_summary = run_evaluation_loop(valid_data, causal_graph, None, {"BFS": ts.bfs_traverse}, "BFS Baseline",
+                                          config=MASTER_CONFIG)
+        save_result(
+            {"model": "BFS_Baseline", "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"), "evaluation": bfs_summary})
 
-        save_result({
-            "model": "BFS_Baseline",
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "evaluation": bfs_summary
-        })
-    else:
-        print("\n=== BFS Baseline already exists. Skipping. ===")
-
-    rl_done = any(entry['model'] == "RL_Baseline" for entry in existing_results)
-    if not rl_done:
-        print("\n=== Running RL Baseline (One-off) ===")
+    # RL Baseline
+    if not any(entry['model'] == "RL_Baseline" for entry in existing_results):
+        print("\n=== Running RL Baseline ===")
         try:
             rl_embeder = GloveEmbeder('data/embeddings/glove.6B/glove.6B.300d.txt', DistanceMetric.COSINE)
-
-            rl_strategies = {"RL": ts.rl_traverse}
-
-            rl_config = {
-                'rl_model_path': "data/models/rl/msmarco_evaluation_state_dict.pt",
-                'rl_beam_width': 5,
-                'rl_max_path_len': 20
-            }
-
-            rl_summary = run_evaluation_loop(
-                valid_data,
-                causal_graph,
-                rl_embeder,
-                rl_strategies,
-                "RL Baseline",
-                config=rl_config
-            )
-
-            save_result({
-                "model": "RL_Baseline",
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "evaluation": rl_summary
-            })
-
+            rl_summary = run_evaluation_loop(valid_data, causal_graph, rl_embeder, {"RL": ts.rl_traverse},
+                                             "RL Baseline", config=MASTER_CONFIG)
+            save_result(
+                {"model": "RL_Baseline", "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"), "evaluation": rl_summary})
             del rl_embeder
             gc.collect()
-
         except Exception as e:
-            print(f"Failed to run RL Baseline: {e}")
-            import traceback
+            print(f"Failed RL: {e}")
 
-            traceback.print_exc()
-    else:
-        print("\n=== RL Baseline already exists. Skipping. ===")
-
-    semantic_strategies = {
-        "A*": ts.astar_traverse,
-        "Dijkstra": ts.dijkstra_traverse
-    }
+    # Semantic Strategies (A* and Dijkstra)
+    semantic_strategies = {"A*": ts.astar_traverse, "Dijkstra": ts.dijkstra_traverse}
 
     for model_path in model_queue:
-        print(f"\n{'=' * 60}")
-        print(f"EVALUATING MODEL: {model_path}")
-        print(f"{'=' * 60}")
-
-        existing_results = load_results_file()
         model_name = model_path.split("/")[-1]
-
         if any(entry['model'] == model_name for entry in existing_results):
-            print(f"Skipping {model_name} (already in results).")
             continue
 
+        print(f"\nEVALUATING: {model_path}")
         try:
-            # Re-initialize embedder for each model
             main_embeder = STEmbeder(model_path=model_path, distance_metric=DistanceMetric.COSINE)
-
             for dim in MATRYOSHKA_DIMS:
-                print(f"\n--- Evaluating Dim: {dim} ---")
-
+                print(f"--- Dim: {dim} ---")
                 main_embeder.set_matryoshka_dim(dim)
-
                 main_summary = run_evaluation_loop(valid_data, causal_graph, main_embeder, semantic_strategies,
-                                                   model_path)
+                                                   model_path, config=MASTER_CONFIG)
+                save_result({"model": model_name, "dimension": dim, "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                             "evaluation": main_summary})
 
-                save_result({
-                    "model": model_name,
-                    "dimension": dim,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "evaluation": main_summary
-                })
-
-            print(f"Cleaning up memory for {model_path}...")
             del main_embeder
             gc.collect()
             torch.cuda.empty_cache()
-
         except Exception as e:
-            print(f"Error evaluating {model_path}: {e}")
-            import traceback
-
-            traceback.print_exc()
+            print(f"Error: {e}")
 
     print("\nAll evaluations complete.")

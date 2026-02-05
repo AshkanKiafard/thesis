@@ -23,7 +23,8 @@ Tuple[List[Any], int]:
 
     model_path = config.get('rl_model_path', "data/models/rl/msmarco_evaluation_state_dict.pt")
     beam_width = config.get('rl_beam_width', 5)
-    max_path_len = config.get('rl_max_path_len', 5)
+    max_path_len = config.get('rl_max_path_len', -1)
+    max_visits = config.get('rl_max_visits', -1)
 
     model = LSTMActorCriticAgent(input_dim=600, output_dim=600, hidden_dim_mlp=2048, hidden_dim_lstm=1024)
 
@@ -37,11 +38,18 @@ Tuple[List[Any], int]:
     candidates = [BeamCandidate(path=[start_node], prob=0.0, lstm_state=initial_state, visited={start_node})]
     visited_count = 0
 
-    for _ in range(max_path_len):
+    step_count = 0
+
+    while candidates:
+        if max_path_len != -1 and step_count >= max_path_len:
+            break
+
+        step_count += 1
         next_candidates = []
 
         for cand in candidates:
             current_node = cand.path[-1]
+
             if current_node == end_node:
                 return cand.path, visited_count
 
@@ -57,6 +65,9 @@ Tuple[List[Any], int]:
 
             neighbors = list(graph.successors(current_node))
             visited_count += 1
+            if max_visits != -1 and visited_count > max_visits:
+                return [], visited_count
+
             valid_neighbors = [n for n in neighbors if n not in cand.visited]
 
             if not valid_neighbors:
@@ -91,7 +102,8 @@ Tuple[List[Any], int]:
             break
 
         candidates = sorted(next_candidates, key=lambda x: x.prob, reverse=True)[:beam_width]
+
         if candidates[0].path[-1] == end_node:
             return candidates[0].path, visited_count
 
-    return candidates[0].path, visited_count
+    return [], visited_count
