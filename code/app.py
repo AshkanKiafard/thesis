@@ -2,7 +2,7 @@ import os
 import time
 import gradio as gr
 import traverse_strategies as ts
-from embeddings import STEmbeder, DistanceMetric
+from embeddings import STEmbeder, DistanceMetric, GloveEmbeder
 from utils import load_graph, traverse_graph
 
 # ==========================================
@@ -88,8 +88,10 @@ def infer(model, cause, effect):
     if not cause or not effect:
         return [["Error", "Please select both Cause and Effect", 0, 0.0]]
 
-    embeder = STEmbeder(model, DistanceMetric.COSINE)
-    algorithms = ["BFS", "A*", "Dijkstra"]
+    st_embeder = STEmbeder(model, DistanceMetric.COSINE)
+    glove_embeder = GloveEmbeder('data/embeddings/glove.6B/glove.6B.300d.txt', DistanceMetric.COSINE)
+
+    algorithms = ["BFS", "A*", "Dijkstra", "RL"]
     results = []
 
     for algo in algorithms:
@@ -99,11 +101,13 @@ def infer(model, cause, effect):
         visited_nodes = 0
         try:
             if algo == "BFS":
-                path, visited_nodes = traverse_graph(causal_graph, cause, effect, embeder, ts.bfs_traverse)
+                path, visited_nodes = traverse_graph(causal_graph, cause, effect, st_embeder, ts.bfs_traverse)
             elif algo == "A*":
-                path, visited_nodes = traverse_graph(causal_graph, cause, effect, embeder, ts.astar_traverse)
+                path, visited_nodes = traverse_graph(causal_graph, cause, effect, st_embeder, ts.astar_traverse)
             elif algo == "Dijkstra":
-                path, visited_nodes = traverse_graph(causal_graph, cause, effect, embeder, ts.dijkstra_traverse)
+                path, visited_nodes = traverse_graph(causal_graph, cause, effect, st_embeder, ts.dijkstra_traverse)
+            elif algo == "RL":
+                path, visited_nodes = traverse_graph(causal_graph, cause, effect, glove_embeder, ts.rl_traverse)
         except Exception as e:
             path = [f"Error: {str(e)}"]
 
