@@ -49,22 +49,6 @@ code/
 
 ---
 
-## Data Folder Details
-
-All experiment data is stored under `code/data/`:
-
-- `checkpoints/` – intermediate model checkpoints
-- `datasets/` – MSMARCO-based causal QA datasets
-- `embeddings/` – cached embeddings for graph nodes
-- `evaluation/` – evaluation results (JSON and CSV)
-- `graphs/` – CauseNet graph file
-- `models/` – final trained models
-- `optuna_studies/` – hyperparameter search database
-- `plots/` – generated figures
-- `lightning_logs/`, `tb_logs/` – training logs
-
----
-
 ## External Resources
 
 ### CauseNet Graph
