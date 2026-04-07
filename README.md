@@ -1,40 +1,67 @@
 # Causal Graph Search with Learned Heuristics
 
 ## Overview
-This repository contains the code for a Bachelor thesis on causal question answering using graph search over CauseNet, focusing on improving A* with learned embedding-based heuristics.
+This repository contains the code for a Bachelor thesis on causal question answering using graph search over CauseNet. The main focus is improving A* search using learned embedding-based heuristics.
+
+The project is structured so that experiments can be reproduced end-to-end.
 
 ---
 
 ## Project Structure
 
-### Root
-- traverse_strategies/: search algorithms (A*, BFS, Dijkstra, RL)
-- embeddings.py: embedding wrappers
-- finetune.py: training pipeline
-- evaluation.py: evaluation + metrics
-- pre_embed.py: embedding caching
-- peak_analysis.py: search complexity analysis
-- viz.py: plotting
-- rl_model.py: RL agent
-- utils.py: graph + helper functions
-- app.py: demo UI
+All code is located inside the `code/` directory.
+
+```
+code/
+│
+├── data/
+│   ├── checkpoints/        # Model checkpoints during training
+│   ├── datasets/           # MSMARCO-based causal QA datasets
+│   ├── docker/             # Optional docker setup
+│   ├── docs/               # Additional documentation
+│   ├── embeddings/         # Cached node embeddings (.npy)
+│   ├── evaluation/         # Evaluation outputs (JSON + CSV)
+│   ├── graphs/             # CauseNet graph file
+│   ├── lightning_logs/     # PyTorch Lightning logs
+│   ├── models/             # Saved trained models
+│   ├── optuna_studies/     # Hyperparameter search database
+│   ├── plots/              # Generated plots
+│   ├── tb_logs/            # TensorBoard logs
+│   └── .gitkeep
+│
+├── traverse_strategies/    # Graph search algorithms
+│   ├── astar.py
+│   ├── bfs.py
+│   ├── dijkstra.py
+│   └── rl.py
+│
+├── embeddings.py           # Embedding wrappers (SBERT, GloVe)
+├── finetune.py             # Training pipeline (Lightning + Optuna)
+├── evaluation.py           # Evaluation and metrics computation
+├── pre_embed.py            # Precompute embeddings
+├── peak_analysis.py        # Distribution analysis of visited nodes
+├── viz.py                  # Plotting evaluation results
+├── rl_model.py             # RL agent architecture
+├── utils.py                # Graph loading and helper functions
+├── app.py                  # Gradio demo interface
+└── requirements.txt
+```
 
 ---
 
-## Data Folder Explanation (data/)
+## Data Folder Details
 
-- checkpoints/: saved training checkpoints
-- datasets/: MSMARCO-based causal QA datasets
-- docker/: docker-related files (if used)
-- docs/: documentation or auxiliary files
-- embeddings/: cached node embeddings (numpy)
-- evaluation/: JSON + CSV experiment results
-- graphs/: CauseNet graph file
-- lightning_logs/: PyTorch Lightning logs
-- models/: trained models
-- optuna_studies/: hyperparameter search database
-- plots/: generated plots
-- tb_logs/: TensorBoard logs
+All experiment data is stored under `code/data/`:
+
+- `checkpoints/` – intermediate model checkpoints
+- `datasets/` – MSMARCO-based causal QA datasets
+- `embeddings/` – cached embeddings for graph nodes
+- `evaluation/` – evaluation results (JSON and CSV)
+- `graphs/` – CauseNet graph file
+- `models/` – final trained models
+- `optuna_studies/` – hyperparameter search database
+- `plots/` – generated figures
+- `lightning_logs/`, `tb_logs/` – training logs
 
 ---
 
@@ -44,10 +71,15 @@ This repository contains the code for a Bachelor thesis on causal question answe
 Download from:
 https://causenet.org/
 
-Place at:
-data/graphs/causenet-precision.jsonl
+Place in:
+```
+code/data/graphs/causenet-precision.jsonl
+```
 
-### MSMARCO Causal QA Datasets
+---
+
+### MSMARCO Causal QA Dataset
+
 Required files:
 - msmarco_train.json
 - msmarco_valid.json
@@ -58,55 +90,101 @@ Download from:
 https://github.com/ds-jrg/causal-qa-rl (datasets folder)
 
 Place in:
-data/datasets/
+```
+code/data/datasets/
+```
 
 ---
 
 ## Setup
 
+Install dependencies:
+
+```
 pip install -r requirements.txt
+```
 
 ---
 
 ## Reproducing Experiments
 
-1. Precompute embeddings:
+### 1. Precompute embeddings
+```
 python pre_embed.py
+```
 
-2. (Optional) Train model:
+---
+
+### 2. (Optional) Train model
+```
 python finetune.py
+```
 
-3. Run evaluation:
+---
+
+### 3. Run evaluation
+```
 python evaluation.py
+```
 
 Outputs:
-- data/evaluation/evaluation_results_valid.json
-- data/evaluation/evaluation_results_valid.csv
+```
+code/data/evaluation/evaluation_results_valid.json
+code/data/evaluation/evaluation_results_valid.csv
+```
 
-4. Generate plots:
+---
+
+### 4. Generate plots
+```
 python viz.py
+```
 
-5. Peak analysis:
+---
+
+### 5. Peak analysis (search complexity)
+```
 python peak_analysis.py
+```
 
 ---
 
 ## Metrics
 
-- Accuracy / F1
-- Avg nodes visited
-- Avg path cost
+- Accuracy / F1 score
+- Average nodes visited
+- Average path cost
 - Cost per hop
 
 ---
 
 ## Demo
 
+Run interactive demo:
+
+```
 python app.py
+```
 
 ---
 
 ## Reproducibility
 
-Run:
+To reproduce results:
+
+1. Install dependencies  
+2. Download graph + datasets  
+3. Run:
+```
 pre_embed.py → evaluation.py → viz.py
+```
+
+Training is optional unless reproducing fine-tuned models.
+
+---
+
+## Notes
+
+- Large graph may require significant memory
+- Precomputing embeddings is strongly recommended
+- RL baseline requires GloVe embeddings (300 dimensions)
