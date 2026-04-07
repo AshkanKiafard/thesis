@@ -328,7 +328,7 @@ if __name__ == "__main__":
     TOTAL_TARGET_TRIALS = 30
 
     CFG_DISTANCE_METRIC = DistanceMetric.EUCLIDEAN
-    CFG_ACTIVATION_FUNC = ActivationFunc.RELU
+    CFG_ACTIVATION_FUNC = ActivationFunc.GELU
     MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
 
     causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
