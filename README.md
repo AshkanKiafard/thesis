@@ -92,16 +92,16 @@ pip install -r requirements.txt
 
 ## Reproducing Experiments
 
-### 1. Precompute embeddings
+### 1. (Optional) Train model
 ```
-python pre_embed.py
+python finetune.py
 ```
 
 ---
 
-### 2. (Optional) Train model
+### 2. Precompute embeddings
 ```
-python finetune.py
+python pre_embed.py
 ```
 
 ---
