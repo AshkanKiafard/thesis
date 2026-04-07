@@ -1,7 +1,9 @@
+import csv
 import gc
 import json
 import os
 import time
+
 import numpy as np
 import torch
 from sklearn.metrics import (
@@ -17,14 +19,18 @@ from embeddings import STEmbeder, GloveEmbeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+
 TEST = False
 if TEST:
-    OUTPUT_FILE = "data/evaluation/evaluation_results_test.json"
+    OUTPUT_JSON_FILE = "data/evaluation/evaluation_results_test.json"
+    OUTPUT_CSV_FILE = "data/evaluation/evaluation_results_test.csv"
     VALID_DATA_PATH = "data/datasets/msmarco_test.json"
 else:
-    OUTPUT_FILE = "data/evaluation/evaluation_results_valid.json"
+    OUTPUT_JSON_FILE = "data/evaluation/evaluation_results_valid.json"
+    OUTPUT_CSV_FILE = "data/evaluation/evaluation_results_valid.csv"
     VALID_DATA_PATH = "data/datasets/msmarco_valid.json"
 
+# Matryoshka dimensions that should be evaluated for SentenceTransformer-based models.
 MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
 
 base_models = ["all-mpnet-base-v2"]
@@ -32,6 +38,7 @@ base_models = ["all-mpnet-base-v2"]
 lightning_dir = "data/models/lightning"
 fine_tuned_models = []
 
+# Pick up all exported fine-tuned models automatically.
 if os.path.exists(lightning_dir):
     fine_tuned_models = [
         os.path.join(lightning_dir, name).replace("\\", "/")
@@ -43,10 +50,14 @@ model_queue = base_models + fine_tuned_models
 
 
 def compute_embedding_path_cost(path, embeder):
+    # No path means no cost can be computed.
     if not path:
         return None
+
+    # A single-node path has zero movement cost.
     if len(path) < 2:
         return 0.0
+
     if embeder is None:
         return None
 
@@ -59,9 +70,60 @@ def compute_embedding_path_cost(path, embeder):
     return float(total)
 
 
+def save_all_results_csv(all_results):
+    import csv
+
+    fieldnames = [
+        "algorithm",
+        "model",
+        "dimension",
+        "timestamp",
+        "accuracy",
+        "f1_score",
+        "recall",
+        "precision",
+        "tp",
+        "fn",
+        "fp",
+        "tn",
+        "avg_nodes_visited",
+        "avg_path_length",
+        "avg_time_sec",
+        "avg_path_cost",
+        "avg_cost_per_hop",
+        "num_costed_paths",
+    ]
+
+    rows = []
+
+    for entry in all_results:
+        for algorithm, metrics in entry.get("evaluation", {}).items():
+            row = {
+                "algorithm": algorithm,
+                "model": entry.get("model"),
+                "dimension": entry.get("dimension", ""),
+                "timestamp": entry.get("timestamp"),
+                **metrics,
+            }
+
+            # convert floats for German Excel
+            for k, v in row.items():
+                if isinstance(v, float):
+                    row[k] = str(v).replace(".", ",")
+
+            rows.append(row)
+
+    with open(OUTPUT_CSV_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"CSV overwritten: {OUTPUT_CSV_FILE}")
+
+
 def load_results_file():
-    if os.path.exists(OUTPUT_FILE):
-        with open(OUTPUT_FILE, "r") as f:
+    if os.path.exists(OUTPUT_JSON_FILE):
+        with open(OUTPUT_JSON_FILE, "r") as f:
             return json.load(f)
     return []
 
@@ -69,8 +131,14 @@ def load_results_file():
 def save_result(result_entry):
     current_results = load_results_file()
     current_results.append(result_entry)
-    with open(OUTPUT_FILE, "w") as f:
+
+    # Save JSON (overwrite full file)
+    with open(OUTPUT_JSON_FILE, "w", encoding="utf-8") as f:
         json.dump(current_results, f, indent=4)
+
+    # Save CSV (overwrite full file)
+    save_all_results_csv(current_results)
+
     print(f"Saved results for '{result_entry['model']}'")
 
 
@@ -83,14 +151,15 @@ def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times, path_c
 
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[False, True]).ravel()
 
+    # Ignore empty paths when averaging path length.
     valid_lengths = path_lengths[path_lengths > 0]
     avg_path_len = float(valid_lengths.mean()) if len(valid_lengths) > 0 else 0.0
 
-    # Costs only for found paths where cost could be computed
+    # Only count costs that were actually computed.
     valid_costs = [c for c in path_costs if c is not None]
     avg_cost = float(np.mean(valid_costs)) if len(valid_costs) > 0 else 0.0
 
-    # Normalize cost by hops (k-1). Helps compare when path lengths vary.
+    # Cost per hop is more comparable than raw path cost when paths differ in length.
     cost_per_hop = []
     for L, c in zip(path_lengths, path_costs):
         if c is not None and L > 1:
@@ -116,6 +185,7 @@ def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times, path_c
 
 
 def run_evaluation_loop(data, graph, embeder, strategies, description, config=None):
+    # Keep raw outputs for each strategy and summarize at the end.
     results = {
         name: {
             "y_true": [],
@@ -136,6 +206,8 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
 
         cause = get_concept(item, 0)
         effect = get_concept(item, 1)
+
+        # Skip examples that are not covered by the current graph.
         if cause not in graph.nodes or effect not in graph.nodes:
             continue
 
@@ -166,12 +238,14 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
             results[name]["nodes_visited"],
             results[name]["path_lengths"],
             results[name]["times"],
-            results[name]["path_costs"],  # NEW
+            results[name]["path_costs"],
         )
         summary[name] = metrics
+
         print(f"--- {name} Results ---")
         print(
-            f"Acc: {metrics['accuracy']:.3f} | F1: {metrics['f1_score']:.3f} | "
+            f"Acc: {metrics['accuracy']:.3f} | "
+            f"F1: {metrics['f1_score']:.3f} | "
             f"Avg Nodes: {metrics['avg_nodes_visited']:.1f} | "
             f"Avg Cost: {metrics['avg_path_cost']:.3f} | "
             f"Cost/Hop: {metrics['avg_cost_per_hop']:.3f}"
@@ -198,9 +272,12 @@ if __name__ == "__main__":
     causal_graph = load_graph(GRAPH_PATH)
     existing_results = load_results_file()
 
-    # BFS Baseline
+    # -------------------------------------------------------------------------
+    # BFS baseline
+    # -------------------------------------------------------------------------
     if not any(entry["model"] == "BFS_Baseline" for entry in existing_results):
         print("\n=== Running BFS Baseline ===")
+
         bfs_summary = run_evaluation_loop(
             valid_data,
             causal_graph,
@@ -209,6 +286,7 @@ if __name__ == "__main__":
             "BFS Baseline",
             config=MASTER_CONFIG,
         )
+
         save_result(
             {
                 "model": "BFS_Baseline",
@@ -217,7 +295,9 @@ if __name__ == "__main__":
             }
         )
 
-    # RL Baseline
+    # -------------------------------------------------------------------------
+    # RL baseline
+    # -------------------------------------------------------------------------
     if not any(entry["model"] == "RL_Baseline" for entry in existing_results):
         print("\n=== Running RL Baseline ===")
         try:
@@ -225,6 +305,7 @@ if __name__ == "__main__":
                 "data/embeddings/glove.6B/glove.6B.300d.txt",
                 DistanceMetric.COSINE,
             )
+
             rl_summary = run_evaluation_loop(
                 valid_data,
                 causal_graph,
@@ -233,6 +314,7 @@ if __name__ == "__main__":
                 "RL Baseline",
                 config=MASTER_CONFIG,
             )
+
             save_result(
                 {
                     "model": "RL_Baseline",
@@ -240,22 +322,34 @@ if __name__ == "__main__":
                     "evaluation": rl_summary,
                 }
             )
+
             del rl_embeder
             gc.collect()
         except Exception as e:
             print(f"Failed RL: {e}")
 
-    # Semantic Strategies (A* and Dijkstra)
-    semantic_strategies = {"A*": ts.astar_traverse, "Dijkstra": ts.dijkstra_traverse}
+    # -------------------------------------------------------------------------
+    # Semantic search strategies
+    # -------------------------------------------------------------------------
+    semantic_strategies = {
+        "A*": ts.astar_traverse,
+        "Dijkstra": ts.dijkstra_traverse,
+    }
 
     for model_path in model_queue:
         model_name = model_path.split("/")[-1]
+
+        # Skip models that already have results in the output file.
         if any(entry["model"] == model_name for entry in existing_results):
             continue
 
         print(f"\nEVALUATING: {model_path}")
+
         try:
-            main_embeder = STEmbeder(model_path=model_path, distance_metric=DistanceMetric.COSINE)
+            main_embeder = STEmbeder(
+                model_path=model_path,
+                distance_metric=DistanceMetric.COSINE
+            )
 
             for dim in MATRYOSHKA_DIMS:
                 print(f"--- Dim: {dim} ---")

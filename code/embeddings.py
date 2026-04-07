@@ -1,8 +1,8 @@
 import os
 from enum import Enum
+
 import numpy as np
 import torch
-
 from sentence_transformers import SentenceTransformer
 
 
@@ -13,16 +13,25 @@ class DistanceMetric(Enum):
 
 class STEmbeder:
     def __init__(self, model_path: str, distance_metric: DistanceMetric):
+        # Use GPU if available, otherwise fall back to CPU.
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        # Store only the last path component as a readable model name.
         self.model_name = os.path.basename(model_path.rstrip('/'))
+
         self.distance_metric = distance_metric
+
+        # If set, distances will be computed only on the first k embedding dimensions.
         self.matryoshka_dim = None
+
+        # In-memory cache for already embedded texts.
         self.cache = {}
 
         cache_dir = "data/embeddings"
         os.makedirs(cache_dir, exist_ok=True)
         cache_file = f"{cache_dir}/{self.model_name}_embeddings.npy"
 
+        # Load precomputed embeddings if they exist.
         if os.path.exists(cache_file):
             print(f"Loading cached embeddings from {cache_file}")
             self.cache = np.load(cache_file, allow_pickle=True).item()
@@ -33,18 +42,19 @@ class STEmbeder:
         self.matryoshka_dim = dim
 
     def embed(self, text: str) -> np.ndarray:
+        # Return cached embedding if available.
         if text in self.cache:
             return self.cache[text]
 
         emb = self.model.encode(text, convert_to_numpy=True, show_progress_bar=False)
         self.cache[text] = emb
-
         return emb
 
     def get_distance(self, embed1, embed2):
         e1 = embed1.flatten()
         e2 = embed2.flatten()
 
+        # Optionally truncate embeddings to a smaller Matryoshka dimension.
         if self.matryoshka_dim is not None and self.matryoshka_dim < len(e1):
             e1 = e1[:self.matryoshka_dim]
             e2 = e2[:self.matryoshka_dim]
@@ -53,6 +63,8 @@ class STEmbeder:
             norm1 = np.linalg.norm(e1)
             norm2 = np.linalg.norm(e2)
 
+            # If one vector is zero, cosine similarity is undefined.
+            # Returning 1.0 here means "max distance".
             if norm1 == 0 or norm2 == 0:
                 return 1.0
 
@@ -71,7 +83,9 @@ class GloveEmbeder:
         self.default_dim = 300
 
         if not os.path.exists(glove_file_path):
-            raise FileNotFoundError(f"Please unzip glove.6B.zip and place glove.6B.300d.txt at {glove_file_path}")
+            raise FileNotFoundError(
+                f"Please unzip glove.6B.zip and place glove.6B.300d.txt at {glove_file_path}"
+            )
 
         print("Loading glove.6B embeddings...")
         with open(glove_file_path, 'r', encoding='utf-8') as f:
@@ -83,6 +97,8 @@ class GloveEmbeder:
 
     def embed(self, text: str) -> np.ndarray:
         text = text.lower()
+
+        # Return the word vector if it exists, otherwise use a zero vector.
         if text in self.embeddings:
             return self.embeddings[text]
         else:
@@ -102,4 +118,3 @@ class GloveEmbeder:
             return 1 - np.dot(e1, e2) / (norm1 * norm2)
 
         return np.linalg.norm(e1 - e2)
-

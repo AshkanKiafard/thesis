@@ -20,6 +20,7 @@ import traverse_strategies as ts
 from embeddings import STEmbeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
+# "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
 torch.set_float32_matmul_precision('medium')
 
 
@@ -36,9 +37,12 @@ class MatryoshkaAStarLoss(nn.Module):
         self.distance_metric = distance_metric
         self.activation_func = nn.ReLU() if activation_func == ActivationFunc.RELU else nn.GELU()
         self.normalize = normalize
+
+        # If no explicit Matryoshka dimensions are given, just use the full embedding size.
         if matryoshka_dims is None:
             self.matryoshka_dims = [self.model.get_sentence_embedding_dimension()]
         else:
+            # Sorting from large to small makes the truncation logic easier to reason about.
             self.matryoshka_dims = sorted(matryoshka_dims, reverse=True)
 
     def distance(self, a, b):
@@ -50,19 +54,28 @@ class MatryoshkaAStarLoss(nn.Module):
             raise ValueError(f"Unsupported metric: {self.distance_metric}")
 
     def get_raw_embeddings(self, texts):
+        # We directly call the SentenceTransformer forward pass here instead of encode()
+        # because this is used during training and needs gradients.
         features = self.model.tokenize(texts)
         features = {key: val.to(self.model.device) for key, val in features.items()}
         embeddings = self.model(features)["sentence_embedding"]
         return embeddings
 
     def compute_sub_loss(self, c_emb, e_emb, p_emb, n_emb):
+        # Distances for the positive step on the path.
         d_cp = self.distance(c_emb, p_emb)
         d_pe = self.distance(p_emb, e_emb)
+
+        # Distances for a negative alternative successor.
         d_cn = self.distance(c_emb, n_emb)
         d_ne = self.distance(n_emb, e_emb)
 
+        # The idea is simple:
+        # a good next node should make the overall route to the effect look better
+        # than a bad successor.
         diff = (d_cp + d_pe) - (d_cn + d_ne)
 
+        # If embeddings are not normalized explicitly, keep their norms roughly stable.
         embeddings_sum = (torch.linalg.vector_norm(c_emb, dim=-1) - 1) ** 2 + \
                          (torch.linalg.vector_norm(e_emb, dim=-1) - 1) ** 2 + \
                          (torch.linalg.vector_norm(p_emb, dim=-1) - 1) ** 2 + \
@@ -72,6 +85,8 @@ class MatryoshkaAStarLoss(nn.Module):
         return self.activation_func(diff).mean() + regularization
 
     def forward(self, sentence_features):
+        # sentence_features contains:
+        # [start_nodes, end_nodes, positives, negatives]
         c_raw = self.get_raw_embeddings(sentence_features[0])
         e_raw = self.get_raw_embeddings(sentence_features[1])
         p_raw = self.get_raw_embeddings(sentence_features[2])
@@ -79,6 +94,7 @@ class MatryoshkaAStarLoss(nn.Module):
 
         total_loss = 0.0
 
+        # Compute the loss for every Matryoshka slice and sum them up.
         for dim in self.matryoshka_dims:
             cf = c_raw[:, :dim]
             ef = e_raw[:, :dim]
@@ -100,19 +116,25 @@ class LitAStar(pl.LightningModule):
     def __init__(self, model_name, activation_func, distance_metric, normalize, lr, matryoshka_dims, graph):
         super().__init__()
 
+        # The graph object is large and not something we want in Lightning's saved hparams.
         self.save_hyperparameters(ignore=['graph'])
+
         self.lr = lr
         self.graph = graph
 
         self.embedding_model = SentenceTransformer(model_name)
         self.embedding_model.train()
 
-        self.loss_fn = MatryoshkaAStarLoss(self.embedding_model,
-                                           activation_func,
-                                           distance_metric,
-                                           normalize,
-                                           matryoshka_dims)
+        self.loss_fn = MatryoshkaAStarLoss(
+            self.embedding_model,
+            activation_func,
+            distance_metric,
+            normalize,
+            matryoshka_dims
+        )
 
+        # val_cache stores node -> embedding for the current validation epoch.
+        # result_cache stores (start, end) -> visited nodes, so repeated pairs are cheap.
         self.val_cache = {}
         self.result_cache = {}
 
@@ -125,6 +147,8 @@ class LitAStar(pl.LightningModule):
         if not all_nodes:
             return
 
+        # Validation repeatedly queries embeddings for graph nodes.
+        # So we precompute all node embeddings once per validation epoch.
         self.embedding_model.eval()
         with torch.no_grad():
             embeddings = self.embedding_model.encode(
@@ -139,13 +163,16 @@ class LitAStar(pl.LightningModule):
         self.val_cache = dict(zip(all_nodes, embeddings))
 
     def on_validation_epoch_end(self):
+        # Free memory explicitly after each validation epoch.
         self.val_cache.clear()
         self.result_cache.clear()
 
     def embed(self, text: str):
+        # traverse_graph expects the model object to expose an embed() method.
         return self.val_cache[text]
 
     def get_distance(self, emb_a, emb_b):
+        # traverse_graph also expects a distance function on the model side.
         return self.loss_fn.distance(emb_a.unsqueeze(0), emb_b.unsqueeze(0)).item()
 
     def training_step(self, batch, batch_idx):
@@ -153,6 +180,7 @@ class LitAStar(pl.LightningModule):
             batch["start_nodes"], batch["end_nodes"],
             batch["positives"], batch["negatives"]
         ])
+
         batch_size = len(batch["start_nodes"])
         self.log("train/loss", loss, prog_bar=True, batch_size=batch_size)
         return loss
@@ -161,6 +189,8 @@ class LitAStar(pl.LightningModule):
         starts = batch["start_nodes"]
         ends = batch["end_nodes"]
 
+        # Validation is based on actual A* search behavior, not only embedding loss.
+        # We deduplicate pairs inside the batch so we do not run the same search twice.
         unique_pairs = list(set(zip(starts, ends)))
         total_visits = 0
         pairs_validated = 0
@@ -178,6 +208,7 @@ class LitAStar(pl.LightningModule):
         avg_visited = total_visits / max(pairs_validated, 1)
         self.log("val/astar_cost", avg_visited, prog_bar=True, batch_size=pairs_validated)
 
+        # Still log the embedding loss as a secondary signal for debugging.
         val_loss = self.loss_fn([
             batch["start_nodes"], batch["end_nodes"],
             batch["positives"], batch["negatives"]
@@ -189,6 +220,7 @@ class LitAStar(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
 
+        # We reduce LR when the actual search cost stops improving.
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode='min',
@@ -207,6 +239,7 @@ class LitAStar(pl.LightningModule):
         }
 
     def on_before_optimizer_step(self, optimizer):
+        # Logging gradient norm helps spot exploding gradients or dead training.
         grads = [p.grad for p in self.parameters() if p.grad is not None]
         if len(grads) > 0:
             grad_norm = torch.norm(torch.stack([torch.norm(g.detach(), 2) for g in grads]), 2)
@@ -220,18 +253,28 @@ def create_dataset(data, graph, embeder):
     for i, pair in enumerate(data):
         cause = get_concept(pair, 0)
         effect = get_concept(pair, 1)
+
+        # Cache path generation because the same pair may appear multiple times.
         if (cause, effect) in astar_cache:
             path = astar_cache[(cause, effect)]
         else:
             path, _ = traverse_graph(graph, cause, effect, embeder, ts.astar_traverse)
             astar_cache[(cause, effect)] = path
 
-        if len(path) < 2: continue
+        # We need at least one hop to define a positive next node.
+        if len(path) < 2:
+            continue
 
+        # For each step on the A* path:
+        # - next_node is the positive example
+        # - every other successor becomes a negative example
         for j, node in enumerate(path[:-1]):
             next_node = path[j + 1]
             successors = list(graph.successors(node))
-            if next_node in successors: successors.remove(next_node)
+
+            if next_node in successors:
+                successors.remove(next_node)
+
             for successor in successors:
                 start_nodes.append(node)
                 end_nodes.append(effect)
@@ -239,12 +282,16 @@ def create_dataset(data, graph, embeder):
                 negatives.append(successor)
 
     return Dataset.from_dict({
-        "start_nodes": start_nodes, "end_nodes": end_nodes,
-        "positives": positives, "negatives": negatives
+        "start_nodes": start_nodes,
+        "end_nodes": end_nodes,
+        "positives": positives,
+        "negatives": negatives
     })
 
 
 def objective(trial, model_name, train_loader, val_loader, activation_func, distance_metric, matryoshka_dims, graph):
+    # The search range is intentionally narrow because previous runs already showed
+    # that useful learning rates are in this area.
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
 
     model = LitAStar(
@@ -258,7 +305,6 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
     )
 
     pruning_callback = PyTorchLightningPruningCallback(trial, monitor="val/astar_cost")
-
     early_stop = EarlyStopping(monitor="val/astar_cost", patience=3, mode="min")
 
     trainer = pl.Trainer(
@@ -280,6 +326,7 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
 if __name__ == "__main__":
     VERSION = 2
     TOTAL_TARGET_TRIALS = 30
+
     CFG_DISTANCE_METRIC = DistanceMetric.EUCLIDEAN
     CFG_ACTIVATION_FUNC = ActivationFunc.RELU
     MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
@@ -292,15 +339,19 @@ if __name__ == "__main__":
     with open("data/datasets/msmarco_valid.json") as f:
         valid_data = json.load(f)
 
+    # Can be extended later if multiple base encoders should be tuned in one run.
     model_list = ["all-mpnet-base-v2"]
 
     for model_path in model_list:
         curr_model_name = model_path.split("/")[-1]
         activation_func_str = 'relu' if CFG_ACTIVATION_FUNC == ActivationFunc.RELU else 'gelu'
         distance_metric_str = 'cosine' if CFG_DISTANCE_METRIC == DistanceMetric.COSINE else 'euclid'
+
         trained_model_str = f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_v{VERSION}"
         save_path = f"data/models/lightning/{trained_model_str}_finetuned"
         ckpt_dir = f"data/checkpoints/{trained_model_str}"
+
+        # Skip everything if the final exported SentenceTransformer already exists.
         if os.path.exists(save_path):
             print(f"Model already exists at: {save_path}")
             continue
@@ -342,14 +393,25 @@ if __name__ == "__main__":
         print(f"Total Train examples: {len(train_dataset)}")
         print(f"Total Val examples: {len(valid_dataset)}")
 
-        main_train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4,
-                                       persistent_workers=True)
+        main_train_loader = DataLoader(
+            train_dataset,
+            batch_size=128,
+            shuffle=True,
+            num_workers=4,
+            persistent_workers=True
+        )
 
-        main_valid_loader = DataLoader(valid_dataset, batch_size=128, shuffle=False, num_workers=4,
-                                       persistent_workers=True)
+        main_valid_loader = DataLoader(
+            valid_dataset,
+            batch_size=128,
+            shuffle=False,
+            num_workers=4,
+            persistent_workers=True
+        )
 
         optuna.logging.set_verbosity(optuna.logging.INFO)
         pruner = optuna.pruners.MedianPruner()
+
         study_name = f"{trained_model_str}_optimization"
         study = optuna.create_study(
             storage="sqlite:///data/optuna_studies/db.sqlite3",
@@ -359,8 +421,11 @@ if __name__ == "__main__":
             pruner=pruner
         )
 
+        # When a run is interrupted, Optuna may leave trials in RUNNING state.
+        # Mark them as failed so the study can resume cleanly.
         print("Cleaning zombie trials ...")
         running_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.RUNNING]
+
         if running_trials:
             print(f"Found {len(running_trials)} interrupted trials (Zombies). Cleaning them up...")
             for r_trial in running_trials:
@@ -370,6 +435,7 @@ if __name__ == "__main__":
                 except Exception as e:
                     print(f"Warning: Could not update status for Trial {r_trial.number}: {e}")
 
+        # Count both COMPLETE and PRUNED as already-attempted useful trials.
         valid_trials = [
             t for t in study.trials
             if t.state in (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)
@@ -380,24 +446,32 @@ if __name__ == "__main__":
         if trials_to_run > 0:
             print(f"Resuming study. Running {trials_to_run} more trials...")
             study.optimize(
-                lambda l_trial: objective(l_trial,
-                                          model_path,
-                                          main_train_loader,
-                                          main_valid_loader,
-                                          CFG_ACTIVATION_FUNC,
-                                          CFG_DISTANCE_METRIC,
-                                          MATRYOSHKA_DIMS,
-                                          causal_graph),
+                lambda l_trial: objective(
+                    l_trial,
+                    model_path,
+                    main_train_loader,
+                    main_valid_loader,
+                    CFG_ACTIVATION_FUNC,
+                    CFG_DISTANCE_METRIC,
+                    MATRYOSHKA_DIMS,
+                    causal_graph
+                ),
                 n_trials=trials_to_run,
                 gc_after_trial=True
             )
 
         best_lr = study.best_params["lr"]
-
         print(f"Training model with LR={best_lr} ...")
 
-        final_model = LitAStar(model_path, CFG_ACTIVATION_FUNC, CFG_DISTANCE_METRIC,
-                               False, best_lr, MATRYOSHKA_DIMS, causal_graph)
+        final_model = LitAStar(
+            model_path,
+            CFG_ACTIVATION_FUNC,
+            CFG_DISTANCE_METRIC,
+            False,
+            best_lr,
+            MATRYOSHKA_DIMS,
+            causal_graph
+        )
 
         logger = TensorBoardLogger("data/tb_logs", name=save_path)
 
@@ -411,6 +485,7 @@ if __name__ == "__main__":
             verbose=True,
         )
 
+        # Final training gets a larger patience than the Optuna search stage.
         early_stop_callback = EarlyStopping(monitor="val/astar_cost", patience=10, mode="min")
 
         main_trainer = pl.Trainer(
@@ -426,7 +501,11 @@ if __name__ == "__main__":
             checkpoint_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')]
 
             if checkpoint_files:
-                checkpoint_files.sort(key=lambda x: os.path.getmtime(os.path.join(ckpt_dir, x)), reverse=True)
+                # Resume from the most recently modified checkpoint if one exists.
+                checkpoint_files.sort(
+                    key=lambda x: os.path.getmtime(os.path.join(ckpt_dir, x)),
+                    reverse=True
+                )
                 ckpt_path = os.path.join(ckpt_dir, checkpoint_files[0])
                 print(f"Found checkpoint! Resuming from: {ckpt_path}")
             else:
@@ -434,7 +513,9 @@ if __name__ == "__main__":
         else:
             print("Checkpoint directory not found. Training from scratch.")
 
+        # Needed so Lightning/Torch can safely deserialize these custom enum values.
         torch.serialization.add_safe_globals([ActivationFunc, DistanceMetric])
+
         main_trainer.fit(final_model, main_train_loader, main_valid_loader, ckpt_path=ckpt_path)
 
         print(f"Loading best model from checkpoint: {checkpoint_callback.best_model_path}")
@@ -446,6 +527,7 @@ if __name__ == "__main__":
         print(f"Saving best SentenceTransformer model to: {save_path}")
         best_model.embedding_model.save(save_path)
 
+        # Try to free GPU/CPU memory before moving to the next model.
         del final_model, best_model, main_trainer, study
         gc.collect()
         torch.cuda.empty_cache()
