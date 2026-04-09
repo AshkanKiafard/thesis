@@ -327,7 +327,7 @@ if __name__ == "__main__":
     VERSION = 2
     TOTAL_TARGET_TRIALS = 30
 
-    CFG_DISTANCE_METRIC = DistanceMetric.EUCLIDEAN
+    CFG_DISTANCE_METRIC = DistanceMetric.COSINE
     CFG_ACTIVATION_FUNC = ActivationFunc.GELU
     MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
 
