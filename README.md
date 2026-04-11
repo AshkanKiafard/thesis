@@ -72,10 +72,8 @@ Place in:
 
 ### MSMARCO Causal QA Dataset
 
-Required files: - msmarco_train.json\
-- msmarco_valid.json\
-- msmarco_test.json\
-- msmarco_train_valid.json
+Required files: - msmarco_train.json - msmarco_valid.json -
+msmarco_test.json - msmarco_train_valid.json
 
 Download from: https://github.com/ds-jrg/causal-qa-rl (datasets folder)
 
@@ -136,13 +134,13 @@ Outputs:
 
 This generates CSV files containing, for each cause--effect pair:
 
--   hop count\
--   nodes visited\
+-   hop count
+
+-   nodes visited
+
 -   path found
 
-```bash
-python evaluation/export_histogram_data.py
-```
+    python evaluation/export_histogram_data.py
 
 Outputs:
 
@@ -154,12 +152,11 @@ Outputs:
 
 Creates histograms for:
 
--   hop count distribution\
+-   hop count distribution
+
 -   nodes visited distribution
 
-```bash
-python evaluation/plot_astar_histograms.py
-```
+    python evaluation/plot_astar_histograms.py
 
 Outputs:
 
@@ -169,10 +166,10 @@ Outputs:
 
 ## Metrics
 
--   Accuracy / F1 score\
--   Average nodes visited\
--   Average path length\
--   Average path cost\
+-   Accuracy / F1 score
+-   Average nodes visited
+-   Average path length
+-   Average path cost
 -   Cost per hop
 
 ------------------------------------------------------------------------
@@ -181,9 +178,7 @@ Outputs:
 
 Run interactive demo:
 
-```bash
-python app.py
-```bash
+    python app.py
 
 ------------------------------------------------------------------------
 
@@ -191,29 +186,26 @@ python app.py
 
 To reproduce results:
 
-1.  Install dependencies\
-2.  Download graph + datasets\
+1.  Install dependencies
+
+2.  Download graph + datasets
+
 3.  Run:
 
-```bash
-python pre_embed.py
-python evaluation/evaluation.py
-python evaluation/evaluation_viz.py
-```
+    python pre_embed.py python evaluation/evaluation.py python
+    evaluation/evaluation_viz.py
 
 Optional analysis:
 
-```bash
-python evaluation/export_histogram_data.py
-python evaluation/plot_astar_histograms.py
-```
+    python evaluation/export_histogram_data.py
+    python evaluation/plot_astar_histograms.py
 
 ------------------------------------------------------------------------
 
 ## Notes
 
--   Large graphs require significant memory\
--   Precomputing embeddings is strongly recommended\
--   RL baseline requires GloVe embeddings (300d)\
+-   Large graphs require significant memory
+-   Precomputing embeddings is strongly recommended
+-   RL baseline requires GloVe embeddings (300d)
 -   Histogram exports help diagnose search behavior (e.g., visit limits,
     path depth) beyond aggregate metrics
