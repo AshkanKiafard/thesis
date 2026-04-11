@@ -120,6 +120,10 @@ code/data/evaluation/evaluation_results_valid.csv
 python evaluation/evaluation_viz.py
 ```
 
+Output:
+```
+code/data/plots/*.png
+```
 ---
 
 ## Additional Analysis
@@ -127,6 +131,11 @@ python evaluation/evaluation_viz.py
 ### Peak / distribution analysis
 ```
 python evaluation/peak_analysis.py
+```
+
+Output:
+```
+code/data/plots/*_visited_nodes_distribution_log_p95.png
 ```
 
 ### Export per-example A* statistics
