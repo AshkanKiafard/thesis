@@ -38,7 +38,7 @@ All code is located inside the `code/` directory.
     │   ├── evaluation_viz.py        # Standard metric plots (accuracy, nodes, etc.)
     │   ├── export_histogram_data.py # Per-example A* export (hop count, nodes visited)
     │   ├── plot_astar_histograms.py # Histogram plotting (hop count, visited nodes)
-    │   ├── peak_analysis.py         # Distribution / tail analysis (e.g. p95)
+    │   └── peak_analysis.py         # Distribution / tail analysis (e.g. p95)
     │
     ├── traverse_strategies/     # Graph search algorithms
     │   ├── astar.py
