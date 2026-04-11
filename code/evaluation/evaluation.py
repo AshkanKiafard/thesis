@@ -22,8 +22,8 @@ GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
 
 TEST = False
 if TEST:
-    OUTPUT_JSON_FILE = "data/evaluation/evaluation_results_test.json"
-    OUTPUT_CSV_FILE = "data/evaluation/evaluation_results_test.csv"
+    OUTPUT_JSON_FILE = "../data/evaluation/evaluation_results_test.json"
+    OUTPUT_CSV_FILE = "../data/evaluation/evaluation_results_test.csv"
     VALID_DATA_PATH = "../data/datasets/msmarco_test.json"
 else:
     OUTPUT_JSON_FILE = "../data/evaluation/evaluation_results_valid.json"
