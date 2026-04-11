@@ -14,13 +14,14 @@ from utils import get_concept, load_graph, traverse_graph
 # -------------------------------------------------------------------------
 
 # Causal graph used for traversal
-GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
 
 # Dataset used for analysis (train/valid depending on what you want to inspect)
-VALID_DATA_PATH = "data/datasets/msmarco_train.json"
+DATASET_PATH = "../data/datasets/msmarco_valid.json"
+TRAIN_OR_VALID = "Train" if "train" in DATASET_PATH else "Valid"
 
 # Where plots will be stored
-PLOT_OUTPUT_DIR = "data/plots"
+PLOT_OUTPUT_DIR = "../data/plots"
 
 
 def ensure_directory(path):
@@ -73,7 +74,7 @@ def plot_visited_distribution(distribution_data):
         ax.set_xscale('log')
 
         ax.set_title(
-            f'Node Visited Distribution: {name}',
+            f'Node Visited Distribution: {name} _ {TRAIN_OR_VALID}',
             fontsize=14,
             fontweight='bold'
         )
@@ -96,7 +97,7 @@ def plot_visited_distribution(distribution_data):
 
     output_path = os.path.join(
         PLOT_OUTPUT_DIR,
-        "visited_nodes_distribution_log_p95.png"
+        f"{TRAIN_OR_VALID}_visited_nodes_distribution_log_p95.png"
     )
 
     plt.savefig(output_path)
@@ -116,8 +117,8 @@ def run_peak_investigation():
     - search efficiency differences
     """
     print("Loading data...")
-    with open(VALID_DATA_PATH) as f:
-        valid_data = json.load(f)
+    with open(DATASET_PATH) as f:
+        json_data = json.load(f)
 
     print("Loading graph...")
     graph = load_graph(GRAPH_PATH)
@@ -126,19 +127,19 @@ def run_peak_investigation():
 
     # SentenceTransformer for semantic search (A*, Dijkstra)
     st_embeder = STEmbeder(
-        'data/models/lightning/all-mpnet-base-v2_relu_cosine_v2_finetuned',
+        '../data/models/lightning/all-mpnet-base-v2_relu_cosine_v2_finetuned',
         DistanceMetric.COSINE
     )
 
     # GloVe for RL baseline (required input format)
     glove_embeder = GloveEmbeder(
-        'data/embeddings/glove.6B/glove.6B.300d.txt',
+        '../data/embeddings/glove.6B/glove.6B.300d.txt',
         DistanceMetric.COSINE
     )
 
     # RL-specific config
     rl_config = {
-        'rl_model_path': "data/models/rl/msmarco_evaluation_state_dict.pt",
+        'rl_model_path': "../data/models/rl/msmarco_evaluation_state_dict.pt",
         'rl_beam_width': 5,
         'rl_max_path_len': -1
     }
@@ -162,7 +163,7 @@ def run_peak_investigation():
     for name, strategy_fn, embeder in strategies:
         print(f"\nEvaluating visited nodes for: {name}")
 
-        for item in tqdm(valid_data):
+        for item in tqdm(json_data):
             cause = get_concept(item, 0)
             effect = get_concept(item, 1)
 

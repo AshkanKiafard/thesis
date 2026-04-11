@@ -18,24 +18,24 @@ import traverse_strategies as ts
 from embeddings import STEmbeder, GloveEmbeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
-GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
 
 TEST = False
 if TEST:
     OUTPUT_JSON_FILE = "data/evaluation/evaluation_results_test.json"
     OUTPUT_CSV_FILE = "data/evaluation/evaluation_results_test.csv"
-    VALID_DATA_PATH = "data/datasets/msmarco_test.json"
+    VALID_DATA_PATH = "../data/datasets/msmarco_test.json"
 else:
-    OUTPUT_JSON_FILE = "data/evaluation/evaluation_results_valid.json"
-    OUTPUT_CSV_FILE = "data/evaluation/evaluation_results_valid.csv"
-    VALID_DATA_PATH = "data/datasets/msmarco_valid.json"
+    OUTPUT_JSON_FILE = "../data/evaluation/evaluation_results_valid.json"
+    OUTPUT_CSV_FILE = "../data/evaluation/evaluation_results_valid.csv"
+    VALID_DATA_PATH = "../data/datasets/msmarco_valid.json"
 
 # Matryoshka dimensions that should be evaluated for SentenceTransformer-based models.
 MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
 
 base_models = ["all-mpnet-base-v2"]
 
-lightning_dir = "data/models/lightning"
+lightning_dir = "../data/models/lightning"
 fine_tuned_models = []
 
 # Pick up all exported fine-tuned models automatically.
@@ -43,10 +43,12 @@ if os.path.exists(lightning_dir):
     fine_tuned_models = [
         os.path.join(lightning_dir, name).replace("\\", "/")
         for name in os.listdir(lightning_dir)
-        if os.path.isdir(os.path.join(lightning_dir, name))
+        if os.path.isdir(os.path.join(lightning_dir, name)) if name != "old"
     ]
 
 model_queue = base_models + fine_tuned_models
+
+print("Model queue:", model_queue)
 
 
 def compute_embedding_path_cost(path, embeder):
@@ -71,8 +73,6 @@ def compute_embedding_path_cost(path, embeder):
 
 
 def save_all_results_csv(all_results):
-    import csv
-
     fieldnames = [
         "algorithm",
         "model",
@@ -259,7 +259,7 @@ if __name__ == "__main__":
         "rl_model_path": "data/models/rl/msmarco_evaluation_state_dict.pt",
         "rl_beam_width": 5,
         "rl_max_path_len": -1,
-        "rl_max_visits": 445,
+        "rl_max_visits": 446,
         "astar_max_visits": 399,
         "dijkstra_max_visits": 5987,
     }
@@ -302,7 +302,7 @@ if __name__ == "__main__":
         print("\n=== Running RL Baseline ===")
         try:
             rl_embeder = GloveEmbeder(
-                "data/embeddings/glove.6B/glove.6B.300d.txt",
+                "../data/embeddings/glove.6B/glove.6B.300d.txt",
                 DistanceMetric.COSINE,
             )
 
