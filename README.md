@@ -130,7 +130,7 @@ Outputs:
 
 ------------------------------------------------------------------------
 
-## Histogram-Based Analysis (New)
+## Histogram-Based Analysis
 
 ### 6. Export per-example A\* statistics
 
@@ -140,10 +140,9 @@ This generates CSV files containing, for each cause--effect pair:
 -   nodes visited\
 -   path found
 
-```{=html}
-<!-- -->
+```bash
+python evaluation/export_histogram_data.py
 ```
-    python evaluation/export_histogram_data.py
 
 Outputs:
 
@@ -158,10 +157,9 @@ Creates histograms for:
 -   hop count distribution\
 -   nodes visited distribution
 
-```{=html}
-<!-- -->
+```bash
+python evaluation/plot_astar_histograms.py
 ```
-    python evaluation/plot_astar_histograms.py
 
 Outputs:
 
@@ -183,7 +181,9 @@ Outputs:
 
 Run interactive demo:
 
-    python app.py
+```bash
+python app.py
+```bash
 
 ------------------------------------------------------------------------
 
