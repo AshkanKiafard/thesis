@@ -17,40 +17,40 @@ All code is located inside the `code/` directory.
 code/
 │
 ├── data/
-│   ├── checkpoints/         # Model checkpoints
+│   ├── checkpoints/         # Model checkpoints during training
 │   ├── datasets/            # MSMARCO-based causal QA datasets
 │   ├── docker/              # Optional docker setup
-│   ├── docs/                # Documentation
+│   ├── docs/                # Additional documentation
 │   ├── embeddings/          # Cached node embeddings (.npy)
-│   ├── evaluation/          # Evaluation outputs (JSON, CSV)
-│   ├── graphs/              # CauseNet graph
-│   ├── lightning_logs/      # Training logs
-│   ├── models/              # Trained models
-│   ├── optuna_studies/      # Hyperparameter search
-│   ├── plots/               # Generated plots
+│   ├── evaluation/          # Evaluation outputs (JSON, CSV, histogram exports)
+│   ├── graphs/              # CauseNet graph file
+│   ├── lightning_logs/      # PyTorch Lightning logs
+│   ├── models/              # Saved trained models
+│   ├── optuna_studies/      # Hyperparameter search database
+│   ├── plots/               # Generated plots (including histograms)
 │   ├── tb_logs/             # TensorBoard logs
 │   └── .gitkeep
 │
 ├── evaluation/
-│   ├── evaluation.py            # Evaluation pipeline
-│   ├── evaluation_viz.py        # Standard plots
-│   ├── export_histogram_data.py # Per-example A* stats
-│   ├── plot_astar_histograms.py # Histogram plots
-│   └── peak_analysis.py         # Distribution analysis
+│   ├── evaluation.py            # Main evaluation loop (metrics, JSON/CSV output)
+│   ├── evaluation_viz.py        # Standard metric plots (accuracy, nodes, etc.)
+│   ├── export_histogram_data.py # Per-example A* export (hop count, nodes visited)
+│   ├── plot_astar_histograms.py # Histogram plotting (hop count, visited nodes)
+│   └── peak_analysis.py         # Distribution / tail analysis (e.g. p95)
 │
-├── traverse_strategies/
+├── traverse_strategies/     # Graph search algorithms
 │   ├── astar.py
 │   ├── bfs.py
 │   ├── dijkstra.py
 │   └── rl.py
 │
-├── embeddings.py
-├── finetune.py
-├── pre_embed.py
-├── rl_model.py
-├── utils.py
-├── app.py
-├── main.py
+├── embeddings.py            # Embedding wrappers (SBERT, GloVe)
+├── finetune.py              # Training pipeline (Lightning + Optuna)
+├── pre_embed.py             # Precompute embeddings
+├── rl_model.py              # RL agent architecture
+├── utils.py                 # Graph loading and helper functions
+├── app.py                   # Gradio demo interface
+├── main.py                  # Entry point / experiments
 ├── requirements.txt
 └── .gitignore
 ```
