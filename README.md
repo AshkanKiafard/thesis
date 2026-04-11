@@ -195,16 +195,18 @@ To reproduce results:
 2.  Download graph + datasets\
 3.  Run:
 
-```{=html}
-<!-- -->
+```bash
+python pre_embed.py
+python evaluation/evaluation.py
+python evaluation/evaluation_viz.py
 ```
-    pre_embed.py → evaluation/evaluation.py → evaluation/evaluation_viz.py
 
 Optional analysis:
 
-    export_histogram_data.py → plot_astar_histograms.py
-
-Training is optional unless reproducing fine-tuned models.
+```bash
+python evaluation/export_histogram_data.py
+python evaluation/plot_astar_histograms.py
+```
 
 ------------------------------------------------------------------------
 
