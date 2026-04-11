@@ -52,7 +52,7 @@ All code is located inside the `code/` directory.
     ├── rl_model.py              # RL agent architecture
     ├── utils.py                 # Graph loading and helper functions
     ├── app.py                   # Gradio demo interface
-    ├── main.py                  # Entry point / experiments (if used)
+    ├── main.py                  # Entry point / experiments
     ├── requirements.txt
     └── .gitignore
 
