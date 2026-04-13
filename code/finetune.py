@@ -329,8 +329,8 @@ def objective(trial, model_name, model_str, train_loader, val_loader, activation
 
 if __name__ == "__main__":
     TOTAL_TARGET_TRIALS = 30
-    CFG_DISTANCE_METRIC = DistanceMetric.COSINE
-    CFG_ACTIVATION_FUNC = ActivationFunc.GELU
+    CFG_DISTANCE_METRIC = DistanceMetric.EUCLIDEAN
+    CFG_ACTIVATION_FUNC = ActivationFunc.RELU
     USE_MATRYOSHKA = True
 
     causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
