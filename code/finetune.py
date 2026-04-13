@@ -342,7 +342,7 @@ if __name__ == "__main__":
         valid_data = json.load(f)
 
     # Can be extended later if multiple base encoders should be tuned in one run.
-    model_list = ["all-mpnet-base-v2"]
+    model_list = ["Qwen/Qwen3-Embedding-0.6B"]
 
     for model_path in model_list:
         curr_model_name = model_path.split("/")[-1]
