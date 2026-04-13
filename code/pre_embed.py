@@ -14,7 +14,7 @@ graph = load_graph("data/graphs/causenet-precision.jsonl", False)
 
 base_models = [
     "all-mpnet-base-v2",
-    "Qwen/Qwen3-Embedding-4B",
+    "Qwen/Qwen3-Embedding-0.6B",
     # "all-MiniLM-L12-v2",
     # "multi-qa-mpnet-base-cos-v1"
 ]
