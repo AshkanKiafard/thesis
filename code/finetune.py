@@ -20,6 +20,8 @@ import traverse_strategies as ts
 from embeddings import STEmbedder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph, get_matryoshka_dims
 
+SLURM_JOB_ID = os.environ.get("SLURM_JOB_ID", "local")
+
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
 torch.set_float32_matmul_precision('medium')
 
@@ -43,7 +45,6 @@ class MatryoshkaAStarLoss(nn.Module):
         else:
             # Sorting from large to small makes the truncation logic easier to reason about.
             self.matryoshka_dims = sorted(set(matryoshka_dims), reverse=True)
-
 
     def distance(self, a, b):
         if self.distance_metric == DistanceMetric.COSINE:
@@ -292,7 +293,7 @@ def create_dataset(data, graph, embedder):
     })
 
 
-def objective(trial, model_name, train_loader, val_loader, activation_func, distance_metric, use_matryoshka, graph):
+def objective(trial, model_name, model_str, train_loader, val_loader, activation_func, distance_metric, use_matryoshka, graph):
     # The search range is intentionally narrow because previous runs already showed
     # that useful learning rates are in this area.
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
@@ -312,7 +313,7 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
 
     trainer = pl.Trainer(
         logger=True,
-        default_root_dir="data/lightning_logs",
+        default_root_dir=f"data/lightning_logs/{model_str}/{SLURM_JOB_ID}",
         enable_checkpointing=False,
         max_epochs=5,
         accelerator="gpu",
@@ -357,7 +358,7 @@ if __name__ == "__main__":
             print(f"Model already exists at: {save_path}")
             continue
 
-        print(f"Optimization starting for: {trained_model_str}")
+        print(f"Optimization starting for: {trained_model_str} - Slurm Job ID: {SLURM_JOB_ID}")
 
         dataset_suffix = f"{curr_model_name.replace('/', '_')}_{distance_metric_str}"
         train_ds_path = f"data/datasets/train_{dataset_suffix}"
@@ -375,7 +376,7 @@ if __name__ == "__main__":
             print(f"Loading cached TRAIN dataset: {train_ds_path}")
             train_dataset = load_from_disk(train_ds_path)
         else:
-            print(f"Creating TRAIN dataset for {curr_model_name} ...")
+            print(f"Creating TRAIN dataset: {train_ds_path}")
             train_dataset = create_dataset(train_data, causal_graph, main_embedder)
             train_dataset.save_to_disk(train_ds_path)
             print(f"TRAIN Dataset saved to: {train_ds_path}")
@@ -384,7 +385,7 @@ if __name__ == "__main__":
             print(f"Loading cached VAL dataset: {valid_ds_path}")
             valid_dataset = load_from_disk(valid_ds_path)
         else:
-            print(f"Creating VAL dataset for {curr_model_name} ...")
+            print(f"Creating VAL dataset: {valid_ds_path}")
             valid_dataset = create_dataset(valid_data, causal_graph, main_embedder)
             valid_dataset.save_to_disk(valid_ds_path)
             print(f"VAL Dataset saved to: {valid_ds_path}")
@@ -414,9 +415,10 @@ if __name__ == "__main__":
         optuna.logging.set_verbosity(optuna.logging.INFO)
         pruner = optuna.pruners.MedianPruner()
 
-        study_name = f"{trained_model_str}_optimization"
+        study_name = f"{trained_model_str}_optimization_{SLURM_JOB_ID}"
+        optuna_db_path = f"data/optuna_studies/{trained_model_str}_{SLURM_JOB_ID}.sqlite3"
         study = optuna.create_study(
-            storage="sqlite:///data/optuna_studies/db.sqlite3",
+            storage=f"sqlite:///{optuna_db_path}",
             study_name=study_name,
             load_if_exists=True,
             direction="minimize",
@@ -451,6 +453,7 @@ if __name__ == "__main__":
                 lambda l_trial: objective(
                     l_trial,
                     model_path,
+                    trained_model_str,
                     main_train_loader,
                     main_valid_loader,
                     CFG_ACTIVATION_FUNC,
@@ -478,7 +481,11 @@ if __name__ == "__main__":
             causal_graph
         )
 
-        logger = TensorBoardLogger("data/tb_logs", name=trained_model_str)
+        logger = TensorBoardLogger(
+            "data/tb_logs",
+            name=trained_model_str,
+            version=SLURM_JOB_ID
+        )
 
         checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,
@@ -499,6 +506,7 @@ if __name__ == "__main__":
             devices=1,
             callbacks=[early_stop_callback, checkpoint_callback],
             logger=logger,
+            default_root_dir=f"data/lightning_logs/{trained_model_str}/{SLURM_JOB_ID}",
             num_sanity_val_steps=0,
         )
 
