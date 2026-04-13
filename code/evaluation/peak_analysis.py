@@ -127,7 +127,7 @@ def run_peak_investigation():
 
     # SentenceTransformer for semantic search (A*, Dijkstra)
     st_embeder = STEmbedder(
-        '../data/models/lightning/all-mpnet-base-v2_relu_cosine_v2_finetuned',
+        '../data/models/lightning/all-mpnet-base-v2_relu_cosine_matryoshka_finetuned',
         DistanceMetric.COSINE
     )
 
