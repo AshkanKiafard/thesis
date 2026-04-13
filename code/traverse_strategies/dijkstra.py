@@ -3,14 +3,14 @@ from typing import Any, Dict
 
 import networkx as nx
 
-from embeddings import STEmbeder
+from embeddings import STEmbedder
 
 
 def dijkstra_traverse(
     graph: nx.DiGraph,
     start_node: str,
     end_node: str,
-    embeder: STEmbeder,
+    embeder: STEmbedder,
     config: Dict[str, Any] = None
 ) -> tuple[list[Any], int]:
     # Allow optional runtime config such as a visit limit.

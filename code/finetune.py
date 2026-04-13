@@ -17,8 +17,8 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 import traverse_strategies as ts
-from embeddings import STEmbeder, DistanceMetric
-from utils import get_concept, load_graph, traverse_graph
+from embeddings import STEmbedder, DistanceMetric
+from utils import get_concept, load_graph, traverse_graph, get_matryoshka_dims
 
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
 torch.set_float32_matmul_precision('medium')
@@ -37,13 +37,13 @@ class MatryoshkaAStarLoss(nn.Module):
         self.distance_metric = distance_metric
         self.activation_func = nn.ReLU() if activation_func == ActivationFunc.RELU else nn.GELU()
         self.normalize = normalize
-
         # If no explicit Matryoshka dimensions are given, just use the full embedding size.
         if matryoshka_dims is None:
             self.matryoshka_dims = [self.model.get_sentence_embedding_dimension()]
         else:
             # Sorting from large to small makes the truncation logic easier to reason about.
-            self.matryoshka_dims = sorted(matryoshka_dims, reverse=True)
+            self.matryoshka_dims = sorted(set(matryoshka_dims), reverse=True)
+
 
     def distance(self, a, b):
         if self.distance_metric == DistanceMetric.COSINE:
@@ -113,7 +113,7 @@ class MatryoshkaAStarLoss(nn.Module):
 
 
 class LitAStar(pl.LightningModule):
-    def __init__(self, model_name, activation_func, distance_metric, normalize, lr, matryoshka_dims, graph):
+    def __init__(self, model_name, activation_func, distance_metric, normalize, lr, use_matryoshka, graph):
         super().__init__()
 
         # The graph object is large and not something we want in Lightning's saved hparams.
@@ -124,6 +124,9 @@ class LitAStar(pl.LightningModule):
 
         self.embedding_model = SentenceTransformer(model_name)
         self.embedding_model.train()
+
+        model_dimension = self.embedding_model.get_sentence_embedding_dimension()
+        matryoshka_dims = get_matryoshka_dims(model_dimension) if use_matryoshka else [model_dimension]
 
         self.loss_fn = MatryoshkaAStarLoss(
             self.embedding_model,
@@ -195,11 +198,11 @@ class LitAStar(pl.LightningModule):
         total_visits = 0
         pairs_validated = 0
 
-        for i, (u, v) in enumerate(unique_pairs):
+        for u, v in unique_pairs:
             if (u, v) in self.result_cache:
                 visits = self.result_cache[(u, v)]
             else:
-                path, visits = traverse_graph(self.graph, u, v, self, ts.astar_traverse)
+                _, visits = traverse_graph(self.graph, u, v, self, ts.astar_traverse, None)
                 self.result_cache[(u, v)] = visits
 
             total_visits += visits
@@ -246,7 +249,7 @@ class LitAStar(pl.LightningModule):
             self.log("train/grad_norm", grad_norm, prog_bar=True)
 
 
-def create_dataset(data, graph, embeder):
+def create_dataset(data, graph, embedder):
     astar_cache = {}
     start_nodes, end_nodes, positives, negatives = [], [], [], []
 
@@ -258,7 +261,7 @@ def create_dataset(data, graph, embeder):
         if (cause, effect) in astar_cache:
             path = astar_cache[(cause, effect)]
         else:
-            path, _ = traverse_graph(graph, cause, effect, embeder, ts.astar_traverse)
+            path, _ = traverse_graph(graph, cause, effect, embedder, ts.astar_traverse, None)
             astar_cache[(cause, effect)] = path
 
         # We need at least one hop to define a positive next node.
@@ -289,7 +292,7 @@ def create_dataset(data, graph, embeder):
     })
 
 
-def objective(trial, model_name, train_loader, val_loader, activation_func, distance_metric, matryoshka_dims, graph):
+def objective(trial, model_name, train_loader, val_loader, activation_func, distance_metric, use_matryoshka, graph):
     # The search range is intentionally narrow because previous runs already showed
     # that useful learning rates are in this area.
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
@@ -300,7 +303,7 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
         distance_metric=distance_metric,
         normalize=False,
         lr=lr,
-        matryoshka_dims=matryoshka_dims,
+        use_matryoshka=use_matryoshka,
         graph=graph
     )
 
@@ -324,12 +327,10 @@ def objective(trial, model_name, train_loader, val_loader, activation_func, dist
 
 
 if __name__ == "__main__":
-    VERSION = 2
     TOTAL_TARGET_TRIALS = 30
-
     CFG_DISTANCE_METRIC = DistanceMetric.COSINE
     CFG_ACTIVATION_FUNC = ActivationFunc.GELU
-    MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
+    USE_MATRYOSHKA = True
 
     causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
 
@@ -346,8 +347,8 @@ if __name__ == "__main__":
         curr_model_name = model_path.split("/")[-1]
         activation_func_str = 'relu' if CFG_ACTIVATION_FUNC == ActivationFunc.RELU else 'gelu'
         distance_metric_str = 'cosine' if CFG_DISTANCE_METRIC == DistanceMetric.COSINE else 'euclid'
-
-        trained_model_str = f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_v{VERSION}"
+        mrl_str = "matryoshka" if USE_MATRYOSHKA else "single"
+        trained_model_str = f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_{mrl_str}"
         save_path = f"data/models/lightning/{trained_model_str}_finetuned"
         ckpt_dir = f"data/checkpoints/{trained_model_str}"
 
@@ -358,23 +359,24 @@ if __name__ == "__main__":
 
         print(f"Optimization starting for: {trained_model_str}")
 
-        train_ds_path = f"data/datasets/train_{curr_model_name.replace('/', '_')}"
-        valid_ds_path = f"data/datasets/valid_{curr_model_name.replace('/', '_')}"
+        dataset_suffix = f"{curr_model_name.replace('/', '_')}_{distance_metric_str}"
+        train_ds_path = f"data/datasets/train_{dataset_suffix}"
+        valid_ds_path = f"data/datasets/valid_{dataset_suffix}"
 
         train_exists = os.path.exists(train_ds_path)
         valid_exists = os.path.exists(valid_ds_path)
 
-        main_embeder = None
+        main_embedder = None
         if not train_exists or not valid_exists:
             print(f"Initializing Embedder for {curr_model_name}...")
-            main_embeder = STEmbeder(model_path, CFG_DISTANCE_METRIC)
+            main_embedder = STEmbedder(model_path, CFG_DISTANCE_METRIC)
 
         if train_exists:
             print(f"Loading cached TRAIN dataset: {train_ds_path}")
             train_dataset = load_from_disk(train_ds_path)
         else:
             print(f"Creating TRAIN dataset for {curr_model_name} ...")
-            train_dataset = create_dataset(train_data, causal_graph, main_embeder)
+            train_dataset = create_dataset(train_data, causal_graph, main_embedder)
             train_dataset.save_to_disk(train_ds_path)
             print(f"TRAIN Dataset saved to: {train_ds_path}")
 
@@ -383,12 +385,12 @@ if __name__ == "__main__":
             valid_dataset = load_from_disk(valid_ds_path)
         else:
             print(f"Creating VAL dataset for {curr_model_name} ...")
-            valid_dataset = create_dataset(valid_data, causal_graph, main_embeder)
+            valid_dataset = create_dataset(valid_data, causal_graph, main_embedder)
             valid_dataset.save_to_disk(valid_ds_path)
             print(f"VAL Dataset saved to: {valid_ds_path}")
 
-        if main_embeder:
-            del main_embeder
+        if main_embedder:
+            del main_embedder
 
         print(f"Total Train examples: {len(train_dataset)}")
         print(f"Total Val examples: {len(valid_dataset)}")
@@ -453,12 +455,15 @@ if __name__ == "__main__":
                     main_valid_loader,
                     CFG_ACTIVATION_FUNC,
                     CFG_DISTANCE_METRIC,
-                    MATRYOSHKA_DIMS,
+                    USE_MATRYOSHKA,
                     causal_graph
                 ),
                 n_trials=trials_to_run,
                 gc_after_trial=True
             )
+
+            gc.collect()
+            torch.cuda.empty_cache()
 
         best_lr = study.best_params["lr"]
         print(f"Training model with LR={best_lr} ...")
@@ -469,11 +474,11 @@ if __name__ == "__main__":
             CFG_DISTANCE_METRIC,
             False,
             best_lr,
-            MATRYOSHKA_DIMS,
+            USE_MATRYOSHKA,
             causal_graph
         )
 
-        logger = TensorBoardLogger("data/tb_logs", name=save_path)
+        logger = TensorBoardLogger("data/tb_logs", name=trained_model_str)
 
         checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,
@@ -491,6 +496,7 @@ if __name__ == "__main__":
         main_trainer = pl.Trainer(
             max_epochs=50,
             accelerator="gpu",
+            devices=1,
             callbacks=[early_stop_callback, checkpoint_callback],
             logger=logger,
             num_sanity_val_steps=0,

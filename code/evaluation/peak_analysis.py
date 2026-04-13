@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 
 import traverse_strategies as ts
-from embeddings import STEmbeder, GloveEmbeder, DistanceMetric
+from embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
 # -------------------------------------------------------------------------
@@ -126,7 +126,7 @@ def run_peak_investigation():
     print("Initializing Embedders...")
 
     # SentenceTransformer for semantic search (A*, Dijkstra)
-    st_embeder = STEmbeder(
+    st_embeder = STEmbedder(
         '../data/models/lightning/all-mpnet-base-v2_relu_cosine_v2_finetuned',
         DistanceMetric.COSINE
     )

@@ -7,7 +7,7 @@ from typing import Any, Dict
 import torch
 
 import traverse_strategies as ts
-from embeddings import STEmbeder, DistanceMetric
+from embeddings import STEmbedder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
 GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
@@ -36,7 +36,7 @@ def ensure_directory(path: str) -> None:
 def export_astar_details_for_model_dim(
     data: list[dict[str, Any]],
     graph,
-    embeder: STEmbeder,
+    embeder: STEmbedder,
     model_label: str,
     dimension: int,
     output_path: str,
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         print(f"Distance: {distance_metric}")
 
         try:
-            embeder = STEmbeder(
+            embeder = STEmbedder(
                 model_path=model_path,
                 distance_metric=distance_metric,
             )

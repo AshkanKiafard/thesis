@@ -11,7 +11,7 @@ class DistanceMetric(Enum):
     EUCLIDEAN = 2
 
 
-class STEmbeder:
+class STEmbedder:
     def __init__(self, model_path: str, distance_metric: DistanceMetric):
         # Use GPU if available, otherwise fall back to CPU.
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'

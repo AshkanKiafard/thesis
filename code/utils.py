@@ -3,7 +3,7 @@ from typing import Callable
 
 import networkx as nx
 
-from embeddings import STEmbeder
+from embeddings import STEmbedder
 
 
 def load_graph(file_path, remove_self_loops=True):
@@ -34,21 +34,21 @@ def load_graph(file_path, remove_self_loops=True):
             # Extract cause and effect concepts and normalize them
             # (replace "_" with spaces to get readable text)
             if (
-                (c := d["causal_relation"]["cause"]["concept"].replace('_', ' ')) !=
-                (e := d["causal_relation"]["effect"]["concept"].replace('_', ' '))
-            )
-            # Optionally remove self-loops (cause == effect)
-            or not remove_self_loops
+                       (c := d["causal_relation"]["cause"]["concept"].replace('_', ' ')) !=
+                       (e := d["causal_relation"]["effect"]["concept"].replace('_', ' '))
+               )
+               # Optionally remove self-loops (cause == effect)
+               or not remove_self_loops
         ])
 
 
 def traverse_graph(
-    graph: nx.DiGraph,
-    start_node: str,
-    end_node: str,
-    embeder: STEmbeder,
-    strategy_fn: Callable,
-    config: dict = None
+        graph: nx.DiGraph,
+        start_node: str,
+        end_node: str,
+        embeder: STEmbedder,
+        strategy_fn: Callable,
+        config: dict = None
 ):
     # Generic wrapper for running a traversal/search strategy.
     #
@@ -91,3 +91,35 @@ def get_concept(question: dict, concept_type: int) -> str:
     concept = ' '.join(concept)
 
     return concept
+
+
+def get_matryoshka_dims(model_dim: int) -> list[int]:
+    # Generates a list of embedding dimensions for Matryoshka training.
+    #
+    # The goal is to evaluate truncated embeddings at multiple sizes while:
+    # - preserving consistency across models
+    # - enabling fair comparison (especially at 768 dims)
+    #
+    # The resulting list includes:
+    # - the full embedding dimension (model_dim)
+    # - powers of two (64 → ... → <= model_dim)
+    # - a fixed anchor dimension (768) for cross-model comparison
+
+    # Use a set to avoid duplicate dimensions.
+    dims = {model_dim}
+
+    # Generate powers-of-two dimensions starting from 64.
+    # These represent progressively compressed embedding sizes.
+    base_dim = 64
+    while base_dim < model_dim:
+        dims.add(base_dim)
+        base_dim *= 2
+
+    # Add 768 as a fixed comparison point across models.
+    # Only include it if the model's embedding size supports it.
+    if 768 <= model_dim:
+        dims.add(768)
+
+    # Return dimensions sorted from largest to smallest.
+    # This ordering matches the truncation logic used during training.
+    return sorted(dims, reverse=True)

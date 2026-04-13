@@ -15,7 +15,7 @@ from sklearn.metrics import (
 )
 
 import traverse_strategies as ts
-from embeddings import STEmbeder, GloveEmbeder, DistanceMetric
+from embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from utils import get_concept, load_graph, traverse_graph
 
 GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
@@ -256,7 +256,7 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
 
 if __name__ == "__main__":
     MASTER_CONFIG = {
-        "rl_model_path": "data/models/rl/msmarco_evaluation_state_dict.pt",
+        "rl_model_path": "../data/models/rl/msmarco_evaluation_state_dict.pt",
         "rl_beam_width": 5,
         "rl_max_path_len": -1,
         "rl_max_visits": 446,
@@ -346,7 +346,7 @@ if __name__ == "__main__":
         print(f"\nEVALUATING: {model_path}")
 
         try:
-            main_embeder = STEmbeder(
+            main_embeder = STEmbedder(
                 model_path=model_path,
                 distance_metric=DistanceMetric.COSINE
             )

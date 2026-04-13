@@ -3,7 +3,7 @@ import gc
 import torch
 import numpy as np
 
-from embeddings import STEmbeder
+from embeddings import STEmbedder
 from utils import load_graph
 
 # Make sure the cache directory exists before we start writing .npy files.
@@ -14,6 +14,7 @@ graph = load_graph("data/graphs/causenet-precision.jsonl", False)
 
 base_models = [
     "all-mpnet-base-v2",
+    "Qwen/Qwen3-Embedding-4B",
     # "all-MiniLM-L12-v2",
     # "multi-qa-mpnet-base-cos-v1"
 ]
@@ -64,7 +65,7 @@ for model_path in model_queue:
 
     if len(uncached_nodes) > 0:
         print("Loading model...")
-        embeder = STEmbeder(model_path=model_path, distance_metric='cosine')
+        embeder = STEmbedder(model_path=model_path, distance_metric='cosine')
 
         total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
 

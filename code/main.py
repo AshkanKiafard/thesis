@@ -1,9 +1,9 @@
 import traverse_strategies as ts
-from embeddings import STEmbeder, GloveEmbeder, DistanceMetric
+from embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from utils import load_graph, traverse_graph
 
 if __name__ == "__main__":
-    st_embeder = STEmbeder('sentence-transformers/all-mpnet-base-v2', DistanceMetric.COSINE)
+    st_embeder = STEmbedder('sentence-transformers/all-mpnet-base-v2', DistanceMetric.COSINE)
     glove_embeder = GloveEmbeder('data/embeddings/glove.6B/glove.6B.300d.txt', DistanceMetric.COSINE)
     print("Embeders initialized.")
 

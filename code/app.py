@@ -4,7 +4,7 @@ import time
 import gradio as gr
 
 import traverse_strategies as ts
-from embeddings import STEmbeder, DistanceMetric, GloveEmbeder
+from embeddings import STEmbedder, DistanceMetric, GloveEmbeder
 from utils import load_graph, traverse_graph
 
 # ==========================================
@@ -89,7 +89,7 @@ def infer(model, cause, effect):
 
     # Load embedding models.
     # SentenceTransformer for semantic methods, GloVe for RL baseline.
-    st_embeder = STEmbeder(model, DistanceMetric.COSINE)
+    st_embeder = STEmbedder(model, DistanceMetric.COSINE)
     glove_embeder = GloveEmbeder(
         'data/embeddings/glove.6B/glove.6B.300d.txt',
         DistanceMetric.COSINE

@@ -4,14 +4,14 @@ from typing import Any
 import networkx as nx
 from sortedcontainers import SortedList
 
-from embeddings import STEmbeder
+from embeddings import STEmbedder
 
 
 def bfs_traverse(
     graph: nx.DiGraph,
     start_node: str,
     end_node: str,
-    _embeder: STEmbeder,
+    _embeder: STEmbedder,
     _config=None
 ) -> tuple[list[Any], int]:
     # Standard BFS queue:
