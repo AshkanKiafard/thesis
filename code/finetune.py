@@ -329,8 +329,8 @@ def objective(trial, model_name, model_str, train_loader, val_loader, activation
 
 if __name__ == "__main__":
     TOTAL_TARGET_TRIALS = 30
-    CFG_DISTANCE_METRIC = DistanceMetric.EUCLIDEAN
-    CFG_ACTIVATION_FUNC = ActivationFunc.GELU
+    CFG_DISTANCE_METRIC = DistanceMetric.COSINE
+    CFG_ACTIVATION_FUNC = ActivationFunc.RELU
     USE_MATRYOSHKA = True
 
     causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
@@ -342,7 +342,7 @@ if __name__ == "__main__":
         valid_data = json.load(f)
 
     # Can be extended later if multiple base encoders should be tuned in one run.
-    model_list = ["all-mpnet-base-v2"]
+    model_list = ["Qwen/Qwen3-Embedding-4B"]
 
     for model_path in model_list:
         curr_model_name = model_path.split("/")[-1]
