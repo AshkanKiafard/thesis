@@ -1,3 +1,4 @@
+import argparse
 import gc
 import json
 import os
@@ -31,14 +32,99 @@ class ActivationFunc(Enum):
     GELU = 2
 
 
+def parse_activation_func(value: str) -> ActivationFunc:
+    value = value.strip().lower()
+    if value == "relu":
+        return ActivationFunc.RELU
+    elif value == "gelu":
+        return ActivationFunc.GELU
+    else:
+        raise ValueError(f"Unsupported activation function: {value}")
+
+
+def parse_distance_metric(value: str) -> DistanceMetric:
+    value = value.strip().lower()
+    if value == "cosine":
+        return DistanceMetric.COSINE
+    elif value in {"euclid", "euclidean"}:
+        return DistanceMetric.EUCLIDEAN
+    else:
+        raise ValueError(f"Unsupported distance metric: {value}")
+
+
+def str_to_bool(value: str) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    value = value.strip().lower()
+    if value in {"true", "1", "yes", "y"}:
+        return True
+    elif value in {"false", "0", "no", "n"}:
+        return False
+    else:
+        raise argparse.ArgumentTypeError(f"Boolean value expected, got: {value}")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Fine-tune one embedding model for A* heuristic learning."
+    )
+
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        help="Model path, e.g. Qwen/Qwen3-Embedding-0.6B or sentence-transformers/all-mpnet-base-v2"
+    )
+
+    parser.add_argument(
+        "--activation",
+        type=str,
+        required=True,
+        choices=["relu", "gelu"],
+        help="Activation function used inside the ranking loss"
+    )
+
+    parser.add_argument(
+        "--distance",
+        type=str,
+        required=True,
+        choices=["cosine", "euclid", "euclidean"],
+        help="Distance metric used for search and training"
+    )
+
+    parser.add_argument(
+        "--normalize",
+        type=str_to_bool,
+        default=False,
+        help="Whether to L2-normalize embeddings before distance computation (default: false)"
+    )
+
+    parser.add_argument(
+        "--matryoshka",
+        type=str_to_bool,
+        default=True,
+        help="Whether to use Matryoshka slicing during training (default: true)"
+    )
+
+    parser.add_argument(
+        "--target-trials",
+        type=int,
+        default=30,
+        help="Total number of Optuna trials to target"
+    )
+
+    return parser.parse_args()
+
+
 class MatryoshkaAStarLoss(nn.Module):
-    def __init__(self, model, activation_func, distance_metric: DistanceMetric, normalize: bool,
+    def __init__(self, model, cls_activation_func, cls_distance_metric: DistanceMetric, cls_normalize: bool,
                  matryoshka_dims: list[int] = None):
         super().__init__()
         self.model = model
-        self.distance_metric = distance_metric
-        self.activation_func = nn.ReLU() if activation_func == ActivationFunc.RELU else nn.GELU()
-        self.normalize = normalize
+        self.distance_metric = cls_distance_metric
+        self.activation_func = nn.ReLU() if cls_activation_func == ActivationFunc.RELU else nn.GELU()
+        self.normalize = cls_normalize
         # If no explicit Matryoshka dimensions are given, just use the full embedding size.
         if matryoshka_dims is None:
             self.matryoshka_dims = [self.model.get_sentence_embedding_dimension()]
@@ -114,7 +200,7 @@ class MatryoshkaAStarLoss(nn.Module):
 
 
 class LitAStar(pl.LightningModule):
-    def __init__(self, model_name, activation_func, distance_metric, normalize, lr, use_matryoshka, graph):
+    def __init__(self, model_name, cls_activation_func, cls_distance_metric, cls_normalize, lr, cls_use_matryoshka, graph):
         super().__init__()
 
         # The graph object is large and not something we want in Lightning's saved hparams.
@@ -127,13 +213,13 @@ class LitAStar(pl.LightningModule):
         self.embedding_model.train()
 
         model_dimension = self.embedding_model.get_sentence_embedding_dimension()
-        matryoshka_dims = get_matryoshka_dims(model_dimension) if use_matryoshka else [model_dimension]
+        matryoshka_dims = get_matryoshka_dims(model_dimension) if cls_use_matryoshka else [model_dimension]
 
         self.loss_fn = MatryoshkaAStarLoss(
             self.embedding_model,
-            activation_func,
-            distance_metric,
-            normalize,
+            cls_activation_func,
+            cls_distance_metric,
+            cls_normalize,
             matryoshka_dims
         )
 
@@ -293,18 +379,19 @@ def create_dataset(data, graph, embedder):
     })
 
 
-def objective(trial, model_name, model_str, train_loader, val_loader, activation_func, distance_metric, use_matryoshka, graph):
+def objective(trial, model_name, model_str, train_loader, val_loader,
+              f_activation_func, f_distance_metric, f_normalize, f_use_matryoshka, graph):
     # The search range is intentionally narrow because previous runs already showed
     # that useful learning rates are in this area.
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
 
     model = LitAStar(
         model_name=model_name,
-        activation_func=activation_func,
-        distance_metric=distance_metric,
-        normalize=False,
+        cls_activation_func=f_activation_func,
+        cls_distance_metric=f_distance_metric,
+        cls_normalize=f_normalize,
         lr=lr,
-        use_matryoshka=use_matryoshka,
+        cls_use_matryoshka=f_use_matryoshka,
         graph=graph
     )
 
@@ -328,10 +415,14 @@ def objective(trial, model_name, model_str, train_loader, val_loader, activation
 
 
 if __name__ == "__main__":
-    TOTAL_TARGET_TRIALS = 30
-    CFG_DISTANCE_METRIC = DistanceMetric.EUCLIDEAN
-    CFG_ACTIVATION_FUNC = ActivationFunc.GELU
-    USE_MATRYOSHKA = True
+    args = parse_args()
+
+    target_trials = args.target_trials
+    distance_metric = parse_distance_metric(args.distance)
+    activation_func = parse_activation_func(args.activation)
+    normalize = args.normalize
+    use_matryoshka = args.matryoshka
+    model_path = args.model
 
     causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
 
@@ -341,207 +432,205 @@ if __name__ == "__main__":
     with open("data/datasets/msmarco_valid.json") as f:
         valid_data = json.load(f)
 
-    # Can be extended later if multiple base encoders should be tuned in one run.
-    model_list = ["Qwen/Qwen3-Embedding-0.6B"]
+    curr_model_name = model_path.split("/")[-1]
+    activation_func_str = 'relu' if activation_func == ActivationFunc.RELU else 'gelu'
+    distance_metric_str = 'cosine' if distance_metric == DistanceMetric.COSINE else 'euclid'
+    normalize_str = "norm" if normalize else "nonorm"
+    mrl_str = "matryoshka" if use_matryoshka else "single"
+    trained_model_str = f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_{normalize_str}_{mrl_str}"
+    save_path = f"data/models/lightning/{trained_model_str}_finetuned"
+    ckpt_dir = f"data/checkpoints/{trained_model_str}"
 
-    for model_path in model_list:
-        curr_model_name = model_path.split("/")[-1]
-        activation_func_str = 'relu' if CFG_ACTIVATION_FUNC == ActivationFunc.RELU else 'gelu'
-        distance_metric_str = 'cosine' if CFG_DISTANCE_METRIC == DistanceMetric.COSINE else 'euclid'
-        mrl_str = "matryoshka" if USE_MATRYOSHKA else "single"
-        trained_model_str = f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_{mrl_str}"
-        save_path = f"data/models/lightning/{trained_model_str}_finetuned"
-        ckpt_dir = f"data/checkpoints/{trained_model_str}"
+    # Skip everything if the final exported SentenceTransformer already exists.
+    if os.path.exists(save_path):
+        print(f"Model already exists at: {save_path}")
+        raise SystemExit(0)
 
-        # Skip everything if the final exported SentenceTransformer already exists.
-        if os.path.exists(save_path):
-            print(f"Model already exists at: {save_path}")
-            continue
+    print(f"Optimization starting for: {trained_model_str} - Slurm Job ID: {SLURM_JOB_ID}")
 
-        print(f"Optimization starting for: {trained_model_str} - Slurm Job ID: {SLURM_JOB_ID}")
+    dataset_suffix = f"{curr_model_name.replace('/', '_')}_{distance_metric_str}"
+    train_ds_path = f"data/datasets/train_{dataset_suffix}"
+    valid_ds_path = f"data/datasets/valid_{dataset_suffix}"
 
-        dataset_suffix = f"{curr_model_name.replace('/', '_')}_{distance_metric_str}"
-        train_ds_path = f"data/datasets/train_{dataset_suffix}"
-        valid_ds_path = f"data/datasets/valid_{dataset_suffix}"
+    train_exists = os.path.exists(train_ds_path)
+    valid_exists = os.path.exists(valid_ds_path)
 
-        train_exists = os.path.exists(train_ds_path)
-        valid_exists = os.path.exists(valid_ds_path)
+    main_embedder = None
+    if not train_exists or not valid_exists:
+        print(f"Initializing Embedder for {curr_model_name} ...")
+        main_embedder = STEmbedder(model_path, distance_metric)
 
-        main_embedder = None
-        if not train_exists or not valid_exists:
-            print(f"Initializing Embedder for {curr_model_name}...")
-            main_embedder = STEmbedder(model_path, CFG_DISTANCE_METRIC)
+    if train_exists:
+        print(f"Loading cached TRAIN dataset: {train_ds_path}")
+        train_dataset = load_from_disk(train_ds_path)
+    else:
+        print(f"Creating TRAIN dataset: {train_ds_path}")
+        train_dataset = create_dataset(train_data, causal_graph, main_embedder)
+        train_dataset.save_to_disk(train_ds_path)
+        print(f"TRAIN Dataset saved to: {train_ds_path}")
 
-        if train_exists:
-            print(f"Loading cached TRAIN dataset: {train_ds_path}")
-            train_dataset = load_from_disk(train_ds_path)
-        else:
-            print(f"Creating TRAIN dataset: {train_ds_path}")
-            train_dataset = create_dataset(train_data, causal_graph, main_embedder)
-            train_dataset.save_to_disk(train_ds_path)
-            print(f"TRAIN Dataset saved to: {train_ds_path}")
+    if valid_exists:
+        print(f"Loading cached VAL dataset: {valid_ds_path}")
+        valid_dataset = load_from_disk(valid_ds_path)
+    else:
+        print(f"Creating VAL dataset: {valid_ds_path}")
+        valid_dataset = create_dataset(valid_data, causal_graph, main_embedder)
+        valid_dataset.save_to_disk(valid_ds_path)
+        print(f"VAL Dataset saved to: {valid_ds_path}")
 
-        if valid_exists:
-            print(f"Loading cached VAL dataset: {valid_ds_path}")
-            valid_dataset = load_from_disk(valid_ds_path)
-        else:
-            print(f"Creating VAL dataset: {valid_ds_path}")
-            valid_dataset = create_dataset(valid_data, causal_graph, main_embedder)
-            valid_dataset.save_to_disk(valid_ds_path)
-            print(f"VAL Dataset saved to: {valid_ds_path}")
+    if main_embedder:
+        del main_embedder
 
-        if main_embedder:
-            del main_embedder
+    print(f"Total Train examples: {len(train_dataset)}")
+    print(f"Total Val examples: {len(valid_dataset)}")
 
-        print(f"Total Train examples: {len(train_dataset)}")
-        print(f"Total Val examples: {len(valid_dataset)}")
+    main_train_loader = DataLoader(
+        train_dataset,
+        batch_size=128,
+        shuffle=True,
+        num_workers=4,
+        persistent_workers=True
+    )
 
-        main_train_loader = DataLoader(
-            train_dataset,
-            batch_size=128,
-            shuffle=True,
-            num_workers=4,
-            persistent_workers=True
+    main_valid_loader = DataLoader(
+        valid_dataset,
+        batch_size=128,
+        shuffle=False,
+        num_workers=4,
+        persistent_workers=True
+    )
+
+    optuna.logging.set_verbosity(optuna.logging.INFO)
+    pruner = optuna.pruners.MedianPruner()
+
+    study_name = f"{trained_model_str}_optimization_{SLURM_JOB_ID}"
+    optuna_db_path = f"data/optuna_studies/{trained_model_str}_{SLURM_JOB_ID}.sqlite3"
+    study = optuna.create_study(
+        storage=f"sqlite:///{optuna_db_path}",
+        study_name=study_name,
+        load_if_exists=True,
+        direction="minimize",
+        pruner=pruner
+    )
+
+    # When a run is interrupted, Optuna may leave trials in RUNNING state.
+    # Mark them as failed so the study can resume cleanly.
+    print("Cleaning zombie trials ...")
+    running_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.RUNNING]
+
+    if running_trials:
+        print(f"Found {len(running_trials)} interrupted trials (Zombies). Cleaning them up ...")
+        for r_trial in running_trials:
+            try:
+                study.tell(r_trial.number, state=optuna.trial.TrialState.FAIL)
+                print(f"Marked interrupted Trial {r_trial.number} as FAILED.")
+            except Exception as e:
+                print(f"Warning: Could not update status for Trial {r_trial.number}: {e}")
+
+    # Count both COMPLETE and PRUNED as already-attempted useful trials.
+    valid_trials = [
+        t for t in study.trials
+        if t.state in (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)
+    ]
+    current_valid_count = len(valid_trials)
+    trials_to_run = target_trials - current_valid_count
+
+    if trials_to_run > 0:
+        print(f"Running study for {trained_model_str} for {trials_to_run} trials ...")
+        study.optimize(
+            lambda l_trial: objective(
+                l_trial,
+                model_path,
+                trained_model_str,
+                main_train_loader,
+                main_valid_loader,
+                activation_func,
+                distance_metric,
+                normalize,
+                use_matryoshka,
+                causal_graph
+            ),
+            n_trials=trials_to_run,
+            gc_after_trial=True
         )
 
-        main_valid_loader = DataLoader(
-            valid_dataset,
-            batch_size=128,
-            shuffle=False,
-            num_workers=4,
-            persistent_workers=True
-        )
-
-        optuna.logging.set_verbosity(optuna.logging.INFO)
-        pruner = optuna.pruners.MedianPruner()
-
-        study_name = f"{trained_model_str}_optimization_{SLURM_JOB_ID}"
-        optuna_db_path = f"data/optuna_studies/{trained_model_str}_{SLURM_JOB_ID}.sqlite3"
-        study = optuna.create_study(
-            storage=f"sqlite:///{optuna_db_path}",
-            study_name=study_name,
-            load_if_exists=True,
-            direction="minimize",
-            pruner=pruner
-        )
-
-        # When a run is interrupted, Optuna may leave trials in RUNNING state.
-        # Mark them as failed so the study can resume cleanly.
-        print("Cleaning zombie trials ...")
-        running_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.RUNNING]
-
-        if running_trials:
-            print(f"Found {len(running_trials)} interrupted trials (Zombies). Cleaning them up...")
-            for r_trial in running_trials:
-                try:
-                    study.tell(r_trial.number, state=optuna.trial.TrialState.FAIL)
-                    print(f"Marked interrupted Trial {r_trial.number} as FAILED.")
-                except Exception as e:
-                    print(f"Warning: Could not update status for Trial {r_trial.number}: {e}")
-
-        # Count both COMPLETE and PRUNED as already-attempted useful trials.
-        valid_trials = [
-            t for t in study.trials
-            if t.state in (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)
-        ]
-        current_valid_count = len(valid_trials)
-        trials_to_run = TOTAL_TARGET_TRIALS - current_valid_count
-
-        if trials_to_run > 0:
-            print(f"Resuming study. Running {trials_to_run} more trials...")
-            study.optimize(
-                lambda l_trial: objective(
-                    l_trial,
-                    model_path,
-                    trained_model_str,
-                    main_train_loader,
-                    main_valid_loader,
-                    CFG_ACTIVATION_FUNC,
-                    CFG_DISTANCE_METRIC,
-                    USE_MATRYOSHKA,
-                    causal_graph
-                ),
-                n_trials=trials_to_run,
-                gc_after_trial=True
-            )
-
-            gc.collect()
-            torch.cuda.empty_cache()
-
-        best_lr = study.best_params["lr"]
-        print(f"Training model with LR={best_lr} ...")
-
-        final_model = LitAStar(
-            model_path,
-            CFG_ACTIVATION_FUNC,
-            CFG_DISTANCE_METRIC,
-            False,
-            best_lr,
-            USE_MATRYOSHKA,
-            causal_graph
-        )
-
-        logger = TensorBoardLogger(
-            "data/tb_logs",
-            name=trained_model_str,
-            version=SLURM_JOB_ID
-        )
-
-        checkpoint_callback = ModelCheckpoint(
-            dirpath=ckpt_dir,
-            filename="{epoch}-{val/astar_cost:.4f}",
-            monitor="val/astar_cost",
-            mode="min",
-            save_top_k=1,
-            save_last=True,
-            verbose=True,
-        )
-
-        # Final training gets a larger patience than the Optuna search stage.
-        early_stop_callback = EarlyStopping(monitor="val/astar_cost", patience=10, mode="min")
-
-        main_trainer = pl.Trainer(
-            max_epochs=50,
-            accelerator="gpu",
-            devices=1,
-            callbacks=[early_stop_callback, checkpoint_callback],
-            logger=logger,
-            default_root_dir=f"data/lightning_logs/{trained_model_str}/{SLURM_JOB_ID}",
-            num_sanity_val_steps=0,
-        )
-
-        ckpt_path = None
-        if os.path.exists(ckpt_dir):
-            checkpoint_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')]
-
-            if checkpoint_files:
-                # Resume from the most recently modified checkpoint if one exists.
-                checkpoint_files.sort(
-                    key=lambda x: os.path.getmtime(os.path.join(ckpt_dir, x)),
-                    reverse=True
-                )
-                ckpt_path = os.path.join(ckpt_dir, checkpoint_files[0])
-                print(f"Found checkpoint! Resuming from: {ckpt_path}")
-            else:
-                print("No .ckpt files found in directory. Training from scratch.")
-        else:
-            print("Checkpoint directory not found. Training from scratch.")
-
-        # Needed so Lightning/Torch can safely deserialize these custom enum values.
-        torch.serialization.add_safe_globals([ActivationFunc, DistanceMetric])
-
-        main_trainer.fit(final_model, main_train_loader, main_valid_loader, ckpt_path=ckpt_path)
-
-        print(f"Loading best model from checkpoint: {checkpoint_callback.best_model_path}")
-        best_model = LitAStar.load_from_checkpoint(
-            checkpoint_callback.best_model_path,
-            graph=causal_graph
-        )
-
-        print(f"Saving best SentenceTransformer model to: {save_path}")
-        best_model.embedding_model.save(save_path)
-
-        # Try to free GPU/CPU memory before moving to the next model.
-        del final_model, best_model, main_trainer, study
         gc.collect()
         torch.cuda.empty_cache()
+
+    best_lr = study.best_params["lr"]
+    print(f"Training {trained_model_str} with LR={best_lr} ...")
+
+    final_model = LitAStar(
+        model_path,
+        activation_func,
+        distance_metric,
+        normalize,
+        best_lr,
+        use_matryoshka,
+        causal_graph
+    )
+
+    logger = TensorBoardLogger(
+        "data/tb_logs",
+        name=trained_model_str,
+        version=f"{SLURM_JOB_ID}_{activation_func_str}_{distance_metric_str}_{normalize_str}"
+    )
+
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=ckpt_dir,
+        filename="{epoch}-{val/astar_cost:.4f}",
+        monitor="val/astar_cost",
+        mode="min",
+        save_top_k=1,
+        save_last=True,
+        verbose=True,
+    )
+
+    # Final training gets a larger patience than the Optuna search stage.
+    early_stop_callback = EarlyStopping(monitor="val/astar_cost", patience=10, mode="min")
+
+    main_trainer = pl.Trainer(
+        max_epochs=50,
+        accelerator="gpu",
+        devices=1,
+        callbacks=[early_stop_callback, checkpoint_callback],
+        logger=logger,
+        default_root_dir=f"data/lightning_logs/{trained_model_str}/{SLURM_JOB_ID}",
+        num_sanity_val_steps=0,
+    )
+
+    ckpt_path = None
+    if os.path.exists(ckpt_dir):
+        checkpoint_files = [f for f in os.listdir(ckpt_dir) if f.endswith('.ckpt')]
+
+        if checkpoint_files:
+            # Resume from the most recently modified checkpoint if one exists.
+            checkpoint_files.sort(
+                key=lambda x: os.path.getmtime(os.path.join(ckpt_dir, x)),
+                reverse=True
+            )
+            ckpt_path = os.path.join(ckpt_dir, checkpoint_files[0])
+            print(f"Found checkpoint! Resuming from: {ckpt_path}")
+        else:
+            print("No .ckpt files found in directory. Training from scratch.")
+    else:
+        print("Checkpoint directory not found. Training from scratch.")
+
+    # Needed so Lightning/Torch can safely deserialize these custom enum values.
+    torch.serialization.add_safe_globals([ActivationFunc, DistanceMetric])
+
+    main_trainer.fit(final_model, main_train_loader, main_valid_loader, ckpt_path=ckpt_path)
+
+    print(f"Loading best model from checkpoint: {checkpoint_callback.best_model_path}")
+    best_model = LitAStar.load_from_checkpoint(
+        checkpoint_callback.best_model_path,
+        graph=causal_graph
+    )
+
+    print(f"Saving best SentenceTransformer model to: {save_path}")
+    best_model.embedding_model.save(save_path)
+
+    # Try to free GPU/CPU memory before moving to the next model.
+    del final_model, best_model, main_trainer, study
+    gc.collect()
+    torch.cuda.empty_cache()
