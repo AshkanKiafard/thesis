@@ -503,8 +503,8 @@ if __name__ == "__main__":
     optuna.logging.set_verbosity(optuna.logging.INFO)
     pruner = optuna.pruners.MedianPruner()
 
-    study_name = f"{trained_model_str}_optimization_{SLURM_JOB_ID}"
-    optuna_db_path = f"data/optuna_studies/{trained_model_str}_{SLURM_JOB_ID}.sqlite3"
+    study_name = f"{trained_model_str}_optimization"
+    optuna_db_path = f"data/optuna_studies/{trained_model_str}.sqlite3"
     study = optuna.create_study(
         storage=f"sqlite:///{optuna_db_path}",
         study_name=study_name,
@@ -630,7 +630,7 @@ if __name__ == "__main__":
     print(f"Saving best SentenceTransformer model to: {save_path}")
     best_model.embedding_model.save(save_path)
 
-    # Try to free GPU/CPU memory before moving to the next model.
+    # Try to free GPU/CPU memory
     del final_model, best_model, main_trainer, study
     gc.collect()
     torch.cuda.empty_cache()
