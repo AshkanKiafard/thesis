@@ -553,9 +553,12 @@ if __name__ == "__main__":
             n_trials=trials_to_run,
             gc_after_trial=True
         )
+        print(f"Finished study for {trained_model_str} for {trials_to_run} trials.")
 
         gc.collect()
         torch.cuda.empty_cache()
+    else:
+        print("Study is already complete.")
 
     best_lr = study.best_params["lr"]
     print(f"Training {trained_model_str} with LR={best_lr} ...")
