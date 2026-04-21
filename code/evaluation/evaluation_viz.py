@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,26 +10,143 @@ import pandas as pd
 # Paths / global config
 # -------------------------------------------------------------------------
 
-GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
-EVAL_RESULTS_PATH = "../data/evaluation/evaluation_results_valid.json"
-VALID_DATA_PATH = "../data/datasets/msmarco_train.json"
+EVAL_RESULTS_PATH = "../data/evaluation/msmarco_valid/evaluation_results.json"
 PLOT_OUTPUT_DIR = "../data/plots"
 
+
+def build_plot_output_dir(eval_results_path):
+    dataset_name = Path(eval_results_path).parent.name
+    if dataset_name == "evaluation":
+        dataset_name = Path(eval_results_path).stem.replace("evaluation_results_", "")
+    return os.path.join(PLOT_OUTPUT_DIR, dataset_name)
+
+
 # Keep only these models
-MODEL_LABELS = {
+BASE_MODEL_LABELS = {
     "all-mpnet-base-v2": "Base",
-    "all-mpnet-base-v2_relu_cosine_v2_finetuned": "ReLU + Cosine",
-    "all-mpnet-base-v2_relu_euclid_v2_finetuned": "ReLU + Euclid",
-    "all-mpnet-base-v2_gelu_cosine_v2_finetuned": "GELU + Cosine",
-    "all-mpnet-base-v2_gelu_euclid_v2_finetuned": "GELU + Euclid",
+    "Qwen3-Embedding-0.6B": "Qwen 0.6B Base",
+    "Qwen3-Embedding-4B": "Qwen 4B Base",
 }
 
-MODEL_ORDER = list(MODEL_LABELS.keys())
+
+def parse_model_label(model_name):
+    if model_name in BASE_MODEL_LABELS:
+        return BASE_MODEL_LABELS[model_name]
+
+    name = model_name.removesuffix("_finetuned")
+    parts = name.split("_")
+
+    stop_tokens = {"relu", "gelu", "cosine", "euclid", "norm", "nonorm", "matryoshka", "single"}
+
+    base_parts = []
+    for part in parts:
+        if part in stop_tokens:
+            break
+        base_parts.append(part)
+
+    base_name = "_".join(base_parts)
+
+    activation = None
+    distance = None
+    normalization = None
+    training = None
+
+    for part in parts:
+        if part == "relu":
+            activation = "ReLU"
+        elif part == "gelu":
+            activation = "GELU"
+        elif part == "cosine":
+            distance = "Cosine"
+        elif part == "euclid":
+            distance = "Euclid"
+        elif part == "norm":
+            normalization = "Norm"
+        elif part == "nonorm":
+            normalization = "NoNorm"
+        elif part == "matryoshka":
+            training = "Matryoshka"
+        elif part == "single":
+            training = "Single"
+
+    if base_name == "all-mpnet-base-v2":
+        prefix = "Base"
+    elif base_name == "Qwen3-Embedding-0.6B":
+        prefix = "Qwen 0.6B"
+    elif base_name == "Qwen3-Embedding-4B":
+        prefix = "Qwen 4B"
+    else:
+        prefix = base_name
+
+    label_parts = [prefix]
+    if activation:
+        label_parts.append(activation)
+    if distance:
+        label_parts.append(distance)
+    if normalization:
+        label_parts.append(normalization)
+    if training:
+        label_parts.append(training)
+
+    return " + ".join(label_parts)
+
+
+def model_sort_key(model_name):
+    name = model_name.removesuffix("_finetuned")
+    parts = name.split("_")
+
+    stop_tokens = {"relu", "gelu", "cosine", "euclid", "norm", "nonorm", "matryoshka", "single"}
+
+    base_parts = []
+    for part in parts:
+        if part in stop_tokens:
+            break
+        base_parts.append(part)
+
+    base_name = "_".join(base_parts)
+
+    base_order = {
+        "all-mpnet-base-v2": 0,
+        "Qwen3-Embedding-0.6B": 1,
+        "Qwen3-Embedding-4B": 2,
+    }.get(base_name, 999)
+
+    activation_order = 0
+    if "relu" in parts:
+        activation_order = 1
+    elif "gelu" in parts:
+        activation_order = 2
+
+    distance_order = 0
+    if "cosine" in parts:
+        distance_order = 1
+    elif "euclid" in parts:
+        distance_order = 2
+
+    norm_order = 0
+    if "nonorm" in parts:
+        norm_order = 1
+    elif "norm" in parts:
+        norm_order = 2
+
+    training_order = 0
+    if "matryoshka" in parts:
+        training_order = 1
+    elif "single" in parts:
+        training_order = 2
+
+    return (base_order, activation_order, distance_order, norm_order, training_order, model_name)
 
 
 def ensure_directory(path):
     if not os.path.exists(path):
         os.makedirs(path)
+
+
+def get_plot_path(plot_root, plot_type, filename):
+    plot_dir = os.path.join(plot_root, plot_type)
+    ensure_directory(plot_dir)
+    return os.path.join(plot_dir, filename)
 
 
 def get_bfs_baseline(json_data):
@@ -64,12 +182,21 @@ def get_rl_baseline(json_data):
 def extract_semantic_data(json_data):
     rows = []
 
+    all_models = sorted(
+        {
+            entry.get("model")
+            for entry in json_data
+            if entry.get("model") not in ["BFS_Baseline", "RL_Baseline"]
+        },
+        key=model_sort_key,
+    )
+
     for entry in json_data:
         if entry.get("model") in ["BFS_Baseline", "RL_Baseline"]:
             continue
 
         model_name = entry.get("model")
-        if model_name not in MODEL_LABELS:
+        if model_name not in all_models:
             continue
 
         if "dimension" not in entry or "evaluation" not in entry:
@@ -78,7 +205,7 @@ def extract_semantic_data(json_data):
         eval_data = entry["evaluation"]
         row = {
             "model": model_name,
-            "model_label": MODEL_LABELS[model_name],
+            "model_label": parse_model_label(model_name),
             "dimension": int(entry["dimension"]),
         }
 
@@ -107,7 +234,8 @@ def extract_semantic_data(json_data):
     df = pd.DataFrame(rows)
 
     if not df.empty:
-        df["model"] = pd.Categorical(df["model"], categories=MODEL_ORDER, ordered=True)
+        ordered_models = sorted(df["model"].unique(), key=model_sort_key)
+        df["model"] = pd.Categorical(df["model"], categories=ordered_models, ordered=True)
         df = df.sort_values(["model", "dimension"]).reset_index(drop=True)
 
     return df
@@ -135,10 +263,11 @@ def set_zoomed_ylim_from_models(ax, values, pad_ratio=0.08, min_pad=1e-6):
 
 def get_model_subsets(df, value_col):
     subsets = []
-    for model in MODEL_ORDER:
+    for model in df["model"].cat.categories:
         subset = df[df["model"] == model].sort_values(by="dimension")
         if not subset.empty and value_col in subset.columns:
-            subsets.append((model, MODEL_LABELS[model], subset))
+            label = subset["model_label"].iloc[0]
+            subsets.append((model, label, subset))
     return subsets
 
 
@@ -190,13 +319,13 @@ def add_broken_axis_marks(ax_top, ax_bottom, d=0.008):
 
 
 def plot_broken_y(
-    df,
-    value_col,
-    output_path,
-    title,
-    ylabel,
-    lower_ylim,
-    upper_ylim,
+        df,
+        value_col,
+        output_path,
+        title,
+        ylabel,
+        lower_ylim,
+        upper_ylim,
 ):
     fig, (ax_top, ax_bottom) = plt.subplots(
         2, 1, sharex=True, figsize=(10, 7),
@@ -393,7 +522,7 @@ def plot_astar_vs_dijkstra_path_cost(df, model_name, output_path, zoom=False):
         plt.close()
         return
 
-    label = MODEL_LABELS.get(model_name, model_name)
+    label = subset["model_label"].iloc[0]
 
     ax.plot(
         subset["dimension"],
@@ -410,8 +539,8 @@ def plot_astar_vs_dijkstra_path_cost(df, model_name, output_path, zoom=False):
 
     if zoom:
         combined_values = (
-            subset["astar_path_cost"].dropna().tolist()
-            + subset["dijkstra_path_cost"].dropna().tolist()
+                subset["astar_path_cost"].dropna().tolist()
+                + subset["dijkstra_path_cost"].dropna().tolist()
         )
         set_zoomed_ylim_from_models(ax, combined_values, pad_ratio=0.12)
         title = f"A* vs Dijkstra Path Cost ({label}) — Zoomed"
@@ -521,7 +650,8 @@ def plot_visited_distribution(distribution_data, output_path):
 
 
 if __name__ == "__main__":
-    ensure_directory(PLOT_OUTPUT_DIR)
+    plot_root = build_plot_output_dir(EVAL_RESULTS_PATH)
+    ensure_directory(plot_root)
 
     with open(EVAL_RESULTS_PATH) as f:
         eval_data = json.load(f)
@@ -533,102 +663,110 @@ if __name__ == "__main__":
     # Standard + zoomed plots
     plot_nodes_visited_vs_dimension(
         df, bfs_data, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_nodes_visited.png"),
+        get_plot_path(plot_root, "nodes_visited", "metric_nodes_visited.png"),
         zoom=False
     )
     plot_nodes_visited_vs_dimension(
         df, bfs_data, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_nodes_visited_zoom.png"),
+        get_plot_path(plot_root, "nodes_visited", "metric_nodes_visited_zoom.png"),
         zoom=True
     )
 
     plot_execution_time_vs_dimension(
         df, bfs_data, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_time.png"),
+        get_plot_path(plot_root, "execution_time", "metric_time.png"),
         zoom=False
     )
     plot_execution_time_vs_dimension(
         df, bfs_data, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_time_zoom.png"),
+        get_plot_path(plot_root, "execution_time", "metric_time_zoom.png"),
         zoom=True
     )
 
     plot_path_length_vs_dimension(
         df, bfs_data, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_path_length.png"),
+        get_plot_path(plot_root, "path_length", "metric_path_length.png"),
         zoom=False
     )
     plot_path_length_vs_dimension(
         df, bfs_data, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_path_length_zoom.png"),
+        get_plot_path(plot_root, "path_length", "metric_path_length_zoom.png"),
         zoom=True
     )
 
     plot_accuracy_vs_dimension(
         df, bfs_data, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_accuracy.png"),
+        get_plot_path(plot_root, "accuracy", "metric_accuracy.png"),
         zoom=False
     )
     plot_accuracy_vs_dimension(
         df, bfs_data, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_accuracy_zoom.png"),
+        get_plot_path(plot_root, "accuracy", "metric_accuracy_zoom.png"),
         zoom=True
     )
 
     plot_astar_path_cost_vs_dimension(
         df, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_astar_path_cost.png"),
+        get_plot_path(plot_root, "astar_path_cost", "metric_astar_path_cost.png"),
         zoom=False
     )
     plot_astar_path_cost_vs_dimension(
         df, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_astar_path_cost_zoom.png"),
+        get_plot_path(plot_root, "astar_path_cost", "metric_astar_path_cost_zoom.png"),
         zoom=True
     )
     plot_astar_path_cost_broken(
         df,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_astar_path_cost_broken.png")
+        get_plot_path(plot_root, "astar_path_cost", "metric_astar_path_cost_broken.png")
     )
 
     plot_astar_cost_per_hop_vs_dimension(
         df, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_astar_cost_per_hop.png"),
+        get_plot_path(plot_root, "astar_cost_per_hop", "metric_astar_cost_per_hop.png"),
         zoom=False
     )
     plot_astar_cost_per_hop_vs_dimension(
         df, rl_data,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_astar_cost_per_hop_zoom.png"),
+        get_plot_path(plot_root, "astar_cost_per_hop", "metric_astar_cost_per_hop_zoom.png"),
         zoom=True
     )
     plot_astar_cost_per_hop_broken(
         df,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_astar_cost_per_hop_broken.png")
+        get_plot_path(plot_root, "astar_cost_per_hop", "metric_astar_cost_per_hop_broken.png")
     )
 
     plot_dijkstra_path_cost_vs_dimension(
         df,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_dijkstra_path_cost.png"),
+        get_plot_path(plot_root, "dijkstra_path_cost", "metric_dijkstra_path_cost.png"),
         zoom=False
     )
     plot_dijkstra_path_cost_vs_dimension(
         df,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_dijkstra_path_cost_zoom.png"),
+        get_plot_path(plot_root, "dijkstra_path_cost", "metric_dijkstra_path_cost_zoom.png"),
         zoom=True
     )
     plot_dijkstra_path_cost_broken(
         df,
-        os.path.join(PLOT_OUTPUT_DIR, "metric_dijkstra_path_cost_broken.png")
+        get_plot_path(plot_root, "dijkstra_path_cost", "metric_dijkstra_path_cost_broken.png")
     )
 
-    plot_astar_vs_dijkstra_path_cost(
-        df,
-        "all-mpnet-base-v2_relu_cosine_v2_finetuned",
-        os.path.join(PLOT_OUTPUT_DIR, "compare_astar_dijkstra_path_cost.png"),
-        zoom=False
-    )
-    plot_astar_vs_dijkstra_path_cost(
-        df,
-        "all-mpnet-base-v2_relu_cosine_v2_finetuned",
-        os.path.join(PLOT_OUTPUT_DIR, "compare_astar_dijkstra_path_cost_zoom.png"),
-        zoom=True
-    )
+    candidate_models = list(df["model"].cat.categories) if not df.empty else []
+
+    if candidate_models:
+        compare_model = next(
+            (m for m in candidate_models if "relu" in m and "cosine" in m),
+            candidate_models[0]
+        )
+
+        plot_astar_vs_dijkstra_path_cost(
+            df,
+            compare_model,
+            get_plot_path(plot_root, "compare_astar_dijkstra_path_cost", "compare_astar_dijkstra_path_cost.png"),
+            zoom=False
+        )
+        plot_astar_vs_dijkstra_path_cost(
+            df,
+            compare_model,
+            get_plot_path(plot_root, "compare_astar_dijkstra_path_cost", "compare_astar_dijkstra_path_cost_zoom.png"),
+            zoom=True
+        )

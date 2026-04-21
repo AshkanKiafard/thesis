@@ -41,6 +41,9 @@ class STEmbedder:
     def set_matryoshka_dim(self, dim: int):
         self.matryoshka_dim = dim
 
+    def get_model_dim(self):
+        return self.model.get_sentence_embedding_dimension()
+
     def embed(self, text: str) -> np.ndarray:
         # Return cached embedding if available.
         if text in self.cache:

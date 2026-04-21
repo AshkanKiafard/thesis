@@ -1,8 +1,10 @@
+import argparse
 import csv
 import gc
 import json
 import os
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -16,26 +18,13 @@ from sklearn.metrics import (
 
 import traverse_strategies as ts
 from embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from utils import get_concept, load_graph, traverse_graph
+from utils import get_matryoshka_dims, load_graph, traverse_graph
 
-GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
-
-TEST = False
-if TEST:
-    OUTPUT_JSON_FILE = "../data/evaluation/evaluation_results_test.json"
-    OUTPUT_CSV_FILE = "../data/evaluation/evaluation_results_test.csv"
-    VALID_DATA_PATH = "../data/datasets/msmarco_test.json"
-else:
-    OUTPUT_JSON_FILE = "../data/evaluation/evaluation_results_valid.json"
-    OUTPUT_CSV_FILE = "../data/evaluation/evaluation_results_valid.csv"
-    VALID_DATA_PATH = "../data/datasets/msmarco_valid.json"
-
-# Matryoshka dimensions that should be evaluated for SentenceTransformer-based models.
-MATRYOSHKA_DIMS = [768, 512, 256, 128, 64]
+GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 
 base_models = ["all-mpnet-base-v2"]
 
-lightning_dir = "../data/models/lightning"
+lightning_dir = "data/models/lightning"
 fine_tuned_models = []
 
 # Pick up all exported fine-tuned models automatically.
@@ -49,6 +38,15 @@ if os.path.exists(lightning_dir):
 model_queue = base_models + fine_tuned_models
 
 print("Model queue:", model_queue)
+
+
+def build_output_paths(dataset_path: str):
+    dataset_stem = Path(dataset_path).stem
+    dataset_name = dataset_stem.replace("_filtered", "")
+    output_dir = Path("data/evaluation") / dataset_name
+    output_json_file = output_dir / "evaluation_results.json"
+    output_csv_file = output_dir / "evaluation_results.csv"
+    return dataset_name, output_dir, str(output_json_file), str(output_csv_file)
 
 
 def compute_embedding_path_cost(path, embeder):
@@ -72,7 +70,7 @@ def compute_embedding_path_cost(path, embeder):
     return float(total)
 
 
-def save_all_results_csv(all_results):
+def save_all_results_csv(all_results, output_csv_file):
     fieldnames = [
         "algorithm",
         "model",
@@ -113,31 +111,31 @@ def save_all_results_csv(all_results):
 
             rows.append(row)
 
-    with open(OUTPUT_CSV_FILE, "w", newline="", encoding="utf-8") as f:
+    with open(output_csv_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
         writer.writeheader()
         writer.writerows(rows)
 
-    print(f"CSV overwritten: {OUTPUT_CSV_FILE}")
+    print(f"CSV overwritten: {output_csv_file}")
 
 
-def load_results_file():
-    if os.path.exists(OUTPUT_JSON_FILE):
-        with open(OUTPUT_JSON_FILE, "r") as f:
+def load_results_file(output_json_file):
+    if os.path.exists(output_json_file):
+        with open(output_json_file, "r") as f:
             return json.load(f)
     return []
 
 
-def save_result(result_entry):
-    current_results = load_results_file()
+def save_result(result_entry, output_json_file, output_csv_file):
+    current_results = load_results_file(output_json_file)
     current_results.append(result_entry)
 
     # Save JSON (overwrite full file)
-    with open(OUTPUT_JSON_FILE, "w", encoding="utf-8") as f:
+    with open(output_json_file, "w", encoding="utf-8") as f:
         json.dump(current_results, f, indent=4)
 
     # Save CSV (overwrite full file)
-    save_all_results_csv(current_results)
+    save_all_results_csv(current_results, output_csv_file)
 
     print(f"Saved results for '{result_entry['model']}'")
 
@@ -204,14 +202,14 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
         if i % 100 == 0:
             print(f"  Eval {i}/{len(data)}...")
 
-        cause = get_concept(item, 0)
-        effect = get_concept(item, 1)
+        cause = item["cause"]
+        effect = item["effect"]
 
         # Skip examples that are not covered by the current graph.
         if cause not in graph.nodes or effect not in graph.nodes:
             continue
 
-        true_label = item["answer:Extracted"][0] == "Yes"
+        true_label = bool(item["answer"])
 
         for name, strategy in strategies.items():
             start_time = time.time()
@@ -254,9 +252,20 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
     return summary
 
 
+def parse_args():
+    # Read the dataset path from the command line so the same script can be
+    # reused across normalized datasets without editing constants in the file.
+    parser = argparse.ArgumentParser(description="Evaluate a normalized causal QA dataset.")
+    parser.add_argument("dataset_path", help="Path to the normalized dataset JSON file.")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = parse_args()
+    dataset_path = args.dataset_path
+
     MASTER_CONFIG = {
-        "rl_model_path": "../data/models/rl/msmarco_evaluation_state_dict.pt",
+        "rl_model_path": "data/models/rl/msmarco_evaluation_state_dict.pt",
         "rl_beam_width": 5,
         "rl_max_path_len": -1,
         "rl_max_visits": 446,
@@ -264,13 +273,16 @@ if __name__ == "__main__":
         "dijkstra_max_visits": 5987,
     }
 
-    print("Loading test data...")
-    with open(VALID_DATA_PATH) as f:
+    dataset_name, output_dir, output_json_file, output_csv_file = build_output_paths(dataset_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print("Loading normalized dataset...")
+    with open(dataset_path) as f:
         valid_data = json.load(f)
 
     print("Loading causal graph...")
     causal_graph = load_graph(GRAPH_PATH)
-    existing_results = load_results_file()
+    existing_results = load_results_file(output_json_file)
 
     # -------------------------------------------------------------------------
     # BFS baseline
@@ -283,7 +295,7 @@ if __name__ == "__main__":
             causal_graph,
             None,
             {"BFS": ts.bfs_traverse},
-            "BFS Baseline",
+            f"BFS Baseline | {dataset_name}",
             config=MASTER_CONFIG,
         )
 
@@ -292,7 +304,9 @@ if __name__ == "__main__":
                 "model": "BFS_Baseline",
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "evaluation": bfs_summary,
-            }
+            },
+            output_json_file,
+            output_csv_file,
         )
 
     # -------------------------------------------------------------------------
@@ -302,7 +316,7 @@ if __name__ == "__main__":
         print("\n=== Running RL Baseline ===")
         try:
             rl_embeder = GloveEmbeder(
-                "../data/embeddings/glove.6B/glove.6B.300d.txt",
+                "data/embeddings/glove.6B/glove.6B.300d.txt",
                 DistanceMetric.COSINE,
             )
 
@@ -311,7 +325,7 @@ if __name__ == "__main__":
                 causal_graph,
                 rl_embeder,
                 {"RL": ts.rl_traverse},
-                "RL Baseline",
+                f"RL Baseline | {dataset_name}",
                 config=MASTER_CONFIG,
             )
 
@@ -320,7 +334,9 @@ if __name__ == "__main__":
                     "model": "RL_Baseline",
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "evaluation": rl_summary,
-                }
+                },
+                output_json_file,
+                output_csv_file,
             )
 
             del rl_embeder
@@ -339,10 +355,6 @@ if __name__ == "__main__":
     for model_path in model_queue:
         model_name = model_path.split("/")[-1]
 
-        # Skip models that already have results in the output file.
-        if any(entry["model"] == model_name for entry in existing_results):
-            continue
-
         print(f"\nEVALUATING: {model_path}")
 
         try:
@@ -351,7 +363,17 @@ if __name__ == "__main__":
                 distance_metric=DistanceMetric.COSINE
             )
 
-            for dim in MATRYOSHKA_DIMS:
+            model_dim = main_embeder.get_model_dim()
+
+            dims = get_matryoshka_dims(model_dim)
+
+            for dim in dims:
+                if any(entry.get("model") == model_name and
+                    (entry.get("dimension") == dim)
+                    for entry in existing_results):
+                    print(f"Skipping {model_name} dim {dim} (already evaluated)")
+                    continue
+
                 print(f"--- Dim: {dim} ---")
                 main_embeder.set_matryoshka_dim(dim)
 
@@ -360,7 +382,7 @@ if __name__ == "__main__":
                     causal_graph,
                     main_embeder,
                     semantic_strategies,
-                    model_path,
+                    f"{model_path} | {dataset_name}",
                     config=MASTER_CONFIG,
                 )
 
@@ -370,7 +392,9 @@ if __name__ == "__main__":
                         "dimension": dim,
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "evaluation": main_summary,
-                    }
+                    },
+                    output_json_file,
+                    output_csv_file,
                 )
 
             del main_embeder
