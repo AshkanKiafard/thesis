@@ -5,9 +5,11 @@ import os
 import sys
 from pathlib import Path
 
+import optuna
 import pytorch_lightning as pl
 import torch
 from datasets import load_from_disk
+from optuna.samplers import GridSampler
 from pytorch_lightning.callbacks import EarlyStopping
 from torch.utils.data import DataLoader
 
@@ -21,12 +23,13 @@ DATA_DIR = REPO_ROOT / "data"
 sys.path.append(str(REPO_ROOT / "code"))
 
 from finetune.astar_training_core import (
-    ActivationFunc,
     LitAStar,
     create_dataset,
+    parse_activation_func,
+    parse_distance_metric,
     str_to_bool,
 )
-from core.embeddings import STEmbedder, DistanceMetric
+from core.embeddings import STEmbedder
 from core.utils import load_graph
 
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
@@ -35,7 +38,7 @@ torch.set_float32_matmul_precision("medium")
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Test ReLU/GELU x cosine/euclidean combinations for one embedding model."
+        description="Grid-search the best activation and distance combination for one embedding model."
     )
 
     parser.add_argument(
@@ -70,35 +73,71 @@ def parse_args():
         "--max-epochs",
         type=int,
         default=5,
-        help="Number of epochs per combination"
+        help="Number of epochs per activation-distance combination"
     )
 
     return parser.parse_args()
 
 
-def make_loader(dataset, batch_size, shuffle):
-    return DataLoader(
-        dataset,
+def objective(trial, model_path, curr_model_name, datasets_by_distance,
+              batch_size, accumulate_grad_batches, normalize, use_matryoshka,
+              max_epochs, causal_graph):
+    # Combo search is intentionally discrete:
+    # - Activation: ReLU or GELU
+    # - Distance: cosine or Euclidean
+    # The learning rate is fixed here, because LR is optimized later by finetune_lr.py.
+    lr = 3e-5
+
+    # GridSampler ensures that each combination is evaluated exactly once.
+    activation_func_str = trial.suggest_categorical("activation", ["relu", "gelu"])
+    distance_metric_str = trial.suggest_categorical("distance", ["cosine", "euclid"])
+
+    activation_func = parse_activation_func(activation_func_str)
+    distance_metric = parse_distance_metric(distance_metric_str)
+
+    # Datasets depend only on model and distance metric, not on activation.
+    # Therefore they are precomputed once before the Optuna objective and reused here.
+    train_dataset = datasets_by_distance[distance_metric_str]["train"]
+    valid_dataset = datasets_by_distance[distance_metric_str]["valid"]
+
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
+        shuffle=True,
         num_workers=4,
         persistent_workers=True
     )
 
+    valid_loader = DataLoader(
+        valid_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        persistent_workers=True
+    )
 
-def run_combo(model_name, model_str, train_loader, val_loader,
-              activation_func, distance_metric, normalize, use_matryoshka,
-              graph, accumulate_grad_batches, max_epochs):
-    lr = 3e-5
+    normalize_str = "norm" if normalize else "nonorm"
+    mrl_str = "matryoshka" if use_matryoshka else "single"
+
+    combo_model_str = (
+        f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_{normalize_str}_{mrl_str}_combo"
+    )
+
+    print("=" * 80)
+    print(f"Trial {trial.number}: {combo_model_str}")
+    print(f"Fixed LR: {lr}")
+    print(f"Batch size: {batch_size}")
+    print(f"Accumulate grad batches: {accumulate_grad_batches}")
+    print("=" * 80)
 
     model = LitAStar(
-        model_name=model_name,
+        model_name=model_path,
         cls_activation_func=activation_func,
         cls_distance_metric=distance_metric,
         cls_normalize=normalize,
         lr=lr,
         cls_use_matryoshka=use_matryoshka,
-        graph=graph
+        graph=causal_graph
     )
 
     early_stop = EarlyStopping(
@@ -109,7 +148,7 @@ def run_combo(model_name, model_str, train_loader, val_loader,
 
     trainer = pl.Trainer(
         logger=True,
-        default_root_dir=str(DATA_DIR / "lightning_logs" / "combo_search" / model_str / SLURM_JOB_ID),
+        default_root_dir=str(DATA_DIR / "lightning_logs" / "combo_search" / combo_model_str / SLURM_JOB_ID),
         enable_checkpointing=False,
         max_epochs=max_epochs,
         accelerator="gpu",
@@ -119,11 +158,11 @@ def run_combo(model_name, model_str, train_loader, val_loader,
         accumulate_grad_batches=accumulate_grad_batches,
     )
 
-    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
+    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=valid_loader)
 
     score = trainer.callback_metrics["val/astar_cost"].item()
 
-    del model, trainer
+    del model, trainer, train_loader, valid_loader
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -144,12 +183,13 @@ if __name__ == "__main__":
     if 128 % batch_size != 0:
         raise ValueError("batch_size must divide 128 (e.g. 128, 64, 32, 16, 8)")
 
+    # Keep the effective batch size fixed across models for fair comparison.
     accumulate_grad_batches = 128 // batch_size
 
     print(f"Batch size: {batch_size}")
     print(f"Accumulate grad batches: {accumulate_grad_batches}")
     print(f"Effective batch size: {batch_size * accumulate_grad_batches}")
-    print(f"Fixed learning rate: 3e-5")
+    print("Fixed learning rate: 3e-5")
 
     causal_graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
 
@@ -164,24 +204,17 @@ if __name__ == "__main__":
     mrl_str = "matryoshka" if use_matryoshka else "single"
 
     datasets_dir = DATA_DIR / "datasets"
-    combo_dir = DATA_DIR / "combo_search"
-    combo_dir.mkdir(parents=True, exist_ok=True)
+    optuna_dir = DATA_DIR / "optuna_studies"
+    optuna_dir.mkdir(parents=True, exist_ok=True)
 
-    combos = [
-        (ActivationFunc.RELU, DistanceMetric.COSINE, "relu", "cosine"),
-        (ActivationFunc.RELU, DistanceMetric.EUCLIDEAN, "relu", "euclid"),
-        (ActivationFunc.GELU, DistanceMetric.COSINE, "gelu", "cosine"),
-        (ActivationFunc.GELU, DistanceMetric.EUCLIDEAN, "gelu", "euclid"),
-    ]
+    # Dataset creation is done before the objective because both distance datasets
+    # are needed anyway for the 2 x 2 grid search.
+    datasets_by_distance = {}
 
-    results = []
+    for distance_metric_str in ["cosine", "euclid"]:
+        distance_metric = parse_distance_metric(distance_metric_str)
 
-    for activation_func, distance_metric, activation_str, distance_str in combos:
-        print("=" * 80)
-        print(f"Testing combo: {activation_str} + {distance_str}")
-        print("=" * 80)
-
-        dataset_suffix = f"{curr_model_name.replace('/', '_')}_{distance_str}"
+        dataset_suffix = f"{curr_model_name.replace('/', '_')}_{distance_metric_str}"
         train_ds_path = datasets_dir / f"train_{dataset_suffix}"
         valid_ds_path = datasets_dir / f"valid_{dataset_suffix}"
 
@@ -190,7 +223,7 @@ if __name__ == "__main__":
 
         main_embedder = None
         if not train_exists or not valid_exists:
-            print(f"Initializing Embedder for {curr_model_name} with {distance_str} distance ...")
+            print(f"Initializing Embedder for {curr_model_name} with {distance_metric_str} distance ...")
             main_embedder = STEmbedder(model_path, distance_metric)
 
         if train_exists:
@@ -216,60 +249,84 @@ if __name__ == "__main__":
             gc.collect()
             torch.cuda.empty_cache()
 
-        print(f"Total Train examples: {len(train_dataset)}")
-        print(f"Total Val examples: {len(valid_dataset)}")
+        print(f"Total Train examples for {distance_metric_str}: {len(train_dataset)}")
+        print(f"Total Val examples for {distance_metric_str}: {len(valid_dataset)}")
 
-        train_loader = make_loader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = make_loader(valid_dataset, batch_size=batch_size, shuffle=False)
-
-        combo_model_str = (
-            f"{curr_model_name}_{activation_str}_{distance_str}_{normalize_str}_{mrl_str}_combo"
-        )
-
-        score = run_combo(
-            model_name=model_path,
-            model_str=combo_model_str,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            activation_func=activation_func,
-            distance_metric=distance_metric,
-            normalize=normalize,
-            use_matryoshka=use_matryoshka,
-            graph=causal_graph,
-            accumulate_grad_batches=accumulate_grad_batches,
-            max_epochs=max_epochs
-        )
-
-        result = {
-            "model": curr_model_name,
-            "activation": activation_str,
-            "distance": distance_str,
-            "normalize": normalize,
-            "matryoshka": use_matryoshka,
-            "lr": 3e-5,
-            "batch_size": batch_size,
-            "accumulate_grad_batches": accumulate_grad_batches,
-            "effective_batch_size": batch_size * accumulate_grad_batches,
-            "max_epochs": max_epochs,
-            "val_astar_cost": score,
+        datasets_by_distance[distance_metric_str] = {
+            "train": train_dataset,
+            "valid": valid_dataset,
         }
 
-        results.append(result)
+    # Grid search is better than random sampling here because there are only four
+    # possible combinations and each one should be evaluated exactly once.
+    search_space = {
+        "activation": ["relu", "gelu"],
+        "distance": ["cosine", "euclid"],
+    }
 
-        result_path = combo_dir / f"{curr_model_name}_{normalize_str}_{mrl_str}_combo_results.json"
-        with open(result_path, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2)
+    sampler = GridSampler(search_space)
 
-        print(f"Combo result: {result}")
-        print(f"Saved partial results to: {result_path}")
+    study_name = f"{curr_model_name}_{normalize_str}_{mrl_str}_combo_search"
+    optuna_db_path = optuna_dir / f"{curr_model_name}_{normalize_str}_{mrl_str}_combo.sqlite3"
 
-        del train_loader, val_loader
-        gc.collect()
-        torch.cuda.empty_cache()
+    optuna.logging.set_verbosity(optuna.logging.INFO)
 
-    best = min(results, key=lambda x: x["val_astar_cost"])
+    study = optuna.create_study(
+        storage=f"sqlite:///{optuna_db_path}",
+        study_name=study_name,
+        load_if_exists=True,
+        direction="minimize",
+        sampler=sampler,
+    )
+
+    # When a run is interrupted, Optuna may leave trials in RUNNING state.
+    # Mark them as failed so the study can resume cleanly.
+    print("Cleaning zombie trials ...")
+    running_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.RUNNING]
+
+    if running_trials:
+        print(f"Found {len(running_trials)} interrupted trials (Zombies). Cleaning them up ...")
+        for r_trial in running_trials:
+            try:
+                study.tell(r_trial.number, state=optuna.trial.TrialState.FAIL)
+                print(f"Marked interrupted Trial {r_trial.number} as FAILED.")
+            except Exception as e:
+                print(f"Warning: Could not update status for Trial {r_trial.number}: {e}")
+
+    # GridSampler has exactly four combinations here.
+    target_trials = 4
+
+    valid_trials = [
+        t for t in study.trials
+        if t.state in (optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED)
+    ]
+    current_valid_count = len(valid_trials)
+    trials_to_run = target_trials - current_valid_count
+
+    if trials_to_run > 0:
+        print(f"Running combo grid search for {curr_model_name} for {trials_to_run} trials ...")
+        study.optimize(
+            lambda l_trial: objective(
+                l_trial,
+                model_path,
+                curr_model_name,
+                datasets_by_distance,
+                batch_size,
+                accumulate_grad_batches,
+                normalize,
+                use_matryoshka,
+                max_epochs,
+                causal_graph,
+            ),
+            n_trials=trials_to_run,
+            gc_after_trial=True
+        )
+        print(f"Finished combo grid search for {curr_model_name}.")
+    else:
+        print("Combo study is already complete.")
 
     print("=" * 80)
     print("BEST COMBO")
     print("=" * 80)
-    print(json.dumps(best, indent=2))
+    print(f"Best value: {study.best_value}")
+    print(f"Best params: {study.best_params}")
