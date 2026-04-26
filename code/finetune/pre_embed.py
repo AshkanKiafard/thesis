@@ -1,33 +1,55 @@
-import os
 import gc
-import torch
-import numpy as np
+import os
+import sys
+from pathlib import Path
 
-from core.embeddings import STEmbedder
+import numpy as np
+import torch
+
+# code/finetune/pre_embed.py -> repo root is two levels above this file.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = REPO_ROOT / "code" / "data"
+
+# Make code/ importable when this script is executed from code/finetune/.
+sys.path.append(str(REPO_ROOT / "code"))
+
+from core.embeddings import STEmbedder, DistanceMetric
 from core.utils import load_graph
 
-# Make sure the cache directory exists before we start writing .npy files.
-os.makedirs("../data/embeddings", exist_ok=True)
+embeddings_dir = DATA_DIR / "embeddings"
+embeddings_dir.mkdir(parents=True, exist_ok=True)
 
 # We only need the graph structure and node names here.
-graph = load_graph("../data/graphs/causenet-precision.jsonl", False)
+graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl", False)
 
 base_models = [
-    "all-mpnet-base-v2",
+    # Strong general-purpose baseline with reliable performance
+    "sentence-transformers/all-mpnet-base-v2",
+
+    # Lightweight models with good performance and low memory requirements
+    "BAAI/bge-base-en-v1.5",
+
+    # Higher-capacity models for improved embedding quality
+    "BAAI/bge-large-en-v1.5",
+    "mixedbread-ai/mxbai-embed-large-v1",
+    "Alibaba-NLP/gte-large-en-v1.5",
+
+    # Larger embedding model with higher capacity
     "Qwen/Qwen3-Embedding-0.6B",
-    # "all-MiniLM-L12-v2",
-    # "multi-qa-mpnet-base-cos-v1"
+
+    # Very large model (high memory requirements; enable only if resources allow)
+    # "Qwen/Qwen3-Embedding-4B",
 ]
 
-lightning_dir = "../data/models/lightning"
+lightning_dir = DATA_DIR / "models" / "lightning"
 fine_tuned_models = []
 
 # Collect all fine-tuned models that were exported into the Lightning model directory.
-if os.path.exists(lightning_dir):
+if lightning_dir.exists():
     fine_tuned_models = [
-        os.path.join(lightning_dir, name).replace("\\", "/")
+        str((lightning_dir / name).resolve()).replace("\\", "/")
         for name in os.listdir(lightning_dir)
-        if os.path.isdir(os.path.join(lightning_dir, name))
+        if (lightning_dir / name).is_dir()
     ]
     print(f"Found {len(fine_tuned_models)} fine-tuned models in {lightning_dir}")
 else:
@@ -44,12 +66,8 @@ for model_path in model_queue:
     print(f"{'=' * 50}")
 
     # Extract a clean model name for the embedding cache filename.
-    if os.path.sep in model_path:
-        raw_name = model_path.split(os.path.sep)[-1]
-    else:
-        raw_name = model_path.split("/")[-1]
-
-    save_path = f"data/embeddings/{raw_name}_embeddings.npy"
+    raw_name = Path(model_path).name
+    save_path = embeddings_dir / f"{raw_name}_embeddings.npy"
 
     try:
         # Reuse an existing cache if available so interrupted runs can resume.
@@ -65,7 +83,7 @@ for model_path in model_queue:
 
     if len(uncached_nodes) > 0:
         print("Loading model...")
-        embeder = STEmbedder(model_path=model_path, distance_metric='cosine')
+        embeder = STEmbedder(model_path=model_path, distance_metric=DistanceMetric.COSINE)
 
         total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
 
