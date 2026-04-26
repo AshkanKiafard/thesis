@@ -3,7 +3,7 @@ from typing import Callable
 
 import networkx as nx
 
-from embeddings import STEmbedder
+from core.embeddings import STEmbedder
 
 
 def load_graph(file_path, remove_self_loops=True):
