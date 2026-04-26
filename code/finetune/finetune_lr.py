@@ -18,7 +18,7 @@ SLURM_JOB_ID = os.environ.get("SLURM_JOB_ID", "local")
 
 # code/finetune/finetune_lr.py -> repo root is two levels above this file.
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = REPO_ROOT / "data"
+DATA_DIR = REPO_ROOT / "code" / "data"
 
 # Make code/ importable when this script is executed from code/finetune/.
 sys.path.append(str(REPO_ROOT / "code"))
