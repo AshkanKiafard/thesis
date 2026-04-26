@@ -1,9 +1,15 @@
 import os
 from enum import Enum
+from pathlib import Path
 
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
+
+
+# code/core/embeddings.py -> repo root is two levels above this file.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = REPO_ROOT / "code" / "data"
 
 
 class DistanceMetric(Enum):
@@ -27,9 +33,11 @@ class STEmbedder:
         # In-memory cache for already embedded texts.
         self.cache = {}
 
-        cache_dir = "../data/embeddings"
+        # Store embedding caches inside the mounted project directory.
+        # This avoids writing to ../data, which resolves outside /app inside the Slurm container.
+        cache_dir = DATA_DIR / "embeddings"
         os.makedirs(cache_dir, exist_ok=True)
-        cache_file = f"{cache_dir}/{self.model_name}_embeddings.npy"
+        cache_file = cache_dir / f"{self.model_name}_embeddings.npy"
 
         # Load precomputed embeddings if they exist.
         if os.path.exists(cache_file):
