@@ -6,8 +6,8 @@ import numpy as np
 from tqdm import tqdm
 
 import traverse_strategies as ts
-from embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from utils import get_concept, load_graph, traverse_graph
+from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
+from core.utils import get_concept, load_graph, traverse_graph
 
 # -------------------------------------------------------------------------
 # Paths

@@ -1,6 +1,6 @@
 import traverse_strategies as ts
-from embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from utils import load_graph, traverse_graph
+from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
+from core.utils import load_graph, traverse_graph
 
 if __name__ == "__main__":
     st_embeder = STEmbedder('sentence-transformers/all-mpnet-base-v2', DistanceMetric.COSINE)

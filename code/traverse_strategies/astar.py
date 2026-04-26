@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 import networkx as nx
 
-from embeddings import STEmbedder
+from core.embeddings import STEmbedder
 
 
 def astar_traverse(

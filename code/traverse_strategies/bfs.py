@@ -4,7 +4,7 @@ from typing import Any
 import networkx as nx
 from sortedcontainers import SortedList
 
-from embeddings import STEmbedder
+from core.embeddings import STEmbedder
 
 
 def bfs_traverse(

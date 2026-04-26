@@ -1,3 +1,5 @@
+# TODO Signifikanztest und Bonferroni Correction
+
 import argparse
 import csv
 import gc
@@ -17,12 +19,12 @@ from sklearn.metrics import (
 )
 
 import traverse_strategies as ts
-from embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from utils import get_matryoshka_dims, load_graph, traverse_graph
+from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
+from core.utils import get_matryoshka_dims, load_graph, traverse_graph
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 
-base_models = ["all-mpnet-base-v2"]
+base_models = ["all-mpnet-base-v2", "Qwen/Qwen3-Embedding-0.6B"]
 
 lightning_dir = "data/models/lightning"
 fine_tuned_models = []

@@ -10,7 +10,7 @@ import pandas as pd
 # Paths / global config
 # -------------------------------------------------------------------------
 
-EVAL_RESULTS_PATH = "../data/evaluation/msmarco_valid/evaluation_results.json"
+EVAL_RESULTS_PATH = "../data/evaluation/webis_binary_causal_answered/evaluation_results.json"
 PLOT_OUTPUT_DIR = "../data/plots"
 
 

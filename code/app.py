@@ -4,8 +4,8 @@ import time
 import gradio as gr
 
 import traverse_strategies as ts
-from embeddings import STEmbedder, DistanceMetric, GloveEmbeder
-from utils import load_graph, traverse_graph
+from core.embeddings import STEmbedder, DistanceMetric, GloveEmbeder
+from core.utils import load_graph, traverse_graph
 
 # ==========================================
 # 1. WEBIS TEMPLATE CONFIGURATION

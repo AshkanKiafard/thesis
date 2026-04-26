@@ -27,7 +27,7 @@ class STEmbedder:
         # In-memory cache for already embedded texts.
         self.cache = {}
 
-        cache_dir = "data/embeddings"
+        cache_dir = "../data/embeddings"
         os.makedirs(cache_dir, exist_ok=True)
         cache_file = f"{cache_dir}/{self.model_name}_embeddings.npy"
 
@@ -36,7 +36,15 @@ class STEmbedder:
             print(f"Loading cached embeddings from {cache_file}")
             self.cache = np.load(cache_file, allow_pickle=True).item()
 
-        self.model = SentenceTransformer(model_path, device=self.device)
+        tokenizer_kwargs = {}
+        # Fix known tokenizer regex issue for Mistral/Qwen-style tokenizers.
+        if "Qwen" in self.model_name or "Mistral" in self.model_name:
+            tokenizer_kwargs["fix_mistral_regex"] = True
+        self.model = SentenceTransformer(
+            model_path,
+            device=self.device,
+            tokenizer_kwargs=tokenizer_kwargs,
+        )
 
     def set_matryoshka_dim(self, dim: int):
         self.matryoshka_dim = dim

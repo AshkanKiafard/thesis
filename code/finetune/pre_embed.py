@@ -3,14 +3,14 @@ import gc
 import torch
 import numpy as np
 
-from embeddings import STEmbedder
-from utils import load_graph
+from core.embeddings import STEmbedder
+from core.utils import load_graph
 
 # Make sure the cache directory exists before we start writing .npy files.
-os.makedirs("data/embeddings", exist_ok=True)
+os.makedirs("../data/embeddings", exist_ok=True)
 
 # We only need the graph structure and node names here.
-graph = load_graph("data/graphs/causenet-precision.jsonl", False)
+graph = load_graph("../data/graphs/causenet-precision.jsonl", False)
 
 base_models = [
     "all-mpnet-base-v2",
@@ -19,7 +19,7 @@ base_models = [
     # "multi-qa-mpnet-base-cos-v1"
 ]
 
-lightning_dir = "data/models/lightning"
+lightning_dir = "../data/models/lightning"
 fine_tuned_models = []
 
 # Collect all fine-tuned models that were exported into the Lightning model directory.

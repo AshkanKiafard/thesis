@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 import networkx as nx
 
-from rl_model import LSTMActorCriticAgent
+from core.rl_model import LSTMActorCriticAgent
 
 # Use GPU if available, otherwise run on CPU.
 DEVICE = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')

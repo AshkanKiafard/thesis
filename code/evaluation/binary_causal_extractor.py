@@ -1,3 +1,5 @@
+# TODO remove msmarco from webis corpus
+
 import gzip
 import json
 import re

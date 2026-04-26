@@ -7,8 +7,8 @@ from typing import Any, Dict
 import torch
 
 import traverse_strategies as ts
-from embeddings import STEmbedder, DistanceMetric
-from utils import get_concept, load_graph, traverse_graph
+from core.embeddings import STEmbedder, DistanceMetric
+from core.utils import get_concept, load_graph, traverse_graph
 
 GRAPH_PATH = "../data/graphs/causenet-precision.jsonl"
 DATA_PATH = "../data/datasets/msmarco_valid.json"
