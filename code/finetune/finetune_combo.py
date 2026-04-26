@@ -79,9 +79,9 @@ def parse_args():
     return parser.parse_args()
 
 
-def objective(trial, model_path, curr_model_name, datasets_by_distance,
-              batch_size, accumulate_grad_batches, normalize, use_matryoshka,
-              max_epochs, causal_graph):
+def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
+              f_batch_size, f_accumulate_grad_batches, f_normalize,
+              f_use_matryoshka, f_max_epochs, f_causal_graph):
     # Combo search is intentionally discrete:
     # - Activation: ReLU or GELU
     # - Distance: cosine or Euclidean
@@ -89,55 +89,55 @@ def objective(trial, model_path, curr_model_name, datasets_by_distance,
     lr = 3e-5
 
     # GridSampler ensures that each combination is evaluated exactly once.
-    activation_func_str = trial.suggest_categorical("activation", ["relu", "gelu"])
-    distance_metric_str = trial.suggest_categorical("distance", ["cosine", "euclid"])
+    f_activation_func_str = trial.suggest_categorical("activation", ["relu", "gelu"])
+    f_distance_metric_str = trial.suggest_categorical("distance", ["cosine", "euclid"])
 
-    activation_func = parse_activation_func(activation_func_str)
-    distance_metric = parse_distance_metric(distance_metric_str)
+    f_activation_func = parse_activation_func(f_activation_func_str)
+    f_distance_metric = parse_distance_metric(f_distance_metric_str)
 
     # Datasets depend only on model and distance metric, not on activation.
-    # Therefore they are precomputed once before the Optuna objective and reused here.
-    train_dataset = datasets_by_distance[distance_metric_str]["train"]
-    valid_dataset = datasets_by_distance[distance_metric_str]["valid"]
+    # Therefore, they are precomputed once before the Optuna objective and reused here.
+    f_train_dataset = f_datasets_by_distance[f_distance_metric_str]["train"]
+    f_valid_dataset = f_datasets_by_distance[f_distance_metric_str]["valid"]
 
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
+        f_train_dataset,
+        batch_size=f_batch_size,
         shuffle=True,
         num_workers=4,
         persistent_workers=True
     )
 
     valid_loader = DataLoader(
-        valid_dataset,
-        batch_size=batch_size,
+        f_valid_dataset,
+        batch_size=f_batch_size,
         shuffle=False,
         num_workers=4,
         persistent_workers=True
     )
 
-    normalize_str = "norm" if normalize else "nonorm"
-    mrl_str = "matryoshka" if use_matryoshka else "single"
+    f_normalize_str = "norm" if f_normalize else "nonorm"
+    f_mrl_str = "matryoshka" if f_use_matryoshka else "single"
 
     combo_model_str = (
-        f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_{normalize_str}_{mrl_str}_combo"
+        f"{f_curr_model_name}_{f_activation_func_str}_{f_distance_metric_str}_{f_normalize_str}_{f_mrl_str}_combo"
     )
 
     print("=" * 80)
     print(f"Trial {trial.number}: {combo_model_str}")
     print(f"Fixed LR: {lr}")
-    print(f"Batch size: {batch_size}")
-    print(f"Accumulate grad batches: {accumulate_grad_batches}")
+    print(f"Batch size: {f_batch_size}")
+    print(f"Accumulate grad batches: {f_accumulate_grad_batches}")
     print("=" * 80)
 
     model = LitAStar(
-        model_name=model_path,
-        cls_activation_func=activation_func,
-        cls_distance_metric=distance_metric,
-        cls_normalize=normalize,
+        model_name=f_model_path,
+        cls_activation_func=f_activation_func,
+        cls_distance_metric=f_distance_metric,
+        cls_normalize=f_normalize,
         lr=lr,
-        cls_use_matryoshka=use_matryoshka,
-        graph=causal_graph
+        cls_use_matryoshka=f_use_matryoshka,
+        graph=f_causal_graph
     )
 
     early_stop = EarlyStopping(
@@ -150,12 +150,12 @@ def objective(trial, model_path, curr_model_name, datasets_by_distance,
         logger=True,
         default_root_dir=str(DATA_DIR / "lightning_logs" / "combo_search" / combo_model_str / SLURM_JOB_ID),
         enable_checkpointing=False,
-        max_epochs=max_epochs,
+        max_epochs=f_max_epochs,
         accelerator="gpu",
         devices=1,
         callbacks=[early_stop],
         num_sanity_val_steps=0,
-        accumulate_grad_batches=accumulate_grad_batches,
+        accumulate_grad_batches=f_accumulate_grad_batches,
     )
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=valid_loader)
@@ -211,10 +211,10 @@ if __name__ == "__main__":
     # are needed anyway for the 2 x 2 grid search.
     datasets_by_distance = {}
 
-    for distance_metric_str in ["cosine", "euclid"]:
-        distance_metric = parse_distance_metric(distance_metric_str)
+    for curr_distance_metric_str in ["cosine", "euclid"]:
+        curr_distance_metric = parse_distance_metric(curr_distance_metric_str)
 
-        dataset_suffix = f"{curr_model_name.replace('/', '_')}_{distance_metric_str}"
+        dataset_suffix = f"{curr_model_name.replace('/', '_')}_{curr_distance_metric_str}"
         train_ds_path = datasets_dir / f"train_{dataset_suffix}"
         valid_ds_path = datasets_dir / f"valid_{dataset_suffix}"
 
@@ -223,8 +223,8 @@ if __name__ == "__main__":
 
         main_embedder = None
         if not train_exists or not valid_exists:
-            print(f"Initializing Embedder for {curr_model_name} with {distance_metric_str} distance ...")
-            main_embedder = STEmbedder(model_path, distance_metric)
+            print(f"Initializing Embedder for {curr_model_name} with {curr_distance_metric_str} distance ...")
+            main_embedder = STEmbedder(model_path, curr_distance_metric)
 
         if train_exists:
             print(f"Loading cached TRAIN dataset: {train_ds_path}")
@@ -249,10 +249,10 @@ if __name__ == "__main__":
             gc.collect()
             torch.cuda.empty_cache()
 
-        print(f"Total Train examples for {distance_metric_str}: {len(train_dataset)}")
-        print(f"Total Val examples for {distance_metric_str}: {len(valid_dataset)}")
+        print(f"Total Train examples for {curr_distance_metric_str}: {len(train_dataset)}")
+        print(f"Total Val examples for {curr_distance_metric_str}: {len(valid_dataset)}")
 
-        datasets_by_distance[distance_metric_str] = {
+        datasets_by_distance[curr_distance_metric_str] = {
             "train": train_dataset,
             "valid": valid_dataset,
         }
