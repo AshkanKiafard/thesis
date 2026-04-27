@@ -32,13 +32,12 @@ base_models = [
     # Higher-capacity models for improved embedding quality
     "BAAI/bge-large-en-v1.5",
     "mixedbread-ai/mxbai-embed-large-v1",
-    "Alibaba-NLP/gte-large-en-v1.5",
 
     # Larger embedding model with higher capacity
     "Qwen/Qwen3-Embedding-0.6B",
 
     # Very large model (high memory requirements; enable only if resources allow)
-    # "Qwen/Qwen3-Embedding-4B",
+    "Qwen/Qwen3-Embedding-4B",
 ]
 
 lightning_dir = DATA_DIR / "models" / "lightning"

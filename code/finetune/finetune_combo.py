@@ -72,7 +72,7 @@ def parse_args():
     parser.add_argument(
         "--max-epochs",
         type=int,
-        default=5,
+        default=10,
         help="Number of epochs per activation-distance combination"
     )
 
