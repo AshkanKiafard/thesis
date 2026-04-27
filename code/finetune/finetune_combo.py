@@ -24,6 +24,7 @@ sys.path.append(str(REPO_ROOT / "code"))
 
 from finetune.astar_training_core import (
     LitAStar,
+    cleanup_zombie_trials,
     create_dataset,
     parse_activation_func,
     parse_distance_metric,
@@ -38,7 +39,7 @@ torch.set_float32_matmul_precision("medium")
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Grid-search the best activation and distance combination for one embedding model."
+        description="Find the best LR for each activation-distance combination, then grid-search the best combination."
     )
 
     parser.add_argument(
@@ -70,35 +71,36 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--max-epochs",
+        "--lr-epochs",
+        type=int,
+        default=5,
+        help="Number of epochs per LR-search trial"
+    )
+
+    parser.add_argument(
+        "--combo-epochs",
         type=int,
         default=10,
-        help="Number of epochs per activation-distance combination"
+        help="Number of epochs per activation-distance combination after the best LR was found"
+    )
+
+    parser.add_argument(
+        "--lr-trials",
+        type=int,
+        default=10,
+        help="Number of LR-search trials per activation-distance combination"
     )
 
     return parser.parse_args()
 
 
-def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
-              f_batch_size, f_accumulate_grad_batches, f_normalize,
-              f_use_matryoshka, f_max_epochs, f_causal_graph):
-    # Combo search is intentionally discrete:
-    # - Activation: ReLU or GELU
-    # - Distance: cosine or Euclidean
-    # The learning rate is fixed here, because LR is optimized later by finetune_lr.py.
-    lr = 3e-5
-
-    # GridSampler ensures that each combination is evaluated exactly once.
-    f_activation_func_str = trial.suggest_categorical("activation", ["relu", "gelu"])
-    f_distance_metric_str = trial.suggest_categorical("distance", ["cosine", "euclid"])
-
+def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
+                       f_batch_size, f_accumulate_grad_batches, f_normalize,
+                       f_use_matryoshka, f_max_epochs, f_causal_graph,
+                       f_activation_func_str, f_distance_metric_str, f_lr,
+                       f_log_group, f_run_suffix):
     f_activation_func = parse_activation_func(f_activation_func_str)
     f_distance_metric = parse_distance_metric(f_distance_metric_str)
-
-    # Datasets depend only on model and distance metric, not on activation.
-    # Therefore, they are precomputed once before the Optuna objective and reused here.
-    f_train_dataset = f_datasets_by_distance[f_distance_metric_str]["train"]
-    f_valid_dataset = f_datasets_by_distance[f_distance_metric_str]["valid"]
 
     train_loader = DataLoader(
         f_train_dataset,
@@ -119,15 +121,16 @@ def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
     f_normalize_str = "norm" if f_normalize else "nonorm"
     f_mrl_str = "matryoshka" if f_use_matryoshka else "single"
 
-    combo_model_str = (
-        f"{f_curr_model_name}_{f_activation_func_str}_{f_distance_metric_str}_{f_normalize_str}_{f_mrl_str}_combo"
+    f_run_model_str = (
+        f"{f_curr_model_name}_{f_activation_func_str}_{f_distance_metric_str}_{f_normalize_str}_{f_mrl_str}_{f_run_suffix}"
     )
 
     print("=" * 80)
-    print(f"Trial {trial.number}: {combo_model_str}")
-    print(f"Fixed LR: {lr}")
+    print(f"Run: {f_run_model_str}")
+    print(f"LR: {f_lr}")
     print(f"Batch size: {f_batch_size}")
     print(f"Accumulate grad batches: {f_accumulate_grad_batches}")
+    print(f"Max epochs: {f_max_epochs}")
     print("=" * 80)
 
     model = LitAStar(
@@ -135,7 +138,7 @@ def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
         cls_activation_func=f_activation_func,
         cls_distance_metric=f_distance_metric,
         cls_normalize=f_normalize,
-        lr=lr,
+        lr=f_lr,
         cls_use_matryoshka=f_use_matryoshka,
         graph=f_causal_graph
     )
@@ -148,7 +151,7 @@ def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
 
     trainer = pl.Trainer(
         logger=True,
-        default_root_dir=str(DATA_DIR / "lightning_logs" / "combo_search" / combo_model_str / SLURM_JOB_ID),
+        default_root_dir=str(DATA_DIR / "lightning_logs" / f_log_group / f_run_model_str / SLURM_JOB_ID),
         enable_checkpointing=False,
         max_epochs=f_max_epochs,
         accelerator="gpu",
@@ -169,6 +172,83 @@ def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
     return score
 
 
+def lr_objective(trial, f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
+                 f_batch_size, f_accumulate_grad_batches, f_normalize,
+                 f_use_matryoshka, f_lr_epochs, f_causal_graph,
+                 f_activation_func_str, f_distance_metric_str):
+    lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
+
+    print("=" * 80)
+    print(f"LR Trial {trial.number}")
+    print(f"Activation: {f_activation_func_str}")
+    print(f"Distance: {f_distance_metric_str}")
+    print(f"LR: {lr}")
+    print("=" * 80)
+
+    return run_training_trial(
+        f_model_path=f_model_path,
+        f_curr_model_name=f_curr_model_name,
+        f_train_dataset=f_train_dataset,
+        f_valid_dataset=f_valid_dataset,
+        f_batch_size=f_batch_size,
+        f_accumulate_grad_batches=f_accumulate_grad_batches,
+        f_normalize=f_normalize,
+        f_use_matryoshka=f_use_matryoshka,
+        f_max_epochs=f_lr_epochs,
+        f_causal_graph=f_causal_graph,
+        f_activation_func_str=f_activation_func_str,
+        f_distance_metric_str=f_distance_metric_str,
+        f_lr=lr,
+        f_log_group="lr_search",
+        f_run_suffix=f"lr_trial_{trial.number}",
+    )
+
+
+def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
+              f_batch_size, f_accumulate_grad_batches, f_normalize,
+              f_use_matryoshka, f_combo_epochs, f_causal_graph, f_best_lrs):
+    # Combo search is intentionally discrete:
+    # - Activation: ReLU or GELU
+    # - Distance: cosine or Euclidean
+    # The learning rate is not fixed globally. It is optimized separately for each combo first.
+    # GridSampler ensures that each combination is evaluated exactly once.
+    f_activation_func_str = trial.suggest_categorical("activation", ["relu", "gelu"])
+    f_distance_metric_str = trial.suggest_categorical("distance", ["cosine", "euclid"])
+
+    lr = f_best_lrs[(f_activation_func_str, f_distance_metric_str)]
+    trial.set_user_attr("lr", lr)
+
+    # Datasets depend only on model and distance metric, not on activation.
+    # Therefore, they are precomputed once before the Optuna objective and reused here.
+    f_train_dataset = f_datasets_by_distance[f_distance_metric_str]["train"]
+    f_valid_dataset = f_datasets_by_distance[f_distance_metric_str]["valid"]
+
+    print("=" * 80)
+    print(f"Combo Trial {trial.number}")
+    print(f"Activation: {f_activation_func_str}")
+    print(f"Distance: {f_distance_metric_str}")
+    print(f"Best LR for this combo: {lr}")
+    print("=" * 80)
+
+    return run_training_trial(
+        f_model_path=f_model_path,
+        f_curr_model_name=f_curr_model_name,
+        f_train_dataset=f_train_dataset,
+        f_valid_dataset=f_valid_dataset,
+        f_batch_size=f_batch_size,
+        f_accumulate_grad_batches=f_accumulate_grad_batches,
+        f_normalize=f_normalize,
+        f_use_matryoshka=f_use_matryoshka,
+        f_max_epochs=f_combo_epochs,
+        f_causal_graph=f_causal_graph,
+        f_activation_func_str=f_activation_func_str,
+        f_distance_metric_str=f_distance_metric_str,
+        f_lr=lr,
+        f_log_group="combo_search",
+        f_run_suffix="combo",
+    )
+
+
 if __name__ == "__main__":
     args = parse_args()
 
@@ -176,7 +256,9 @@ if __name__ == "__main__":
     batch_size = args.batch_size
     normalize = args.normalize
     use_matryoshka = args.matryoshka
-    max_epochs = args.max_epochs
+    lr_epochs = args.lr_epochs
+    combo_epochs = args.combo_epochs
+    lr_trials = args.lr_trials
 
     if batch_size > 128:
         raise ValueError("batch_size must be <= 128")
@@ -189,7 +271,9 @@ if __name__ == "__main__":
     print(f"Batch size: {batch_size}")
     print(f"Accumulate grad batches: {accumulate_grad_batches}")
     print(f"Effective batch size: {batch_size * accumulate_grad_batches}")
-    print("Fixed learning rate: 3e-5")
+    print(f"LR search epochs: {lr_epochs}")
+    print(f"Combo search epochs: {combo_epochs}")
+    print(f"LR trials per combo: {lr_trials}")
 
     causal_graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
 
@@ -204,8 +288,12 @@ if __name__ == "__main__":
     mrl_str = "matryoshka" if use_matryoshka else "single"
 
     datasets_dir = DATA_DIR / "datasets"
-    optuna_dir = DATA_DIR / "optuna_studies"
-    optuna_dir.mkdir(parents=True, exist_ok=True)
+
+    optuna_root_dir = DATA_DIR / "optuna_studies"
+    optuna_lr_dir = optuna_root_dir / "lr"
+    optuna_combo_dir = optuna_root_dir / "combo"
+    optuna_lr_dir.mkdir(parents=True, exist_ok=True)
+    optuna_combo_dir.mkdir(parents=True, exist_ok=True)
 
     # Dataset creation is done before the objective because both distance datasets
     # are needed anyway for the 2 x 2 grid search.
@@ -257,6 +345,74 @@ if __name__ == "__main__":
             "valid": valid_dataset,
         }
 
+    optuna.logging.set_verbosity(optuna.logging.INFO)
+
+    best_lrs = {}
+
+    for activation_func_str in ["relu", "gelu"]:
+        for distance_metric_str in ["cosine", "euclid"]:
+            print("=" * 80)
+            print(f"OPTIMIZING LR FOR COMBO: {activation_func_str} + {distance_metric_str}")
+            print("=" * 80)
+
+            train_dataset = datasets_by_distance[distance_metric_str]["train"]
+            valid_dataset = datasets_by_distance[distance_metric_str]["valid"]
+
+            lr_study_name = (
+                f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_{normalize_str}_{mrl_str}_lr_search"
+            )
+            lr_optuna_db_path = optuna_lr_dir / (
+                f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_{normalize_str}_{mrl_str}_lr.sqlite3"
+            )
+
+            lr_study = optuna.create_study(
+                storage=f"sqlite:///{lr_optuna_db_path}",
+                study_name=lr_study_name,
+                load_if_exists=True,
+                direction="minimize",
+            )
+
+            cleanup_zombie_trials(lr_study, "LR")
+
+            completed_lr_trials = [
+                t for t in lr_study.trials
+                if t.state == optuna.trial.TrialState.COMPLETE
+            ]
+            trials_to_run = lr_trials - len(completed_lr_trials)
+
+            if trials_to_run > 0:
+                print(
+                    f"Running LR search for {curr_model_name}, "
+                    f"{activation_func_str} + {distance_metric_str}, "
+                    f"for {trials_to_run} trials ..."
+                )
+                lr_study.optimize(
+                    lambda l_trial: lr_objective(
+                        l_trial,
+                        model_path,
+                        curr_model_name,
+                        train_dataset,
+                        valid_dataset,
+                        batch_size,
+                        accumulate_grad_batches,
+                        normalize,
+                        use_matryoshka,
+                        lr_epochs,
+                        causal_graph,
+                        activation_func_str,
+                        distance_metric_str,
+                    ),
+                    n_trials=trials_to_run,
+                    gc_after_trial=True
+                )
+                print(f"Finished LR search for {activation_func_str} + {distance_metric_str}.")
+            else:
+                print(f"LR study for {activation_func_str} + {distance_metric_str} is already complete.")
+
+            best_lr = lr_study.best_params["lr"]
+            best_lrs[(activation_func_str, distance_metric_str)] = best_lr
+            print(f"Best LR for {activation_func_str} + {distance_metric_str}: {best_lr}")
+
     # Grid search is better than random sampling here because there are only four
     # possible combinations and each one should be evaluated exactly once.
     search_space = {
@@ -266,10 +422,8 @@ if __name__ == "__main__":
 
     sampler = GridSampler(search_space)
 
-    study_name = f"{curr_model_name}_{normalize_str}_{mrl_str}_combo_search"
-    optuna_db_path = optuna_dir / f"{curr_model_name}_{normalize_str}_{mrl_str}_combo.sqlite3"
-
-    optuna.logging.set_verbosity(optuna.logging.INFO)
+    study_name = f"{curr_model_name}_{normalize_str}_{mrl_str}_combo_search_with_lr"
+    optuna_db_path = optuna_combo_dir / f"{curr_model_name}_{normalize_str}_{mrl_str}_combo.sqlite3"
 
     study = optuna.create_study(
         storage=f"sqlite:///{optuna_db_path}",
@@ -279,19 +433,7 @@ if __name__ == "__main__":
         sampler=sampler,
     )
 
-    # When a run is interrupted, Optuna may leave trials in RUNNING state.
-    # Mark them as failed so the study can resume cleanly.
-    print("Cleaning zombie trials ...")
-    running_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.RUNNING]
-
-    if running_trials:
-        print(f"Found {len(running_trials)} interrupted trials (Zombies). Cleaning them up ...")
-        for r_trial in running_trials:
-            try:
-                study.tell(r_trial.number, state=optuna.trial.TrialState.FAIL)
-                print(f"Marked interrupted Trial {r_trial.number} as FAILED.")
-            except Exception as e:
-                print(f"Warning: Could not update status for Trial {r_trial.number}: {e}")
+    cleanup_zombie_trials(study, "combo")
 
     # GridSampler has exactly four combinations here.
     target_trials = 4
@@ -315,8 +457,9 @@ if __name__ == "__main__":
                 accumulate_grad_batches,
                 normalize,
                 use_matryoshka,
-                max_epochs,
+                combo_epochs,
                 causal_graph,
+                best_lrs,
             ),
             n_trials=trials_to_run,
             gc_after_trial=True
@@ -326,7 +469,14 @@ if __name__ == "__main__":
         print("Combo study is already complete.")
 
     print("=" * 80)
+    print("BEST LRS")
+    print("=" * 80)
+    for (activation_func_str, distance_metric_str), best_lr in best_lrs.items():
+        print(f"{activation_func_str} + {distance_metric_str}: {best_lr}")
+
+    print("=" * 80)
     print("BEST COMBO")
     print("=" * 80)
     print(f"Best value: {study.best_value}")
     print(f"Best params: {study.best_params}")
+    print(f"Best LR: {study.best_trial.user_attrs.get('lr')}")

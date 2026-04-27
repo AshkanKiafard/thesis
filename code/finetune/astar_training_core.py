@@ -1,6 +1,7 @@
 import argparse
 from enum import Enum
 
+import optuna
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -53,12 +54,12 @@ def str_to_bool(value: str) -> bool:
 
 class MatryoshkaAStarLoss(nn.Module):
     def __init__(
-        self,
-        model,
-        cls_activation_func,
-        cls_distance_metric: DistanceMetric,
-        cls_normalize: bool,
-        matryoshka_dims: list[int] = None
+            self,
+            model,
+            cls_activation_func,
+            cls_distance_metric: DistanceMetric,
+            cls_normalize: bool,
+            matryoshka_dims: list[int] = None
     ):
         super().__init__()
         self.model = model
@@ -105,10 +106,10 @@ class MatryoshkaAStarLoss(nn.Module):
 
         # If embeddings are not normalized explicitly, keep their norms roughly stable.
         embeddings_sum = (
-            (torch.linalg.vector_norm(c_emb, dim=-1) - 1) ** 2
-            + (torch.linalg.vector_norm(e_emb, dim=-1) - 1) ** 2
-            + (torch.linalg.vector_norm(p_emb, dim=-1) - 1) ** 2
-            + (torch.linalg.vector_norm(n_emb, dim=-1) - 1) ** 2
+                (torch.linalg.vector_norm(c_emb, dim=-1) - 1) ** 2
+                + (torch.linalg.vector_norm(e_emb, dim=-1) - 1) ** 2
+                + (torch.linalg.vector_norm(p_emb, dim=-1) - 1) ** 2
+                + (torch.linalg.vector_norm(n_emb, dim=-1) - 1) ** 2
         )
 
         regularization = embeddings_sum.mean() if not self.normalize else 0.0
@@ -145,14 +146,14 @@ class MatryoshkaAStarLoss(nn.Module):
 
 class LitAStar(pl.LightningModule):
     def __init__(
-        self,
-        model_name,
-        cls_activation_func,
-        cls_distance_metric,
-        cls_normalize,
-        lr,
-        cls_use_matryoshka,
-        graph
+            self,
+            model_name,
+            cls_activation_func,
+            cls_distance_metric,
+            cls_normalize,
+            lr,
+            cls_use_matryoshka,
+            graph
     ):
         super().__init__()
 
@@ -339,3 +340,24 @@ def create_dataset(data, graph, embedder):
         "positives": positives,
         "negatives": negatives
     })
+
+
+def cleanup_zombie_trials(study, label: str = ""):
+    # When a run is interrupted, Optuna may leave trials in RUNNING state.
+    # Mark them as failed so the study can resume cleanly.
+    label_prefix = f"{label} " if label else ""
+    print(f"Cleaning zombie {label_prefix}trials ...")
+
+    running_trials = [
+        t for t in study.trials
+        if t.state == optuna.trial.TrialState.RUNNING
+    ]
+
+    if running_trials:
+        print(f"Found {len(running_trials)} interrupted {label_prefix}trials (Zombies). Cleaning them up ...")
+        for f_trial in running_trials:
+            try:
+                study.tell(f_trial.number, state=optuna.trial.TrialState.FAIL)
+                print(f"Marked interrupted {label_prefix}Trial {f_trial.number} as FAILED.")
+            except Exception as e:
+                print(f"Warning: Could not update status for {label_prefix}Trial {f_trial.number}: {e}")

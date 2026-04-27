@@ -26,6 +26,7 @@ sys.path.append(str(REPO_ROOT / "code"))
 from finetune.astar_training_core import (
     ActivationFunc,
     LitAStar,
+    cleanup_zombie_trials,
     create_dataset,
     parse_activation_func,
     parse_distance_metric,
@@ -98,8 +99,8 @@ def parse_args():
 
 
 def objective(trial, model_name, model_str, train_loader, val_loader,
-              f_activation_func, f_distance_metric, f_normalize, f_use_matryoshka, f_accumulate_grad_batches,
-              graph):
+              f_activation_func, f_distance_metric, f_normalize, f_use_matryoshka,
+              f_accumulate_grad_batches, graph):
     # The search range is intentionally narrow because previous runs already showed
     # that useful learning rates are in this area.
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
@@ -178,11 +179,12 @@ if __name__ == "__main__":
     datasets_dir = DATA_DIR / "datasets"
     models_dir = DATA_DIR / "models" / "lightning"
     checkpoints_dir = DATA_DIR / "checkpoints"
-    optuna_dir = DATA_DIR / "optuna_studies"
+    optuna_root_dir = DATA_DIR / "optuna_studies"
+    optuna_lr_dir = optuna_root_dir / "lr"
 
     models_dir.mkdir(parents=True, exist_ok=True)
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
-    optuna_dir.mkdir(parents=True, exist_ok=True)
+    optuna_lr_dir.mkdir(parents=True, exist_ok=True)
 
     # Skip everything if the final exported SentenceTransformer already exists.
     if save_path.exists():
@@ -247,7 +249,7 @@ if __name__ == "__main__":
     pruner = optuna.pruners.MedianPruner()
 
     study_name = f"{trained_model_str}_optimization"
-    optuna_db_path = optuna_dir / f"{trained_model_str}.sqlite3"
+    optuna_db_path = optuna_lr_dir / f"{trained_model_str}_lr.sqlite3"
 
     study = optuna.create_study(
         storage=f"sqlite:///{optuna_db_path}",
@@ -257,19 +259,7 @@ if __name__ == "__main__":
         pruner=pruner
     )
 
-    # When a run is interrupted, Optuna may leave trials in RUNNING state.
-    # Mark them as failed so the study can resume cleanly.
-    print("Cleaning zombie trials ...")
-    running_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.RUNNING]
-
-    if running_trials:
-        print(f"Found {len(running_trials)} interrupted trials (Zombies). Cleaning them up ...")
-        for r_trial in running_trials:
-            try:
-                study.tell(r_trial.number, state=optuna.trial.TrialState.FAIL)
-                print(f"Marked interrupted Trial {r_trial.number} as FAILED.")
-            except Exception as e:
-                print(f"Warning: Could not update status for Trial {r_trial.number}: {e}")
+    cleanup_zombie_trials(study, "LR")
 
     # Count both COMPLETE and PRUNED as already-attempted useful trials.
     valid_trials = [
