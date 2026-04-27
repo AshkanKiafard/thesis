@@ -85,7 +85,21 @@ def parse_args():
         "--target-trials",
         type=int,
         default=30,
-        help="Total number of Optuna trials to target"
+        help="Total number of Optuna LR trials to target"
+    )
+
+    parser.add_argument(
+        "--lr-epochs",
+        type=int,
+        default=5,
+        help="Number of epochs per Optuna LR-search trial"
+    )
+
+    parser.add_argument(
+        "--final-epochs",
+        type=int,
+        default=50,
+        help="Maximum number of epochs for the final training run"
     )
 
     parser.add_argument(
@@ -100,7 +114,7 @@ def parse_args():
 
 def objective(trial, model_name, model_str, train_loader, val_loader,
               f_activation_func, f_distance_metric, f_normalize, f_use_matryoshka,
-              f_accumulate_grad_batches, graph):
+              f_accumulate_grad_batches, f_lr_epochs, graph):
     # The search range is intentionally narrow because previous runs already showed
     # that useful learning rates are in this area.
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
@@ -120,9 +134,9 @@ def objective(trial, model_name, model_str, train_loader, val_loader,
 
     trainer = pl.Trainer(
         logger=True,
-        default_root_dir=str(DATA_DIR / "lightning_logs" / model_str / SLURM_JOB_ID),
+        default_root_dir=str(DATA_DIR / "lightning_logs" / "lr_search" / model_str / SLURM_JOB_ID),
         enable_checkpointing=False,
-        max_epochs=5,
+        max_epochs=f_lr_epochs,
         accelerator="gpu",
         devices=1,
         callbacks=[early_stop, pruning_callback],
@@ -132,13 +146,21 @@ def objective(trial, model_name, model_str, train_loader, val_loader,
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
 
-    return trainer.callback_metrics["val/astar_cost"].item()
+    score = trainer.callback_metrics["val/astar_cost"].item()
+
+    del model, trainer
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    return score
 
 
 if __name__ == "__main__":
     args = parse_args()
 
     target_trials = args.target_trials
+    lr_epochs = args.lr_epochs
+    final_epochs = args.final_epochs
     distance_metric = parse_distance_metric(args.distance)
     activation_func = parse_activation_func(args.activation)
     normalize = args.normalize
@@ -151,11 +173,15 @@ if __name__ == "__main__":
     if 128 % batch_size != 0:
         raise ValueError("batch_size must divide 128 (e.g. 128, 64, 32, 16, 8)")
 
+    # Keep the effective batch size fixed across models for fair comparison.
     accumulate_grad_batches = 128 // batch_size
 
     print(f"Batch size: {batch_size}")
     print(f"Accumulate grad batches: {accumulate_grad_batches}")
     print(f"Effective batch size: {batch_size * accumulate_grad_batches}")
+    print(f"Target LR trials: {target_trials}")
+    print(f"LR search epochs: {lr_epochs}")
+    print(f"Final training epochs: {final_epochs}")
 
     causal_graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
 
@@ -225,6 +251,8 @@ if __name__ == "__main__":
 
     if main_embedder:
         del main_embedder
+        gc.collect()
+        torch.cuda.empty_cache()
 
     print(f"Total Train examples: {len(train_dataset)}")
     print(f"Total Val examples: {len(valid_dataset)}")
@@ -248,8 +276,17 @@ if __name__ == "__main__":
     optuna.logging.set_verbosity(optuna.logging.INFO)
     pruner = optuna.pruners.MedianPruner()
 
-    study_name = f"{trained_model_str}_optimization"
-    optuna_db_path = optuna_lr_dir / f"{trained_model_str}_lr.sqlite3"
+    # The LR study name includes the number of LR trials and LR epochs.
+    # This prevents reusing an old LR study that used different search settings.
+    study_name = (
+        f"{trained_model_str}_"
+        f"lr{target_trials}trials_{lr_epochs}epochs_optimization"
+    )
+
+    optuna_db_path = optuna_lr_dir / (
+        f"{trained_model_str}_"
+        f"lr{target_trials}trials_{lr_epochs}epochs.sqlite3"
+    )
 
     study = optuna.create_study(
         storage=f"sqlite:///{optuna_db_path}",
@@ -283,6 +320,7 @@ if __name__ == "__main__":
                 normalize,
                 use_matryoshka,
                 accumulate_grad_batches,
+                lr_epochs,
                 causal_graph
             ),
             n_trials=trials_to_run,
@@ -311,7 +349,10 @@ if __name__ == "__main__":
     logger = TensorBoardLogger(
         str(DATA_DIR / "tb_logs"),
         name=trained_model_str,
-        version=f"{SLURM_JOB_ID}_{activation_func_str}_{distance_metric_str}_{normalize_str}"
+        version=(
+            f"{SLURM_JOB_ID}_{activation_func_str}_{distance_metric_str}_"
+            f"{normalize_str}_lr{target_trials}trials_{lr_epochs}epochs_final{final_epochs}epochs"
+        )
     )
 
     checkpoint_callback = ModelCheckpoint(
@@ -328,12 +369,12 @@ if __name__ == "__main__":
     early_stop_callback = EarlyStopping(monitor="val/astar_cost", patience=10, mode="min")
 
     main_trainer = pl.Trainer(
-        max_epochs=50,
+        max_epochs=final_epochs,
         accelerator="gpu",
         devices=1,
         callbacks=[early_stop_callback, checkpoint_callback],
         logger=logger,
-        default_root_dir=str(DATA_DIR / "lightning_logs" / trained_model_str / SLURM_JOB_ID),
+        default_root_dir=str(DATA_DIR / "lightning_logs" / "final_training" / trained_model_str / SLURM_JOB_ID),
         num_sanity_val_steps=0,
         accumulate_grad_batches=accumulate_grad_batches,
     )
