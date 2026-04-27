@@ -122,7 +122,8 @@ def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid
     f_mrl_str = "matryoshka" if f_use_matryoshka else "single"
 
     f_run_model_str = (
-        f"{f_curr_model_name}_{f_activation_func_str}_{f_distance_metric_str}_{f_normalize_str}_{f_mrl_str}_{f_run_suffix}"
+        f"{f_curr_model_name}_{f_activation_func_str}_{f_distance_metric_str}_"
+        f"{f_normalize_str}_{f_mrl_str}_{f_run_suffix}"
     )
 
     print("=" * 80)
@@ -145,7 +146,7 @@ def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid
 
     early_stop = EarlyStopping(
         monitor="val/astar_cost",
-        patience=3,
+        patience=3 if f_log_group == "lr_search" else 5,
         mode="min"
     )
 
@@ -176,6 +177,8 @@ def lr_objective(trial, f_model_path, f_curr_model_name, f_train_dataset, f_vali
                  f_batch_size, f_accumulate_grad_batches, f_normalize,
                  f_use_matryoshka, f_lr_epochs, f_causal_graph,
                  f_activation_func_str, f_distance_metric_str):
+    # The LR range is intentionally narrow because previous runs already showed
+    # that useful learning rates are in this area.
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
 
     print("=" * 80)
@@ -204,7 +207,7 @@ def lr_objective(trial, f_model_path, f_curr_model_name, f_train_dataset, f_vali
     )
 
 
-def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
+def combo_objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
               f_batch_size, f_accumulate_grad_batches, f_normalize,
               f_use_matryoshka, f_combo_epochs, f_causal_graph, f_best_lrs):
     # Combo search is intentionally discrete:
@@ -358,11 +361,18 @@ if __name__ == "__main__":
             train_dataset = datasets_by_distance[distance_metric_str]["train"]
             valid_dataset = datasets_by_distance[distance_metric_str]["valid"]
 
+            # The LR study name includes the number of LR trials and LR epochs.
+            # This prevents reusing an old LR study that used different search settings.
             lr_study_name = (
-                f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_{normalize_str}_{mrl_str}_lr_search"
+                f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_"
+                f"{normalize_str}_{mrl_str}_"
+                f"lr{lr_trials}trials_{lr_epochs}epochs_search"
             )
+
             lr_optuna_db_path = optuna_lr_dir / (
-                f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_{normalize_str}_{mrl_str}_lr.sqlite3"
+                f"{curr_model_name}_{activation_func_str}_{distance_metric_str}_"
+                f"{normalize_str}_{mrl_str}_"
+                f"lr{lr_trials}trials_{lr_epochs}epochs.sqlite3"
             )
 
             lr_study = optuna.create_study(
@@ -409,6 +419,11 @@ if __name__ == "__main__":
             else:
                 print(f"LR study for {activation_func_str} + {distance_metric_str} is already complete.")
 
+            if len(lr_study.trials) == 0 or lr_study.best_trial is None:
+                raise RuntimeError(
+                    f"No successful LR trials found for {activation_func_str} + {distance_metric_str}."
+                )
+
             best_lr = lr_study.best_params["lr"]
             best_lrs[(activation_func_str, distance_metric_str)] = best_lr
             print(f"Best LR for {activation_func_str} + {distance_metric_str}: {best_lr}")
@@ -422,8 +437,19 @@ if __name__ == "__main__":
 
     sampler = GridSampler(search_space)
 
-    study_name = f"{curr_model_name}_{normalize_str}_{mrl_str}_combo_search_with_lr"
-    optuna_db_path = optuna_combo_dir / f"{curr_model_name}_{normalize_str}_{mrl_str}_combo.sqlite3"
+    # The combo study name includes LR-search and combo-search settings.
+    # This prevents old studies with different epoch/trial settings from being reused accidentally.
+    study_name = (
+        f"{curr_model_name}_{normalize_str}_{mrl_str}_"
+        f"lr{lr_trials}trials_{lr_epochs}epochs_"
+        f"combo{combo_epochs}epochs_search"
+    )
+
+    optuna_db_path = optuna_combo_dir / (
+        f"{curr_model_name}_{normalize_str}_{mrl_str}_"
+        f"lr{lr_trials}trials_{lr_epochs}epochs_"
+        f"combo{combo_epochs}epochs.sqlite3"
+    )
 
     study = optuna.create_study(
         storage=f"sqlite:///{optuna_db_path}",
@@ -435,7 +461,8 @@ if __name__ == "__main__":
 
     cleanup_zombie_trials(study, "combo")
 
-    # GridSampler has exactly four combinations here.
+    # GridSampler has exactly four combinations here:
+    # 2 activations x 2 distance metrics = 4 trials.
     target_trials = 4
 
     valid_trials = [
@@ -448,7 +475,7 @@ if __name__ == "__main__":
     if trials_to_run > 0:
         print(f"Running combo grid search for {curr_model_name} for {trials_to_run} trials ...")
         study.optimize(
-            lambda l_trial: objective(
+            lambda l_trial: combo_objective(
                 l_trial,
                 model_path,
                 curr_model_name,
