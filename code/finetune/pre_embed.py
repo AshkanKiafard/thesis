@@ -23,23 +23,22 @@ embeddings_dir.mkdir(parents=True, exist_ok=True)
 graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl", False)
 
 base_models = [
-    # Strong general-purpose baseline with reliable performance
+    # Strong general-purpose baseline
     "sentence-transformers/all-mpnet-base-v2",
 
-    # Lightweight models with good performance and low memory requirements
+    # Lightweight embedding models
     "BAAI/bge-base-en-v1.5",
+    "ibm-granite/granite-embedding-small-english-r2",
 
-    # Higher-capacity models for improved embedding quality
+    # Higher-capacity embedding models
     "BAAI/bge-large-en-v1.5",
+    "ibm-granite/granite-embedding-english-r2",
     "mixedbread-ai/mxbai-embed-large-v1",
 
-    # Multilingual embedding model
-    "ibm-granite/granite-embedding-311m-multilingual-r2",
-
-    # Larger embedding model with higher capacity
+    # Large language model-based embeddings
     "Qwen/Qwen3-Embedding-0.6B",
 
-    # Very large model (high memory requirements; enable only if resources allow)
+    # Very large model (high memory requirements)
     "Qwen/Qwen3-Embedding-4B",
 ]
 
