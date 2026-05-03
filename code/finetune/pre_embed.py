@@ -33,6 +33,9 @@ base_models = [
     "BAAI/bge-large-en-v1.5",
     "mixedbread-ai/mxbai-embed-large-v1",
 
+    # Multilingual embedding model
+    "ibm-granite/granite-embedding-311m-multilingual-r2",
+
     # Larger embedding model with higher capacity
     "Qwen/Qwen3-Embedding-0.6B",
 
