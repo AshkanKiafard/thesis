@@ -9,6 +9,8 @@ import optuna
 import pytorch_lightning as pl
 import torch
 from datasets import load_from_disk
+from optuna.integration import PyTorchLightningPruningCallback
+from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from pytorch_lightning.callbacks import EarlyStopping
 from torch.utils.data import DataLoader
@@ -26,6 +28,7 @@ from finetune.astar_training_core import (
     LitAStar,
     cleanup_zombie_trials,
     create_dataset,
+    find_latest_hparam_study,
     parse_activation_func,
     parse_distance_metric,
     str_to_bool,
@@ -94,7 +97,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
+def run_training_trial(f_trial, f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
                        f_batch_size, f_accumulate_grad_batches, f_normalize,
                        f_use_matryoshka, f_max_epochs, f_patience, f_causal_graph,
                        f_activation_func_str, f_distance_metric_str, f_lr,
@@ -151,6 +154,13 @@ def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid
         mode="min"
     )
 
+    # Optuna pruning stops clearly bad trials early based on intermediate
+    # validation performance. This reduces wasted compute during the search.
+    pruning_callback = PyTorchLightningPruningCallback(
+        f_trial,
+        monitor="val/astar_cost",
+    )
+
     trainer = pl.Trainer(
         logger=True,
         default_root_dir=str(DATA_DIR / "lightning_logs" / f_log_group / f_run_model_str / SLURM_JOB_ID),
@@ -158,12 +168,14 @@ def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid
         max_epochs=f_max_epochs,
         accelerator="gpu",
         devices=1,
-        callbacks=[early_stop],
+        callbacks=[early_stop, pruning_callback],
         num_sanity_val_steps=0,
         accumulate_grad_batches=f_accumulate_grad_batches,
     )
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=valid_loader)
+
+    pruning_callback.check_pruned()
 
     score = trainer.callback_metrics["val/astar_cost"].item()
 
@@ -200,6 +212,7 @@ def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
     print("=" * 80)
 
     return run_training_trial(
+        f_trial=trial,
         f_model_path=f_model_path,
         f_curr_model_name=f_curr_model_name,
         f_train_dataset=f_train_dataset,
@@ -321,15 +334,51 @@ if __name__ == "__main__":
 
     sampler = TPESampler(seed=42)
 
-    # One Optuna search over activation, distance metric, and learning rate.
-    # The study name includes the number of trials and epochs to prevent accidental
-    # reuse of old studies with different search settings.
-    study_name = (
-        f"{curr_model_name}_{normalize_str}_{mrl_str}_"
-        f"{target_trials}trials_{epochs}epochs_search_{patience}patience"
+    # MedianPruner compares the current trial against the median performance
+    # of previous completed trials and stops clearly underperforming trials early.
+    # A few startup trials are allowed to finish completely before pruning begins.
+    pruner = MedianPruner(
+        n_startup_trials=5,
+        n_warmup_steps=3,
+        interval_steps=1,
     )
 
-    optuna_db_path = optuna_hparam_search_dir / f"{study_name}.sqlite3"
+    # Reuse the latest matching hparam search study if one already exists.
+    # This allows continuing older studies even if the naming scheme changes.
+    latest_study = find_latest_hparam_study(
+        optuna_hparam_search_dir=optuna_hparam_search_dir,
+        curr_model_name=curr_model_name,
+        normalize_str=normalize_str,
+        mrl_str=mrl_str,
+    )
+
+    if latest_study is not None:
+        optuna_db_path, study_name = latest_study
+
+        print("=" * 80)
+        print("REUSING EXISTING HPARAM SEARCH STUDY")
+        print("=" * 80)
+        print(f"Study file: {optuna_db_path}")
+        print(f"Study name: {study_name}")
+        print("=" * 80)
+    else:
+        # Create a new Optuna hparam search study only if no compatible
+        # previous study exists for this model/configuration.
+        # The study name still includes the search settings for readability
+        # and easier manual inspection of study files.
+        study_name = (
+            f"{curr_model_name}_{normalize_str}_{mrl_str}_"
+            f"{target_trials}trials_{epochs}epochs_search_{patience}patience"
+        )
+
+        optuna_db_path = optuna_hparam_search_dir / f"{study_name}.sqlite3"
+
+        print("=" * 80)
+        print("CREATING NEW HPARAM SEARCH STUDY")
+        print("=" * 80)
+        print(f"Study file: {optuna_db_path}")
+        print(f"Study name: {study_name}")
+        print("=" * 80)
 
     study = optuna.create_study(
         storage=f"sqlite:///{optuna_db_path}",
@@ -337,6 +386,7 @@ if __name__ == "__main__":
         load_if_exists=True,
         direction="minimize",
         sampler=sampler,
+        pruner=pruner,
     )
 
     cleanup_zombie_trials(study, "hparam_search")

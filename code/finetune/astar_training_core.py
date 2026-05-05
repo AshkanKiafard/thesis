@@ -363,7 +363,7 @@ def cleanup_zombie_trials(study, label: str = ""):
                 print(f"Warning: Could not update status for {label_prefix}Trial {f_trial.number}: {e}")
 
 
-def load_hparams(optuna_hparam_search_dir, curr_model_name, normalize_str, mrl_str):
+def find_latest_hparam_study(optuna_hparam_search_dir, curr_model_name, normalize_str, mrl_str):
     study_prefix = f"{curr_model_name}_{normalize_str}_{mrl_str}_"
 
     matching_studies = sorted(
@@ -373,10 +373,7 @@ def load_hparams(optuna_hparam_search_dir, curr_model_name, normalize_str, mrl_s
     )
 
     if not matching_studies:
-        raise FileNotFoundError(
-            f"No Optuna hparam search study found in {optuna_hparam_search_dir} "
-            f"starting with: {study_prefix}"
-        )
+        return None
 
     latest_study_path = matching_studies[0]
     storage = f"sqlite:///{latest_study_path}"
@@ -394,9 +391,30 @@ def load_hparams(optuna_hparam_search_dir, curr_model_name, normalize_str, mrl_s
         reverse=True,
     )[0]
 
+    return latest_study_path, latest_summary.study_name
+
+
+def load_hparams(optuna_hparam_search_dir, curr_model_name, normalize_str, mrl_str):
+    latest_study = find_latest_hparam_study(
+        optuna_hparam_search_dir=optuna_hparam_search_dir,
+        curr_model_name=curr_model_name,
+        normalize_str=normalize_str,
+        mrl_str=mrl_str,
+    )
+
+    if latest_study is None:
+        study_prefix = f"{curr_model_name}_{normalize_str}_{mrl_str}_"
+        raise FileNotFoundError(
+            f"No Optuna hparam search study found in {optuna_hparam_search_dir} "
+            f"starting with: {study_prefix}"
+        )
+
+    latest_study_path, study_name = latest_study
+    storage = f"sqlite:///{latest_study_path}"
+
     study = optuna.load_study(
         storage=storage,
-        study_name=latest_summary.study_name,
+        study_name=study_name,
     )
 
     best_params = study.best_params
