@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 SLURM_JOB_ID = os.environ.get("SLURM_JOB_ID", "local")
 
-# code/finetune/finetune_combo.py -> repo root is two levels above this file.
+# code/finetune/finetune_hparam_search.py -> repo root is two levels above this file.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "code" / "data"
 
@@ -71,10 +71,17 @@ def parse_args():
     )
 
     parser.add_argument(
-        "--combo-epochs",
+        "--epochs",
         type=int,
         default=10,
         help="Number of epochs per Optuna trial"
+    )
+
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=5,
+        help="Number of validation epochs without improvement before early stopping"
     )
 
     parser.add_argument(
@@ -89,7 +96,7 @@ def parse_args():
 
 def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
                        f_batch_size, f_accumulate_grad_batches, f_normalize,
-                       f_use_matryoshka, f_max_epochs, f_causal_graph,
+                       f_use_matryoshka, f_max_epochs, f_patience, f_causal_graph,
                        f_activation_func_str, f_distance_metric_str, f_lr,
                        f_log_group, f_run_suffix):
     f_activation_func = parse_activation_func(f_activation_func_str)
@@ -125,6 +132,7 @@ def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid
     print(f"Batch size: {f_batch_size}")
     print(f"Accumulate grad batches: {f_accumulate_grad_batches}")
     print(f"Max epochs: {f_max_epochs}")
+    print(f"Patience: {f_patience}")
     print("=" * 80)
 
     model = LitAStar(
@@ -139,7 +147,7 @@ def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid
 
     early_stop = EarlyStopping(
         monitor="val/astar_cost",
-        patience=5,
+        patience=f_patience,
         mode="min"
     )
 
@@ -167,13 +175,14 @@ def run_training_trial(f_model_path, f_curr_model_name, f_train_dataset, f_valid
 
 
 def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
-                    f_batch_size, f_accumulate_grad_batches, f_normalize,
-                    f_use_matryoshka, f_combo_epochs, f_causal_graph):
+              f_batch_size, f_accumulate_grad_batches, f_normalize,
+              f_use_matryoshka, f_epochs, f_patience, f_causal_graph):
     # Activation, distance metric, and learning rate are optimized jointly.
     # This is the standard Optuna setup: all relevant hyperparameters are part
     # of the same search space instead of being optimized in separate stages.
     f_activation_func_str = trial.suggest_categorical("activation", ["relu", "gelu"])
     f_distance_metric_str = trial.suggest_categorical("distance", ["cosine", "euclid"])
+
     # The LR range is intentionally narrow because previous runs already showed
     # that useful learning rates are in this area.
     lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
@@ -199,12 +208,13 @@ def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
         f_accumulate_grad_batches=f_accumulate_grad_batches,
         f_normalize=f_normalize,
         f_use_matryoshka=f_use_matryoshka,
-        f_max_epochs=f_combo_epochs,
+        f_max_epochs=f_epochs,
+        f_patience=f_patience,
         f_causal_graph=f_causal_graph,
         f_activation_func_str=f_activation_func_str,
         f_distance_metric_str=f_distance_metric_str,
         f_lr=lr,
-        f_log_group="combo_search",
+        f_log_group="hparam_search",
         f_run_suffix=f"trial_{trial.number}",
     )
 
@@ -216,13 +226,18 @@ if __name__ == "__main__":
     batch_size = args.batch_size
     normalize = args.normalize
     use_matryoshka = args.matryoshka
-    combo_epochs = args.combo_epochs
+    epochs = args.epochs
+    patience = args.patience
     target_trials = args.trials
 
     if batch_size > 128:
         raise ValueError("batch_size must be <= 128")
     if 128 % batch_size != 0:
         raise ValueError("batch_size must divide 128 (e.g. 128, 64, 32, 16, 8)")
+    if patience < 0:
+        raise ValueError("patience must be >= 0")
+    if patience >= epochs:
+        print("Warning: patience >= epochs, so early stopping will probably not trigger.")
 
     # Keep the effective batch size fixed across models for fair comparison.
     accumulate_grad_batches = 128 // batch_size
@@ -230,16 +245,17 @@ if __name__ == "__main__":
     print(f"Batch size: {batch_size}")
     print(f"Accumulate grad batches: {accumulate_grad_batches}")
     print(f"Effective batch size: {batch_size * accumulate_grad_batches}")
-    print(f"Search epochs per trial: {combo_epochs}")
+    print(f"Search epochs per trial: {epochs}")
+    print(f"Search patience: {patience}")
     print(f"Optuna trials: {target_trials}")
 
     causal_graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
 
-    with open(DATA_DIR / "datasets" / "msmarco_train.json", encoding="utf-8") as f:
-        train_data = json.load(f)
+    with open(DATA_DIR / "datasets" / "msmarco_train.json", encoding="utf-8") as train_file:
+        train_data = json.load(train_file)
 
-    with open(DATA_DIR / "datasets" / "msmarco_valid.json", encoding="utf-8") as f:
-        valid_data = json.load(f)
+    with open(DATA_DIR / "datasets" / "msmarco_valid.json", encoding="utf-8") as valid_file:
+        valid_data = json.load(valid_file)
 
     curr_model_name = model_path.split("/")[-1]
     normalize_str = "norm" if normalize else "nonorm"
@@ -248,8 +264,8 @@ if __name__ == "__main__":
     datasets_dir = DATA_DIR / "datasets"
 
     optuna_root_dir = DATA_DIR / "optuna_studies"
-    optuna_combo_dir = optuna_root_dir / "combo"
-    optuna_combo_dir.mkdir(parents=True, exist_ok=True)
+    optuna_hparam_search_dir = optuna_root_dir / "hparam_search"
+    optuna_hparam_search_dir.mkdir(parents=True, exist_ok=True)
 
     # Dataset creation is done before the objective because both distance datasets
     # are needed anyway for the search.
@@ -310,13 +326,10 @@ if __name__ == "__main__":
     # reuse of old studies with different search settings.
     study_name = (
         f"{curr_model_name}_{normalize_str}_{mrl_str}_"
-        f"combo_{target_trials}trials_{combo_epochs}epochs_search"
+        f"{target_trials}trials_{epochs}epochs_search_{patience}patience"
     )
 
-    optuna_db_path = optuna_combo_dir / (
-        f"{curr_model_name}_{normalize_str}_{mrl_str}_"
-        f"combo_{target_trials}trials_{combo_epochs}epochs.sqlite3"
-    )
+    optuna_db_path = optuna_hparam_search_dir / f"{study_name}.sqlite3"
 
     study = optuna.create_study(
         storage=f"sqlite:///{optuna_db_path}",
@@ -326,7 +339,7 @@ if __name__ == "__main__":
         sampler=sampler,
     )
 
-    cleanup_zombie_trials(study, "combo")
+    cleanup_zombie_trials(study, "hparam_search")
 
     completed_trials = [
         t for t in study.trials
@@ -336,7 +349,7 @@ if __name__ == "__main__":
     trials_to_run = target_trials - len(completed_trials)
 
     if trials_to_run > 0:
-        print(f"Running combo search study for {curr_model_name} for {trials_to_run} trials ...")
+        print(f"Running hparam search study for {curr_model_name} for {trials_to_run} trials ...")
         study.optimize(
             lambda l_trial: objective(
                 l_trial,
@@ -347,18 +360,19 @@ if __name__ == "__main__":
                 accumulate_grad_batches,
                 normalize,
                 use_matryoshka,
-                combo_epochs,
+                epochs,
+                patience,
                 causal_graph,
             ),
             n_trials=trials_to_run,
             gc_after_trial=True
         )
-        print(f"Finished combo search study for {curr_model_name}.")
+        print(f"Finished hparam search study for {curr_model_name}.")
     else:
-        print("Combo search study is already complete.")
+        print("Hparam search study is already complete.")
 
     print("=" * 80)
-    print("BEST COMBO")
+    print("BEST HPARAMS")
     print("=" * 80)
     print(f"Best value: {study.best_value}")
     print(f"Best params: {study.best_params}")

@@ -361,3 +361,62 @@ def cleanup_zombie_trials(study, label: str = ""):
                 print(f"Marked interrupted {label_prefix}Trial {f_trial.number} as FAILED.")
             except Exception as e:
                 print(f"Warning: Could not update status for {label_prefix}Trial {f_trial.number}: {e}")
+
+
+def load_hparams(optuna_hparam_search_dir, curr_model_name, normalize_str, mrl_str):
+    study_prefix = f"{curr_model_name}_{normalize_str}_{mrl_str}_"
+
+    matching_studies = sorted(
+        optuna_hparam_search_dir.glob(f"{study_prefix}*.sqlite3"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+
+    if not matching_studies:
+        raise FileNotFoundError(
+            f"No Optuna hparam search study found in {optuna_hparam_search_dir} "
+            f"starting with: {study_prefix}"
+        )
+
+    latest_study_path = matching_studies[0]
+    storage = f"sqlite:///{latest_study_path}"
+
+    summaries = optuna.study.get_all_study_summaries(storage)
+
+    if not summaries:
+        raise RuntimeError(f"No Optuna study found inside SQLite file: {latest_study_path}")
+
+    # Normally there should be only one study per SQLite file.
+    # If there are multiple, use the newest one based on datetime_start.
+    latest_summary = sorted(
+        summaries,
+        key=lambda s: s.datetime_start,
+        reverse=True,
+    )[0]
+
+    study = optuna.load_study(
+        storage=storage,
+        study_name=latest_summary.study_name,
+    )
+
+    best_params = study.best_params
+
+    required_params = ["activation", "distance", "lr"]
+    missing_params = [p for p in required_params if p not in best_params]
+
+    if missing_params:
+        raise KeyError(
+            f"Best trial in {latest_study_path} is missing required params: {missing_params}. "
+            f"Available params: {best_params}"
+        )
+
+    print("=" * 80)
+    print("LOADED HPARAM SEARCH STUDY")
+    print("=" * 80)
+    print(f"Study file: {latest_study_path}")
+    print(f"Study name: {study.study_name}")
+    print(f"Best value: {study.best_value}")
+    print(f"Best params: {best_params}")
+    print("=" * 80)
+
+    return best_params, latest_study_path, study.study_name
