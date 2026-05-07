@@ -117,6 +117,12 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
         f"{f_normalize_str}_{f_mrl_str}_best"
     )
 
+    checkpoint_dir = DATA_DIR / "checkpoints" / f_run_model_str
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    last_checkpoint_path = checkpoint_dir / "last.ckpt"
+    ckpt_path = str(last_checkpoint_path) if last_checkpoint_path.exists() else None
+
     print("=" * 80)
     print(f"Final training run: {f_run_model_str}")
     print(f"Source Optuna study: {f_source_study_name}")
@@ -128,6 +134,13 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
     print(f"Effective batch size: {f_batch_size * f_accumulate_grad_batches}")
     print(f"Max epochs: {f_max_epochs}")
     print(f"Patience: {f_patience}")
+    print(f"Checkpoint directory: {checkpoint_dir}")
+
+    if ckpt_path:
+        print(f"Resuming from checkpoint: {ckpt_path}")
+    else:
+        print("No checkpoint found. Starting from scratch.")
+
     print("=" * 80)
 
     model = LitAStar(
@@ -147,7 +160,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
     )
 
     checkpoint_callback = ModelCheckpoint(
-        dirpath=str(DATA_DIR / "checkpoints" / f_run_model_str / SLURM_JOB_ID),
+        dirpath=str(checkpoint_dir),
         filename="best-{epoch:02d}-{val_astar_cost:.4f}",
         monitor="val/astar_cost",
         mode="min",
@@ -158,7 +171,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
 
     trainer = pl.Trainer(
         logger=True,
-        default_root_dir=str(DATA_DIR / "lightning_logs" / "final_training" / f_run_model_str / SLURM_JOB_ID),
+        default_root_dir=str(DATA_DIR / "lightning_logs" / "final_training" / f_run_model_str),
         enable_checkpointing=True,
         max_epochs=f_max_epochs,
         accelerator="gpu",
@@ -168,7 +181,12 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
         accumulate_grad_batches=f_accumulate_grad_batches,
     )
 
-    trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=valid_loader)
+    trainer.fit(
+        model,
+        train_dataloaders=train_loader,
+        val_dataloaders=valid_loader,
+        ckpt_path=ckpt_path,
+    )
 
     final_model_dir = DATA_DIR / "models" / "lightning" / f"{f_run_model_str}_finetuned"
     final_model_dir.mkdir(parents=True, exist_ok=True)
@@ -194,6 +212,8 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
         "batch_size": f_batch_size,
         "accumulate_grad_batches": f_accumulate_grad_batches,
         "effective_batch_size": f_batch_size * f_accumulate_grad_batches,
+        "checkpoint_dir": str(checkpoint_dir),
+        "resumed_from_checkpoint": ckpt_path,
         "best_checkpoint_path": checkpoint_callback.best_model_path,
         "best_val_astar_cost": checkpoint_callback.best_model_score.item()
         if checkpoint_callback.best_model_score is not None else None,
@@ -238,6 +258,7 @@ if __name__ == "__main__":
     print(f"Effective batch size: {batch_size * accumulate_grad_batches}")
     print(f"Final training epochs: {epochs}")
     print(f"Final training patience: {patience}")
+    print(f"SLURM job ID: {SLURM_JOB_ID}")
 
     causal_graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
 

@@ -1,5 +1,3 @@
-# TODO Signifikanztest und Bonferroni Correction
-
 import argparse
 import csv
 import gc
@@ -34,7 +32,7 @@ if os.path.exists(lightning_dir):
     fine_tuned_models = [
         os.path.join(lightning_dir, name).replace("\\", "/")
         for name in os.listdir(lightning_dir)
-        if os.path.isdir(os.path.join(lightning_dir, name)) if name != "old"
+        if os.path.isdir(os.path.join(lightning_dir, name)) and name != "old"
     ]
 
 model_queue = base_models + fine_tuned_models
@@ -92,12 +90,15 @@ def save_all_results_csv(all_results, output_csv_file):
         "avg_path_cost",
         "avg_cost_per_hop",
         "num_costed_paths",
+        "num_examples",
     ]
 
     rows = []
 
     for entry in all_results:
-        for algorithm, metrics in entry.get("evaluation", {}).items():
+        for algorithm, strategy_result in entry.get("evaluation", {}).items():
+            metrics = strategy_result["metrics"]
+
             row = {
                 "algorithm": algorithm,
                 "model": entry.get("model"),
@@ -113,8 +114,8 @@ def save_all_results_csv(all_results, output_csv_file):
 
             rows.append(row)
 
-    with open(output_csv_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
+    with open(output_csv_file, "w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter=";")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -123,8 +124,8 @@ def save_all_results_csv(all_results, output_csv_file):
 
 def load_results_file(output_json_file):
     if os.path.exists(output_json_file):
-        with open(output_json_file, "r") as f:
-            return json.load(f)
+        with open(output_json_file, "r", encoding="utf-8") as file:
+            return json.load(file)
     return []
 
 
@@ -133,8 +134,8 @@ def save_result(result_entry, output_json_file, output_csv_file):
     current_results.append(result_entry)
 
     # Save JSON (overwrite full file)
-    with open(output_json_file, "w", encoding="utf-8") as f:
-        json.dump(current_results, f, indent=4)
+    with open(output_json_file, "w", encoding="utf-8") as file:
+        json.dump(current_results, file, indent=4)
 
     # Save CSV (overwrite full file)
     save_all_results_csv(current_results, output_csv_file)
@@ -161,16 +162,16 @@ def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times, path_c
 
     # Cost per hop is more comparable than raw path cost when paths differ in length.
     cost_per_hop = []
-    for L, c in zip(path_lengths, path_costs):
-        if c is not None and L > 1:
-            cost_per_hop.append(c / (L - 1))
+    for path_length, path_cost in zip(path_lengths, path_costs):
+        if path_cost is not None and path_length > 1:
+            cost_per_hop.append(path_cost / (path_length - 1))
     avg_cost_per_hop = float(np.mean(cost_per_hop)) if len(cost_per_hop) > 0 else 0.0
 
     return {
         "accuracy": float(accuracy_score(y_true, y_pred)),
-        "f1_score": float(f1_score(y_true, y_pred)),
-        "recall": float(recall_score(y_true, y_pred)),
-        "precision": float(precision_score(y_true, y_pred)),
+        "f1_score": float(f1_score(y_true, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
         "tp": int(tp),
         "fn": int(fn),
         "fp": int(fp),
@@ -181,6 +182,7 @@ def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times, path_c
         "avg_path_cost": float(avg_cost),
         "avg_cost_per_hop": float(avg_cost_per_hop),
         "num_costed_paths": int(len(valid_costs)),
+        "num_examples": int(len(y_true)),
     }
 
 
@@ -194,6 +196,9 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
             "path_lengths": [],
             "times": [],
             "path_costs": [],
+            # Store per-example predictions so that significance tests can be
+            # performed later on paired model outputs.
+            "per_example": [],
         }
         for name in strategies.keys()
     }
@@ -211,6 +216,7 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
         if cause not in graph.nodes or effect not in graph.nodes:
             continue
 
+        example_id = item.get("id", i)
         true_label = bool(item["answer"])
 
         for name, strategy in strategies.items():
@@ -221,14 +227,30 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
             elapsed = end_time - start_time
             pred_label = bool(path)
 
+            path_length = len(path) if path else 0
             path_cost = compute_embedding_path_cost(path, embeder)
 
             results[name]["y_true"].append(true_label)
             results[name]["y_pred"].append(pred_label)
             results[name]["nodes_visited"].append(visited_nodes)
-            results[name]["path_lengths"].append(len(path) if path else 0)
+            results[name]["path_lengths"].append(path_length)
             results[name]["times"].append(elapsed)
             results[name]["path_costs"].append(path_cost)
+
+            results[name]["per_example"].append(
+                {
+                    "id": example_id,
+                    "cause": cause,
+                    "effect": effect,
+                    "true": true_label,
+                    "pred": pred_label,
+                    "correct": pred_label == true_label,
+                    "nodes_visited": int(visited_nodes),
+                    "path_length": int(path_length),
+                    "time_sec": float(elapsed),
+                    "path_cost": path_cost,
+                }
+            )
 
     summary = {}
     for name in strategies.keys():
@@ -240,7 +262,11 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
             results[name]["times"],
             results[name]["path_costs"],
         )
-        summary[name] = metrics
+
+        summary[name] = {
+            "metrics": metrics,
+            "per_example": results[name]["per_example"],
+        }
 
         print(f"--- {name} Results ---")
         print(
@@ -279,8 +305,8 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading normalized dataset...")
-    with open(dataset_path) as f:
-        valid_data = json.load(f)
+    with open(dataset_path, encoding="utf-8") as file:
+        valid_data = json.load(file)
 
     print("Loading causal graph...")
     causal_graph = load_graph(GRAPH_PATH)
@@ -362,7 +388,7 @@ if __name__ == "__main__":
         try:
             main_embeder = STEmbedder(
                 model_path=model_path,
-                distance_metric=DistanceMetric.COSINE
+                distance_metric=DistanceMetric.COSINE,
             )
 
             model_dim = main_embeder.get_model_dim()
@@ -370,9 +396,11 @@ if __name__ == "__main__":
             dims = get_matryoshka_dims(model_dim)
 
             for dim in dims:
-                if any(entry.get("model") == model_name and
-                    (entry.get("dimension") == dim)
-                    for entry in existing_results):
+                if any(
+                    entry.get("model") == model_name
+                    and entry.get("dimension") == dim
+                    for entry in existing_results
+                ):
                     print(f"Skipping {model_name} dim {dim} (already evaluated)")
                     continue
 
