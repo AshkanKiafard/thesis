@@ -196,7 +196,25 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
     print("=" * 80)
     print(f"Final model directory: {final_model_dir}")
 
-    model.model.save_pretrained(str(final_model_dir))
+    best_checkpoint_path = checkpoint_callback.best_model_path
+
+    if not best_checkpoint_path:
+        best_checkpoint_path = str(last_checkpoint_path)
+
+    print(f"Loading best checkpoint for export: {best_checkpoint_path}")
+
+    best_model = LitAStar.load_from_checkpoint(
+        best_checkpoint_path,
+        model_name=f_model_path,
+        cls_activation_func=f_activation_func,
+        cls_distance_metric=f_distance_metric,
+        cls_normalize=f_normalize,
+        lr=f_lr,
+        cls_use_matryoshka=f_use_matryoshka,
+        graph=f_causal_graph,
+    )
+
+    best_model.embedding_model.save(str(final_model_dir))
 
     metadata = {
         "model_path": f_model_path,
@@ -214,7 +232,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
         "effective_batch_size": f_batch_size * f_accumulate_grad_batches,
         "checkpoint_dir": str(checkpoint_dir),
         "resumed_from_checkpoint": ckpt_path,
-        "best_checkpoint_path": checkpoint_callback.best_model_path,
+        "best_checkpoint_path": best_checkpoint_path,
         "best_val_astar_cost": checkpoint_callback.best_model_score.item()
         if checkpoint_callback.best_model_score is not None else None,
     }
@@ -226,7 +244,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
     print(f"Best val/astar_cost: {metadata['best_val_astar_cost']}")
     print("=" * 80)
 
-    del model, trainer, train_loader, valid_loader
+    del model, best_model, trainer, train_loader, valid_loader
     gc.collect()
     torch.cuda.empty_cache()
 
