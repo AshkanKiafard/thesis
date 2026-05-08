@@ -399,7 +399,7 @@ if __name__ == "__main__":
 
     completed_trials = [
         t for t in study.trials
-        if t.state == optuna.trial.TrialState.COMPLETE
+        if t.state in [optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED]
     ]
 
     trials_to_run = target_trials - len(completed_trials)
