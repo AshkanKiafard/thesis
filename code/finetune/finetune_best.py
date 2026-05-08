@@ -9,6 +9,7 @@ import pytorch_lightning as pl
 import torch
 from datasets import load_from_disk
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 SLURM_JOB_ID = os.environ.get("SLURM_JOB_ID", "local")
@@ -169,9 +170,14 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
         auto_insert_metric_name=False,
     )
 
+    logger = TensorBoardLogger(
+        save_dir=str(DATA_DIR / "lightning_logs"),
+        name="final_training",
+        version=f_run_model_str,
+    )
+
     trainer = pl.Trainer(
-        logger=True,
-        default_root_dir=str(DATA_DIR / "lightning_logs" / "final_training" / f_run_model_str),
+        logger=logger,
         enable_checkpointing=True,
         max_epochs=f_max_epochs,
         accelerator="gpu",
@@ -199,7 +205,18 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
     best_checkpoint_path = checkpoint_callback.best_model_path
 
     if not best_checkpoint_path:
-        best_checkpoint_path = str(last_checkpoint_path)
+        best_checkpoints = sorted(
+            checkpoint_dir.glob("best-*.ckpt"),
+            key=lambda checkpoint_file: checkpoint_file.stat().st_mtime,
+            reverse=True,
+        )
+
+        if best_checkpoints:
+            best_checkpoint_path = str(best_checkpoints[0])
+        elif last_checkpoint_path.exists():
+            best_checkpoint_path = str(last_checkpoint_path)
+        else:
+            raise FileNotFoundError(f"No checkpoint found in {checkpoint_dir}")
 
     print(f"Loading best checkpoint for export: {best_checkpoint_path}")
 
@@ -240,7 +257,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
     with open(final_model_dir / "training_metadata.json", "w", encoding="utf-8") as metadata_file:
         json.dump(metadata, metadata_file, indent=2)
 
-    print(f"Best checkpoint: {checkpoint_callback.best_model_path}")
+    print(f"Best checkpoint: {best_checkpoint_path}")
     print(f"Best val/astar_cost: {metadata['best_val_astar_cost']}")
     print("=" * 80)
 

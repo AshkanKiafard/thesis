@@ -251,9 +251,12 @@ class LitAStar(pl.LightningModule):
             total_visits += visits
             pairs_validated += 1
 
-        avg_visited = total_visits / max(pairs_validated, 1)
+        if pairs_validated == 0:
+            avg_visited = float("inf")
+        else:
+            avg_visited = total_visits / pairs_validated
 
-        self.log("val/astar_cost", avg_visited, prog_bar=True, batch_size=pairs_validated)
+        self.log("val/astar_cost", avg_visited, prog_bar=True, batch_size=max(pairs_validated, 1))
 
         # Still log the embedding loss as a secondary signal for debugging.
         val_loss = self.loss_fn([

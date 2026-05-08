@@ -13,6 +13,7 @@ from optuna.integration import PyTorchLightningPruningCallback
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from pytorch_lightning.callbacks import EarlyStopping
+from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 SLURM_JOB_ID = os.environ.get("SLURM_JOB_ID", "local")
@@ -161,9 +162,14 @@ def run_training_trial(f_trial, f_model_path, f_curr_model_name, f_train_dataset
         monitor="val/astar_cost",
     )
 
+    logger = TensorBoardLogger(
+        save_dir=str(DATA_DIR / "lightning_logs"),
+        name=f_log_group,
+        version=f_run_model_str,
+    )
+
     trainer = pl.Trainer(
-        logger=True,
-        default_root_dir=str(DATA_DIR / "lightning_logs" / f_log_group / f_run_model_str / SLURM_JOB_ID),
+        logger=logger,
         enable_checkpointing=False,
         max_epochs=f_max_epochs,
         accelerator="gpu",
