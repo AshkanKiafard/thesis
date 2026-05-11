@@ -151,7 +151,8 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
         cls_normalize=f_normalize,
         lr=f_lr,
         cls_use_matryoshka=f_use_matryoshka,
-        graph=f_causal_graph
+        graph=f_causal_graph,
+        batch_size=f_batch_size,
     )
 
     early_stop = EarlyStopping(
@@ -162,7 +163,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
 
     checkpoint_callback = ModelCheckpoint(
         dirpath=str(checkpoint_dir),
-        filename="best-{epoch:02d}-{val_astar_cost:.4f}",
+        filename="best-{epoch:02d}-{val/astar_cost:.4f}",
         monitor="val/astar_cost",
         mode="min",
         save_top_k=1,

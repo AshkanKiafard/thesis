@@ -1,5 +1,3 @@
-# TODO remove msmarco from webis corpus
-
 import gzip
 import json
 import re
@@ -71,7 +69,8 @@ BINARY_CAUSAL_PATTERNS = [
         re.IGNORECASE,
     ),
     re.compile(
-        rf"^\s*(?:is|are|was|were)\s+{SUBJECT}\s+(?:caused|triggered|induced|produced|generated)\s+by\s+{SUBJECT}\s*\??$",
+        rf"^\s*(?:is|are|was|were|can|could|may|might|will|would)\s+{SUBJECT}\s+(?:be\s+)?"
+        rf"(?:caused|triggered|induced|produced|generated)\s+by\s+{SUBJECT}\s*\??$",
         re.IGNORECASE,
     ),
 ]
@@ -89,7 +88,7 @@ TEXT_COLUMN_CANDIDATES = [
 
 
 def strip_punct(text: str) -> str:
-    text = re.sub(r"[^А-Яа-яЁёЙйA-Za-z0-9]", " ", str(text).lower())
+    text = re.sub(r"[^A-Za-z0-9]", " ", str(text).lower())
     return " ".join(text.split())
 
 
@@ -131,37 +130,124 @@ def looks_binary_causal(text: str) -> Tuple[bool, str]:
 
 
 def extract_cause_effect(question: str) -> Tuple[Optional[str], Optional[str]]:
-    q = normalize_question(question).rstrip("?")
+    q = normalize_question(question).rstrip("?").strip()
 
-    active = re.compile(
-        r"^(?:can|could|may|might|will|would|do|does|did)\s+(.+?)\s+"
-        r"(cause|causes|lead to|leads to|result in|results in|trigger|triggers|produce|produces|induce|induces|generate|generates|bring about|brings about)\s+(.+)$",
+    def clean(text: str) -> Optional[str]:
+        text = re.sub(r"\s+", " ", text).strip(" \t\n\r.,;:!?\"'")
+        text = re.sub(r"^(that|whether|if)\s+", "", text, flags=re.IGNORECASE)
+        return text or None
+
+    def bad_pair(cause: Optional[str], effect: Optional[str]) -> bool:
+        if not cause or not effect:
+            return True
+
+        c = cause.lower().strip()
+        e = effect.lower().strip()
+
+        # Broken noun-phrase cases:
+        # "does chaucer have a cause for ..."
+        if c.endswith((" have a", " has a", " had a", " have the", " has the", " had the")):
+            return True
+
+        # Existential questions:
+        # "is there a genetic cause of ..."
+        if c.startswith(("there ", "there a ", "there is ", "there are ")):
+            return True
+
+        # Broken passive extraction:
+        # "can nausea be caused by hunger" must not become cause="nausea be", effect="by hunger".
+        if c.endswith(" be") or e.startswith("by "):
+            return True
+
+        # Usually not a clean causal effect phrase.
+        if e.startswith(("for ", "of ")):
+            return True
+
+        # Too vague for graph traversal.
+        if c in {"there", "it", "this", "that"} or e in {"a difference", "difference"}:
+            return True
+
+        return False
+
+    causal_verbs = [
+        "bring about", "brings about", "brought about",
+        "give rise to", "gives rise to", "gave rise to",
+        "lead to", "leads to", "led to",
+        "result in", "results in", "resulted in",
+        "trigger", "triggers", "triggered",
+        "produce", "produces", "produced",
+        "induce", "induces", "induced",
+        "generate", "generates", "generated",
+        "cause", "causes", "caused",
+    ]
+    verb_alt = "|".join(re.escape(v) for v in sorted(causal_verbs, key=len, reverse=True))
+
+    aux = r"(?:can|could|may|might|will|would|do|does|did|is|are|was|were|has|have|had)"
+    modifiers = r"(?:(?:directly|indirectly|normally|usually|possibly|probably|also|really|actually)\s+)*"
+    modal_modifiers = rf"(?:(?:can|could|may|might|will|would|do|does|did)\s+)?{modifiers}"
+
+    # Example:
+    # "Do aviation experts say that weather alone would normally cause a crash"
+    reported_active = re.compile(
+        rf"^{aux}?\s*.*?\b"
+        rf"(?:say|says|said|claim|claims|claimed|suggest|suggests|suggested|report|reports|reported)"
+        rf"\s+that\s+(.+?)\s+{modal_modifiers}(?:{verb_alt})\s+(.+)$",
         re.IGNORECASE,
     )
+
+    # Example:
+    # "is cancer caused by smoking"
+    # "can nausea be caused by hunger"
     passive = re.compile(
-        r"^(?:is|are|was|were)\s+(.+?)\s+(caused|triggered|produced|induced|generated)\s+by\s+(.+)$",
+        r"^(?:(?:is|are|was|were)\s+|(?:can|could|may|might|will|would|do|does|did)\s+)"
+        r"(.+?)\s+"
+        r"(?:be\s+)?"
+        r"(caused|triggered|produced|induced|generated|brought about)\s+by\s+"
+        r"(.+)$",
         re.IGNORECASE,
     )
+
+    # Example:
+    # "can alcohol cause dehydration"
+    active = re.compile(
+        rf"^(?:can|could|may|might|will|would|do|does|did)\s+(.+?)\s+"
+        rf"{modifiers}(?:{verb_alt})\s+(.+)$",
+        re.IGNORECASE,
+    )
+
+    # Example:
+    # "is smoking a cause of cancer"
+    # But reject: "is there a genetic cause of ..."
     cause_of = re.compile(
-        r"^(?:can|could|may|might|will|would|do|does|did|is|are|was|were|has|have|had)\s+(.+?)\s+"
-        r"(?:be\s+)?(?:a\s+|an\s+|the\s+)?cause\s+of\s+(.+)$",
+        rf"^(?:is|are|was|were|can|could|may|might|will|would)\s+(.+?)\s+"
+        rf"(?:be\s+)?(?:a\s+|an\s+|the\s+)?cause\s+of\s+(.+)$",
         re.IGNORECASE,
     )
 
-    match = active.match(q)
-    if match:
-        cause, _, effect = match.groups()
-        return cause.strip(), effect.strip()
+    # Passive must run before active, otherwise:
+    # "can nausea be caused by hunger" becomes cause="nausea be", effect="by hunger".
+    for pattern, mode in [
+        (reported_active, "active"),
+        (passive, "passive"),
+        (active, "active"),
+        (cause_of, "cause_of"),
+    ]:
+        match = pattern.match(q)
+        if not match:
+            continue
 
-    match = passive.match(q)
-    if match:
-        effect, _, cause = match.groups()
-        return cause.strip(), effect.strip()
+        if mode == "passive":
+            effect, _, cause = match.groups()
+        else:
+            cause, effect = match.groups()
 
-    match = cause_of.match(q)
-    if match:
-        cause, effect = match.groups()
-        return cause.strip(), effect.strip()
+        cause = clean(cause)
+        effect = clean(effect)
+
+        if bad_pair(cause, effect):
+            return None, None
+
+        return cause, effect
 
     return None, None
 
@@ -293,6 +379,10 @@ def main() -> None:
     answered_results: List[Dict[str, Any]] = []
 
     for path in iter_supported_files(input_dir):
+        if "msmarco" in path.name.lower():
+            print(f"[SKIP] MS MARCO file: {path}")
+            continue
+
         print(f"[READ] {path}")
         df = load_to_dataframe(path)
         if df is None or df.empty:

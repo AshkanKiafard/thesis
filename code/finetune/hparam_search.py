@@ -146,7 +146,8 @@ def run_training_trial(f_trial, f_model_path, f_curr_model_name, f_train_dataset
         cls_normalize=f_normalize,
         lr=f_lr,
         cls_use_matryoshka=f_use_matryoshka,
-        graph=f_causal_graph
+        graph=f_causal_graph,
+        batch_size=f_batch_size,
     )
 
     early_stop = EarlyStopping(
@@ -374,7 +375,7 @@ if __name__ == "__main__":
         # and easier manual inspection of study files.
         study_name = (
             f"{curr_model_name}_{normalize_str}_{mrl_str}_"
-            f"{target_trials}trials_{epochs}epochs_search_{patience}patience"
+            f"{target_trials}trials_{epochs}epochs_{patience}patience"
         )
 
         optuna_db_path = optuna_hparam_search_dir / f"{study_name}.sqlite3"

@@ -41,8 +41,8 @@ class STEmbedder:
 
         # Load precomputed embeddings if they exist.
         if os.path.exists(cache_file):
-            print(f"Loading cached embeddings from {cache_file}")
             self.cache = np.load(cache_file, allow_pickle=True).item()
+            print(f"Loaded cached embeddings from {cache_file}")
 
         tokenizer_kwargs = {}
         # Fix known tokenizer regex issue for Mistral/Qwen-style tokenizers.

@@ -153,7 +153,8 @@ class LitAStar(pl.LightningModule):
             cls_normalize,
             lr,
             cls_use_matryoshka,
-            graph
+            graph,
+            batch_size,
     ):
         super().__init__()
 
@@ -168,6 +169,8 @@ class LitAStar(pl.LightningModule):
 
         model_dimension = self.embedding_model.get_sentence_embedding_dimension()
         matryoshka_dims = get_matryoshka_dims(model_dimension) if cls_use_matryoshka else [model_dimension]
+
+        self.batch_size = batch_size
 
         self.loss_fn = MatryoshkaAStarLoss(
             self.embedding_model,
@@ -197,7 +200,7 @@ class LitAStar(pl.LightningModule):
         with torch.no_grad():
             embeddings = self.embedding_model.encode(
                 all_nodes,
-                batch_size=2048,
+                batch_size=self.batch_size*16,
                 convert_to_tensor=True,
                 normalize_embeddings=self.loss_fn.normalize,
                 show_progress_bar=False,
