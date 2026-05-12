@@ -12,8 +12,13 @@ def bfs_traverse(
     start_node: str,
     end_node: str,
     _embeder: STEmbedder,
-    _config=None
+    config=None
 ) -> tuple[list[Any], int]:
+    if config is None:
+        config = {}
+
+    max_visits = config.get('bfs_max_visits', -1)
+
     # Standard BFS queue:
     # each entry stores the current node and the full path to it.
     queue = deque([(start_node, [start_node])])
@@ -32,6 +37,9 @@ def bfs_traverse(
         if not graph.nodes[current_node]["visited"]:
             nx.set_node_attributes(graph, {current_node: {"visited": True}})
             visited_count += 1
+
+            if max_visits != -1 and visited_count > max_visits:
+                return [], visited_count
 
             # BFS itself is unweighted, but we still sort successors by edge support
             # so that stronger / better-supported edges are explored first.

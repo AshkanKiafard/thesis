@@ -27,19 +27,19 @@ base_models = [
     "sentence-transformers/all-mpnet-base-v2",
 
     # Lightweight embedding models
-    "BAAI/bge-base-en-v1.5",
-    "ibm-granite/granite-embedding-small-english-r2",
+    # "BAAI/bge-base-en-v1.5",
+    # "ibm-granite/granite-embedding-small-english-r2",
 
     # Higher-capacity embedding models
     "BAAI/bge-large-en-v1.5",
-    "ibm-granite/granite-embedding-english-r2",
+    # "ibm-granite/granite-embedding-english-r2",
     "mixedbread-ai/mxbai-embed-large-v1",
 
     # Large language model-based embeddings
     "Qwen/Qwen3-Embedding-0.6B",
 
     # Very large model (high memory requirements)
-    "Qwen/Qwen3-Embedding-4B",
+    # "Qwen/Qwen3-Embedding-4B",
 ]
 
 lightning_dir = DATA_DIR / "models" / "lightning"
