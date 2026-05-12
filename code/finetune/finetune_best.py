@@ -25,12 +25,10 @@ from finetune.astar_training_core import (
     LitAStar,
     create_dataset,
     load_hparams,
-    parse_activation_func,
-    parse_distance_metric,
     str_to_bool,
 )
 from core.embeddings import STEmbedder
-from core.utils import load_graph
+from core.utils import load_graph, parse_activation_func, parse_distance_metric
 
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
 torch.set_float32_matmul_precision("medium")

@@ -10,7 +10,7 @@ import torch
 
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from core.utils import load_graph, traverse_graph
+from core.utils import load_graph, traverse_graph, get_model_distance_metric
 
 # -------------------------------------------------------------------------
 # Global paths
@@ -350,9 +350,11 @@ if __name__ == "__main__":
         print(f"\nCOLLECTING A*: {model_path}")
 
         try:
+            distance_metric = get_model_distance_metric(model_path)
+            print(f"Distance metric: {distance_metric}")
             main_embeder = STEmbedder(
                 model_path=model_path,
-                distance_metric=DistanceMetric.COSINE,
+                distance_metric=distance_metric,
             )
 
             # Only full dimension

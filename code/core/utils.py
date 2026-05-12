@@ -1,8 +1,10 @@
 import json
+from pathlib import Path
 from typing import Callable
 
 import networkx as nx
 
+from core.constants import ActivationFunc, DistanceMetric
 from core.embeddings import STEmbedder
 
 
@@ -123,3 +125,48 @@ def get_matryoshka_dims(model_dim: int) -> list[int]:
     # Return dimensions sorted from largest to smallest.
     # This ordering matches the truncation logic used during training.
     return sorted(dims, reverse=True)
+
+
+def parse_activation_func(value: str) -> ActivationFunc:
+    value = value.strip().lower()
+    if value == "relu":
+        return ActivationFunc.RELU
+    elif value == "gelu":
+        return ActivationFunc.GELU
+    else:
+        raise ValueError(f"Unsupported activation function: {value}")
+
+
+def parse_distance_metric(value: str) -> DistanceMetric:
+    # Convert a string distance name into the DistanceMetric enum used by STEmbedder.
+    value = value.strip().lower()
+
+    if value == "cosine":
+        return DistanceMetric.COSINE
+
+    if value in {"euclid", "euclidean"}:
+        return DistanceMetric.EUCLIDEAN
+
+    raise ValueError(f"Unsupported distance metric: {value}")
+
+
+def get_model_distance_metric(model_path: str) -> DistanceMetric:
+    # Fine-tuned models exported by finetune_best.py contain training_metadata.json.
+    # That file records whether the model was trained/evaluated with cosine or Euclidean distance.
+    #
+    # Base models from Hugging Face do not have this metadata locally,
+    # so we default them to cosine.
+    metadata_path = Path(model_path) / "training_metadata.json"
+
+    if metadata_path.exists():
+        with open(metadata_path, "r", encoding="utf-8") as file:
+            metadata = json.load(file)
+
+        distance = metadata.get("distance")
+
+        if distance is None:
+            raise ValueError(f"Missing distance field in {metadata_path}")
+
+        return parse_distance_metric(distance)
+
+    return DistanceMetric.COSINE

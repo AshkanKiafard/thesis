@@ -13,8 +13,8 @@ DATA_DIR = REPO_ROOT / "code" / "data"
 # Make code/ importable when this script is executed from code/finetune/.
 sys.path.append(str(REPO_ROOT / "code"))
 
-from core.embeddings import STEmbedder, DistanceMetric
-from core.utils import load_graph
+from core.embeddings import STEmbedder
+from core.utils import get_model_distance_metric, load_graph
 
 embeddings_dir = DATA_DIR / "embeddings"
 embeddings_dir.mkdir(parents=True, exist_ok=True)
@@ -84,7 +84,10 @@ for model_path in model_queue:
 
     if len(uncached_nodes) > 0:
         print("Loading model...")
-        embeder = STEmbedder(model_path=model_path, distance_metric=DistanceMetric.COSINE)
+
+        distance_metric = get_model_distance_metric(model_path)
+        print(f"Distance metric: {distance_metric}")
+        embeder = STEmbedder(model_path=model_path, distance_metric=distance_metric)
 
         total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
 

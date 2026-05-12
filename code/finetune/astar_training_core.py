@@ -1,5 +1,4 @@
 import argparse
-from enum import Enum
 
 import optuna
 import pytorch_lightning as pl
@@ -10,33 +9,9 @@ from sentence_transformers import SentenceTransformer
 from torch import nn
 
 import traverse_strategies as ts
+from core.constants import ActivationFunc
 from core.embeddings import DistanceMetric
 from core.utils import get_concept, traverse_graph, get_matryoshka_dims
-
-
-class ActivationFunc(Enum):
-    RELU = 1
-    GELU = 2
-
-
-def parse_activation_func(value: str) -> ActivationFunc:
-    value = value.strip().lower()
-    if value == "relu":
-        return ActivationFunc.RELU
-    elif value == "gelu":
-        return ActivationFunc.GELU
-    else:
-        raise ValueError(f"Unsupported activation function: {value}")
-
-
-def parse_distance_metric(value: str) -> DistanceMetric:
-    value = value.strip().lower()
-    if value == "cosine":
-        return DistanceMetric.COSINE
-    elif value in {"euclid", "euclidean"}:
-        return DistanceMetric.EUCLIDEAN
-    else:
-        raise ValueError(f"Unsupported distance metric: {value}")
 
 
 def str_to_bool(value: str) -> bool:
@@ -200,7 +175,7 @@ class LitAStar(pl.LightningModule):
         with torch.no_grad():
             embeddings = self.embedding_model.encode(
                 all_nodes,
-                batch_size=self.batch_size*16,
+                batch_size=self.batch_size * 16,
                 convert_to_tensor=True,
                 normalize_embeddings=self.loss_fn.normalize,
                 show_progress_bar=False,

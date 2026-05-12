@@ -18,7 +18,7 @@ from sklearn.metrics import (
 
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from core.utils import get_matryoshka_dims, load_graph, traverse_graph
+from core.utils import get_model_distance_metric, get_matryoshka_dims, load_graph, traverse_graph
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 
@@ -583,9 +583,11 @@ if __name__ == "__main__":
         print(f"\nEVALUATING: {model_path}")
 
         try:
+            distance_metric = get_model_distance_metric(model_path)
+            print(f"Distance metric: {distance_metric}")
             main_embeder = STEmbedder(
                 model_path=model_path,
-                distance_metric=DistanceMetric.COSINE,
+                distance_metric=distance_metric,
             )
 
             full_dim = main_embeder.get_model_dim()

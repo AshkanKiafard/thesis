@@ -1,20 +1,15 @@
 import os
-from enum import Enum
 from pathlib import Path
 
 import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 
+from core.constants import DistanceMetric
 
 # code/core/embeddings.py -> repo root is two levels above this file.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "code" / "data"
-
-
-class DistanceMetric(Enum):
-    COSINE = 1
-    EUCLIDEAN = 2
 
 
 class STEmbedder:
