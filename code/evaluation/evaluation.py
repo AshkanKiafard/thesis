@@ -23,8 +23,14 @@ from core.utils import get_matryoshka_dims, load_graph, traverse_graph
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 
 base_models = [
-    "all-mpnet-base-v2",
+    "sentence-transformers/all-mpnet-base-v2",
+    # "BAAI/bge-base-en-v1.5",
+    # "ibm-granite/granite-embedding-small-english-r2",
+    "BAAI/bge-large-en-v1.5",
+    # "ibm-granite/granite-embedding-english-r2",
+    "mixedbread-ai/mxbai-embed-large-v1",
     "Qwen/Qwen3-Embedding-0.6B",
+    # "Qwen/Qwen3-Embedding-4B",
 ]
 
 lightning_dir = "data/models/lightning"
