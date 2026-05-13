@@ -69,36 +69,13 @@ def detect_split(dataset_name: str):
     return "unknown"
 
 
-def get_p95_source_dataset_name(dataset_name: str):
-    """
-    Match evaluation.py behavior:
-
-    valid evaluation/plots -> train p95
-    test evaluation/plots  -> valid p95
-    train                  -> own p95 if available
-    """
-    split = detect_split(dataset_name)
-
-    if split == "valid":
-        return dataset_name.replace("valid", "train")
-    if split == "test":
-        return dataset_name.replace("test", "valid")
-
-    return dataset_name
-
-
 def build_input_paths(dataset_name: str):
     eval_dir = Path("data/evaluation") / dataset_name
     eval_results_path = eval_dir / "evaluation_results.json"
 
-    p95_source_dataset = get_p95_source_dataset_name(dataset_name)
-    visited_nodes_path = (
-        Path("data/evaluation")
-        / p95_source_dataset
-        / "visited_nodes_analysis.json"
-    )
+    visited_nodes_path = eval_dir / "visited_nodes_analysis.json"
 
-    return eval_results_path, visited_nodes_path, p95_source_dataset
+    return eval_results_path, visited_nodes_path
 
 
 def build_plot_output_dir(dataset_name: str):
@@ -199,18 +176,15 @@ def parse_model_label(model_name):
         elif part == "single":
             training = "Single"
 
-    if base_name == "all-mpnet-base-v2":
-        prefix = "MPNet"
-    elif base_name == "bge-large-en-v1.5":
-        prefix = "BGE Large"
-    elif base_name == "mxbai-embed-large-v1":
-        prefix = "MxBai Large"
-    elif base_name == "Qwen3-Embedding-0.6B":
-        prefix = "Qwen 0.6B"
-    elif base_name == "Qwen3-Embedding-4B":
-        prefix = "Qwen 4B"
-    else:
-        prefix = base_name
+    prefix_map = {
+        "all-mpnet-base-v2": "MPNet",
+        "bge-large-en-v1.5": "BGE Large",
+        "mxbai-embed-large-v1": "MxBai Large",
+        "Qwen3-Embedding-0.6B": "Qwen 0.6B",
+        "Qwen3-Embedding-4B": "Qwen 4B",
+    }
+
+    prefix = prefix_map.get(base_name, base_name)
 
     label_parts = [prefix]
 
@@ -655,9 +629,13 @@ def extract_p95_data(visited_nodes_data):
                 "num_examples": analysis.get("num_examples"),
                 "num_successful_paths": analysis.get("num_successful_paths"),
                 "max_visited_all": analysis.get("max_visited_all"),
-                "max_visited_successful_only": analysis.get("max_visited_successful_only"),
+                "max_visited_successful_only": analysis.get(
+                    "max_visited_successful_only"
+                ),
                 "p95_visited_all": analysis.get("p95_visited_all"),
-                "p95_visited_successful_only": analysis.get("p95_visited_successful_only"),
+                "p95_visited_successful_only": analysis.get(
+                    "p95_visited_successful_only"
+                ),
                 "visited_counts_all": analysis.get("visited_counts_all", []),
                 "visited_counts_successful_only": analysis.get(
                     "visited_counts_successful_only",
@@ -1060,9 +1038,9 @@ def extract_confusion_matrix_rows(per_example_df):
             recall = tp / (tp + fn)
 
         if precision + recall == 0:
-            f1_score = 0.0
+            f1_value = 0.0
         else:
-            f1_score = 2 * precision * recall / (precision + recall)
+            f1_value = 2 * precision * recall / (precision + recall)
 
         model_label = parse_model_label(model)
 
@@ -1077,7 +1055,7 @@ def extract_confusion_matrix_rows(per_example_df):
                 "fp": fp,
                 "tn": tn,
                 "accuracy": accuracy,
-                "f1_score": f1_score,
+                "f1_score": f1_value,
                 "precision": precision,
                 "recall": recall,
                 "sort_key": run_sort_key(model, dimension, algorithm),
@@ -1196,143 +1174,230 @@ def plot_confusion_matrices_grid(
 if __name__ == "__main__":
     args = parse_args()
     dataset_name = dataset_name_from_arg(args.dataset)
+    current_split = detect_split(dataset_name)
 
-    eval_results_path, visited_nodes_path, p95_source_dataset = build_input_paths(dataset_name)
+    eval_results_path, visited_nodes_path = build_input_paths(dataset_name)
     plot_root = build_plot_output_dir(dataset_name)
 
     ensure_directory(plot_root)
 
     print(f"Dataset: {dataset_name}")
+    print(f"Split: {current_split}")
     print(f"Evaluation results: {eval_results_path}")
-    print(f"P95 source dataset: {p95_source_dataset}")
     print(f"Visited nodes analysis: {visited_nodes_path}")
     print(f"Plot output dir: {plot_root}")
     print(f"Plot formats: {PLOT_FORMATS}")
 
-    eval_data = load_json(eval_results_path)
-
-    df = extract_semantic_data(eval_data)
-    baselines = extract_baselines(eval_data)
-    per_example_df = extract_per_example_rows(eval_data)
-
     # -------------------------------------------------------------------------
-    # Standard evaluation metric plots
+    # Standard evaluation plots from evaluation_results.json
+    #
+    # These plots are only possible when evaluation_results.json exists.
+    # This allows train-only visited-node analysis plots to be created even
+    # when train has no evaluation_results.json.
     # -------------------------------------------------------------------------
 
-    plot_metric_pair(
-        df=df,
-        baselines=baselines,
-        metric_key="avg_nodes_visited",
-        ylabel="Average Visited Nodes",
-        title="Average Visited Nodes (A*) vs Embedding Size",
-        plot_root=plot_root,
-        plot_type="nodes_visited",
-        filename="metric_nodes_visited.png",
-        y_min=0,
-    )
+    if eval_results_path.exists():
+        eval_data = load_json(eval_results_path)
 
-    plot_metric_pair(
-        df=df,
-        baselines=baselines,
-        metric_key="avg_time_sec",
-        ylabel="Average Time (seconds)",
-        title="Average Runtime (A*) vs Embedding Size",
-        plot_root=plot_root,
-        plot_type="execution_time",
-        filename="metric_time.png",
-        y_min=0,
-    )
+        df = extract_semantic_data(eval_data)
+        baselines = extract_baselines(eval_data)
+        per_example_df = extract_per_example_rows(eval_data)
 
-    plot_metric_pair(
-        df=df,
-        baselines=baselines,
-        metric_key="avg_path_length",
-        ylabel="Average Path Length",
-        title="Average Path Length (A*) vs Embedding Size",
-        plot_root=plot_root,
-        plot_type="path_length",
-        filename="metric_path_length.png",
-        y_min=0,
-    )
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key="avg_nodes_visited",
+            ylabel="Average Visited Nodes",
+            title="Average Visited Nodes (A*) vs Embedding Size",
+            plot_root=plot_root,
+            plot_type="nodes_visited",
+            filename="metric_nodes_visited.png",
+            y_min=0,
+        )
 
-    plot_metric_pair(
-        df=df,
-        baselines=baselines,
-        metric_key="accuracy",
-        ylabel="Accuracy",
-        title="Accuracy (A*) vs Embedding Size",
-        plot_root=plot_root,
-        plot_type="accuracy",
-        filename="metric_accuracy.png",
-        y_min=0,
-        y_max=1.05,
-    )
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key="avg_time_sec",
+            ylabel="Average Time (seconds)",
+            title="Average Runtime (A*) vs Embedding Size",
+            plot_root=plot_root,
+            plot_type="execution_time",
+            filename="metric_time.png",
+            y_min=0,
+        )
 
-    plot_metric_pair(
-        df=df,
-        baselines=baselines,
-        metric_key="f1_score",
-        ylabel="F1 Score",
-        title="F1 Score (A*) vs Embedding Size",
-        plot_root=plot_root,
-        plot_type="f1_score",
-        filename="metric_f1_score.png",
-        y_min=0,
-        y_max=1.05,
-    )
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key="avg_path_length",
+            ylabel="Average Path Length",
+            title="Average Path Length (A*) vs Embedding Size",
+            plot_root=plot_root,
+            plot_type="path_length",
+            filename="metric_path_length.png",
+            y_min=0,
+        )
 
-    plot_metric_pair(
-        df=df,
-        baselines=baselines,
-        metric_key="precision",
-        ylabel="Precision",
-        title="Precision (A*) vs Embedding Size",
-        plot_root=plot_root,
-        plot_type="precision",
-        filename="metric_precision.png",
-        y_min=0,
-        y_max=1.05,
-    )
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key="accuracy",
+            ylabel="Accuracy",
+            title="Accuracy (A*) vs Embedding Size",
+            plot_root=plot_root,
+            plot_type="accuracy",
+            filename="metric_accuracy.png",
+            y_min=0,
+            y_max=1.05,
+        )
 
-    plot_metric_pair(
-        df=df,
-        baselines=baselines,
-        metric_key="recall",
-        ylabel="Recall",
-        title="Recall (A*) vs Embedding Size",
-        plot_root=plot_root,
-        plot_type="recall",
-        filename="metric_recall.png",
-        y_min=0,
-        y_max=1.05,
-    )
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key="f1_score",
+            ylabel="F1 Score",
+            title="F1 Score (A*) vs Embedding Size",
+            plot_root=plot_root,
+            plot_type="f1_score",
+            filename="metric_f1_score.png",
+            y_min=0,
+            y_max=1.05,
+        )
 
-    plot_metric_pair(
-        df=df,
-        baselines=baselines,
-        metric_key="avg_path_cost",
-        ylabel="Average Path Cost",
-        title="Average Path Cost (A*) vs Embedding Size",
-        plot_root=plot_root,
-        plot_type="astar_path_cost",
-        filename="metric_astar_path_cost.png",
-        y_min=0,
-    )
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key="precision",
+            ylabel="Precision",
+            title="Precision (A*) vs Embedding Size",
+            plot_root=plot_root,
+            plot_type="precision",
+            filename="metric_precision.png",
+            y_min=0,
+            y_max=1.05,
+        )
 
-    plot_metric_pair(
-        df=df,
-        baselines=baselines,
-        metric_key="avg_cost_per_hop",
-        ylabel="Average Cost per Hop",
-        title="Average Cost per Hop (A*) vs Embedding Size",
-        plot_root=plot_root,
-        plot_type="astar_cost_per_hop",
-        filename="metric_astar_cost_per_hop.png",
-        y_min=0,
-    )
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key="recall",
+            ylabel="Recall",
+            title="Recall (A*) vs Embedding Size",
+            plot_root=plot_root,
+            plot_type="recall",
+            filename="metric_recall.png",
+            y_min=0,
+            y_max=1.05,
+        )
+
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key="avg_path_cost",
+            ylabel="Average Path Cost",
+            title="Average Path Cost (A*) vs Embedding Size",
+            plot_root=plot_root,
+            plot_type="astar_path_cost",
+            filename="metric_astar_path_cost.png",
+            y_min=0,
+        )
+
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key="avg_cost_per_hop",
+            ylabel="Average Cost per Hop",
+            title="Average Cost per Hop (A*) vs Embedding Size",
+            plot_root=plot_root,
+            plot_type="astar_cost_per_hop",
+            filename="metric_astar_cost_per_hop.png",
+            y_min=0,
+        )
+
+        # ---------------------------------------------------------------------
+        # Per-example histograms from current evaluation_results.json
+        # ---------------------------------------------------------------------
+
+        plot_per_example_histograms(
+            per_example_df,
+            "nodes_visited",
+            get_plot_path(plot_root, "histograms", "hist_nodes_visited.png"),
+            log_x=True,
+        )
+
+        plot_per_example_histograms(
+            per_example_df,
+            "path_length",
+            get_plot_path(plot_root, "histograms", "hist_path_length.png"),
+            log_x=False,
+        )
+
+        plot_per_example_histograms(
+            per_example_df,
+            "time_sec",
+            get_plot_path(plot_root, "histograms", "hist_time_sec.png"),
+            log_x=True,
+        )
+
+        # ---------------------------------------------------------------------
+        # Confusion matrices from current evaluation_results.json
+        # ---------------------------------------------------------------------
+
+        plot_confusion_matrices_grid(
+            per_example_df=per_example_df,
+            output_path=get_plot_path(
+                plot_root,
+                "confusion_matrices",
+                "confusion_matrices_all_runs.png",
+            ),
+            normalize=False,
+            best_dimension_only=False,
+        )
+
+        plot_confusion_matrices_grid(
+            per_example_df=per_example_df,
+            output_path=get_plot_path(
+                plot_root,
+                "confusion_matrices",
+                "confusion_matrices_all_runs_normalized.png",
+            ),
+            normalize=True,
+            best_dimension_only=False,
+        )
+
+        plot_confusion_matrices_grid(
+            per_example_df=per_example_df,
+            output_path=get_plot_path(
+                plot_root,
+                "confusion_matrices",
+                "confusion_matrices_best_dimension_per_model.png",
+            ),
+            normalize=False,
+            best_dimension_only=True,
+        )
+
+        plot_confusion_matrices_grid(
+            per_example_df=per_example_df,
+            output_path=get_plot_path(
+                plot_root,
+                "confusion_matrices",
+                "confusion_matrices_best_dimension_per_model_normalized.png",
+            ),
+            normalize=True,
+            best_dimension_only=True,
+        )
+
+    else:
+        print(
+            f"No evaluation results found at {eval_results_path}. "
+            "Skipping metric/histogram/confusion-matrix plots."
+        )
 
     # -------------------------------------------------------------------------
-    # P95 / visited-node analysis plots from previous split
+    # P95 / visited-node analysis plots from the current split only
+    #
+    # These plots are independent of evaluation_results.json.
     # -------------------------------------------------------------------------
 
     if visited_nodes_path.exists():
@@ -1344,7 +1409,7 @@ if __name__ == "__main__":
             output_path=get_plot_path(
                 plot_root,
                 "p95_visited_nodes",
-                f"p95_from_{p95_source_dataset}_successful_only_bar.png",
+                "p95_successful_only_bar.png",
             ),
             successful_only=True,
         )
@@ -1354,7 +1419,7 @@ if __name__ == "__main__":
             output_path=get_plot_path(
                 plot_root,
                 "p95_visited_nodes",
-                f"p95_from_{p95_source_dataset}_all_bar.png",
+                "p95_all_bar.png",
             ),
             successful_only=False,
         )
@@ -1364,7 +1429,7 @@ if __name__ == "__main__":
             output_path=get_plot_path(
                 plot_root,
                 "p95_visited_nodes",
-                f"p95_from_{p95_source_dataset}_successful_only_vs_dimension.png",
+                "p95_successful_only_vs_dimension.png",
             ),
             successful_only=True,
         )
@@ -1374,7 +1439,7 @@ if __name__ == "__main__":
             output_path=get_plot_path(
                 plot_root,
                 "visited_node_distributions",
-                f"distribution_from_{p95_source_dataset}_successful_only_grid.png",
+                "distribution_successful_only_grid.png",
             ),
             successful_only=True,
         )
@@ -1384,84 +1449,15 @@ if __name__ == "__main__":
             output_path=get_plot_path(
                 plot_root,
                 "visited_node_distributions",
-                f"distribution_from_{p95_source_dataset}_all_grid.png",
+                "distribution_all_grid.png",
             ),
             successful_only=False,
         )
+
     else:
-        print(f"No visited nodes analysis found at {visited_nodes_path}. Skipping p95 plots.")
+        print(
+            f"No visited nodes analysis found at {visited_nodes_path}. "
+            "Skipping p95/distribution plots for this split."
+        )
 
-    # -------------------------------------------------------------------------
-    # Per-example histograms from current evaluation_results.json
-    # -------------------------------------------------------------------------
-
-    plot_per_example_histograms(
-        per_example_df,
-        "nodes_visited",
-        get_plot_path(plot_root, "histograms", "hist_nodes_visited.png"),
-        log_x=True,
-    )
-
-    plot_per_example_histograms(
-        per_example_df,
-        "path_length",
-        get_plot_path(plot_root, "histograms", "hist_path_length.png"),
-        log_x=False,
-    )
-
-    plot_per_example_histograms(
-        per_example_df,
-        "time_sec",
-        get_plot_path(plot_root, "histograms", "hist_time_sec.png"),
-        log_x=True,
-    )
-
-    # -------------------------------------------------------------------------
-    # Confusion matrices from current evaluation_results.json
-    # -------------------------------------------------------------------------
-
-    plot_confusion_matrices_grid(
-        per_example_df=per_example_df,
-        output_path=get_plot_path(
-            plot_root,
-            "confusion_matrices",
-            "confusion_matrices_all_runs.png",
-        ),
-        normalize=False,
-        best_dimension_only=False,
-    )
-
-    plot_confusion_matrices_grid(
-        per_example_df=per_example_df,
-        output_path=get_plot_path(
-            plot_root,
-            "confusion_matrices",
-            "confusion_matrices_all_runs_normalized.png",
-        ),
-        normalize=True,
-        best_dimension_only=False,
-    )
-
-    plot_confusion_matrices_grid(
-        per_example_df=per_example_df,
-        output_path=get_plot_path(
-            plot_root,
-            "confusion_matrices",
-            "confusion_matrices_best_dimension_per_model.png",
-        ),
-        normalize=False,
-        best_dimension_only=True,
-    )
-
-    plot_confusion_matrices_grid(
-        per_example_df=per_example_df,
-        output_path=get_plot_path(
-            plot_root,
-            "confusion_matrices",
-            "confusion_matrices_best_dimension_per_model_normalized.png",
-        ),
-        normalize=True,
-        best_dimension_only=True,
-    )
-
-    print("\nAll plots created.")
+    print("\nAll available plots created.")
