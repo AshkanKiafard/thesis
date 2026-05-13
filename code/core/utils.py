@@ -1,12 +1,11 @@
-import json
-from pathlib import Path
-from typing import Callable
-
 import bz2
-import networkx as nx
+import json
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Tuple
+from pathlib import Path
+from typing import Callable, Dict, List, Tuple
+
+import networkx as nx
 
 from core.constants import ActivationFunc, DistanceMetric
 from core.embeddings import STEmbedder
