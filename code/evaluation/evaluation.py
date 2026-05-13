@@ -19,7 +19,7 @@ from sklearn.metrics import (
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.utils import get_model_distance_metric, get_matryoshka_dims, load_graph, traverse_graph
-from evaluation.select_best_model import select_best_astar_model
+from evaluation.select_best_model import select_best_astar_model, print_selection
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 
@@ -478,7 +478,17 @@ if __name__ == "__main__":
     selected_test_model = None
 
     if current_split == "test":
-        selected_test_model = select_best_astar_model(dataset_name)
+        valid_dataset_name = dataset_name.replace("test", "valid")
+        valid_results_file = (
+                Path("data/evaluation")
+                / valid_dataset_name
+                / "evaluation_results.json"
+        )
+
+        selection = select_best_astar_model(valid_results_file)
+        print_selection(selection)
+
+        selected_test_model = selection["best"]
 
         print("\nTest split detected.")
         print("Ignoring full model queue for A*.")
