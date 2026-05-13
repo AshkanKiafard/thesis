@@ -19,6 +19,7 @@ from sklearn.metrics import (
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.utils import get_model_distance_metric, get_matryoshka_dims, load_graph, traverse_graph
+from evaluation.select_best_model import select_best_astar_model
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 
@@ -474,6 +475,15 @@ if __name__ == "__main__":
     print(f"Current evaluation dataset: {dataset_name}")
     print(f"Current split: {current_split}")
 
+    selected_test_model = None
+
+    if current_split == "test":
+        selected_test_model = select_best_astar_model(dataset_name)
+
+        print("\nTest split detected.")
+        print("Ignoring full model queue for A*.")
+        print("Only evaluating validation-selected model and dimension.")
+
     # -------------------------------------------------------------------------
     # Load p95 caps from the previous split.
     #
@@ -575,9 +585,22 @@ if __name__ == "__main__":
     existing_results = load_results_file(output_json_file)
 
     # -------------------------------------------------------------------------
-    # A* only, no Dijkstra anymore
+    # valid evaluation:
+    # - evaluate all queued base/fine-tuned models
+    # - evaluate all Matryoshka dimensions
+    #
+    # test evaluation:
+    # - ignore the full model queue
+    # - evaluate only the model/dimension selected from validation
     # -------------------------------------------------------------------------
-    for model_path in model_queue:
+    if current_split == "test":
+        astar_model_queue = [selected_test_model["model_path"]]
+        selected_test_dimension = selected_test_model["dimension"]
+    else:
+        astar_model_queue = model_queue
+        selected_test_dimension = None
+
+    for model_path in astar_model_queue:
         model_name = model_path.split("/")[-1]
 
         print(f"\nEVALUATING: {model_path}")
@@ -591,7 +614,11 @@ if __name__ == "__main__":
             )
 
             full_dim = main_embeder.get_model_dim()
-            dims = get_matryoshka_dims(full_dim)
+
+            if current_split == "test":
+                dims = [selected_test_dimension]
+            else:
+                dims = get_matryoshka_dims(full_dim)
 
             for dim in dims:
                 existing_results = load_results_file(output_json_file)

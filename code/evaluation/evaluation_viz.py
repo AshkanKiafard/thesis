@@ -13,6 +13,11 @@ import pandas as pd
 
 PLOT_OUTPUT_DIR = "data/plots"
 
+# Save vector plots for thesis.
+# "pdf" is best for LaTeX. Add "png" too if you want preview images.
+PLOT_FORMATS = ["pdf"]
+PNG_DPI = 300
+
 BASE_MODEL_LABELS = {
     "all-mpnet-base-v2": "MPNet Base",
     "bge-large-en-v1.5": "BGE Large Base",
@@ -107,7 +112,28 @@ def ensure_directory(path):
 def get_plot_path(plot_root, plot_type, filename):
     plot_dir = Path(plot_root) / plot_type
     ensure_directory(plot_dir)
-    return plot_dir / filename
+
+    # Keep caller filenames unchanged, but remove raster suffix internally.
+    # save_plot() will add the final suffix from PLOT_FORMATS.
+    return plot_dir / Path(filename).stem
+
+
+def save_plot(fig, output_path):
+    output_path = Path(output_path)
+
+    saved_paths = []
+
+    for fmt in PLOT_FORMATS:
+        final_path = output_path.with_suffix(f".{fmt}")
+
+        if fmt == "png":
+            fig.savefig(final_path, bbox_inches="tight", dpi=PNG_DPI)
+        else:
+            fig.savefig(final_path, bbox_inches="tight")
+
+        saved_paths.append(str(final_path))
+
+    print(f"Saved plot: {', '.join(saved_paths)}")
 
 
 def load_json(path):
@@ -268,6 +294,40 @@ def model_sort_key(model_name):
     )
 
 
+def dimension_sort_value(dimension):
+    if pd.isna(dimension):
+        return -1
+
+    return int(dimension)
+
+
+def build_run_id(model, dimension, algorithm):
+    if pd.isna(dimension):
+        return f"{model}__{algorithm}"
+
+    return f"{model}__dim{int(dimension)}__{algorithm}"
+
+
+def build_run_label(model_label, dimension=None, algorithm=None):
+    label = model_label
+
+    if dimension is not None and pd.notna(dimension):
+        label = f"{label}\nDim {int(dimension)}"
+
+    if algorithm is not None and algorithm != "A*":
+        label = f"{label}\n{algorithm}"
+
+    return label
+
+
+def run_sort_key(model, dimension, algorithm):
+    return (
+        model_sort_key(model),
+        dimension_sort_value(dimension),
+        algorithm or "",
+    )
+
+
 # -------------------------------------------------------------------------
 # Evaluation extraction
 # -------------------------------------------------------------------------
@@ -374,6 +434,7 @@ def extract_per_example_rows(eval_data):
                         "model_label": parse_model_label(model),
                         "dimension": dimension,
                         "algorithm": algorithm,
+                        "run_id": build_run_id(model, dimension, algorithm),
                         "id": row.get("id"),
                         "true": row.get("true"),
                         "pred": row.get("pred"),
@@ -385,7 +446,21 @@ def extract_per_example_rows(eval_data):
                     }
                 )
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+
+    if not df.empty:
+        df["sort_key"] = df.apply(
+            lambda row: run_sort_key(
+                row["model"],
+                row["dimension"],
+                row["algorithm"],
+            ),
+            axis=1,
+        )
+        df = df.sort_values(["sort_key", "id"]).drop(columns=["sort_key"])
+        df = df.reset_index(drop=True)
+
+    return df
 
 
 # -------------------------------------------------------------------------
@@ -501,10 +576,47 @@ def plot_metric_vs_dimension(
 
     ax.legend(fontsize=8)
     plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight")
-    plt.close()
+    save_plot(fig, output_path)
+    plt.close(fig)
 
-    print(f"Saved plot: {output_path}")
+
+def plot_metric_pair(
+    df,
+    baselines,
+    metric_key,
+    ylabel,
+    title,
+    plot_root,
+    plot_type,
+    filename,
+    y_min=None,
+    y_max=None,
+):
+    plot_metric_vs_dimension(
+        df=df,
+        baselines=baselines,
+        metric_key=metric_key,
+        ylabel=ylabel,
+        title=title,
+        output_path=get_plot_path(plot_root, plot_type, filename),
+        zoom=False,
+        y_min=y_min,
+        y_max=y_max,
+    )
+
+    plot_metric_vs_dimension(
+        df=df,
+        baselines=baselines,
+        metric_key=metric_key,
+        ylabel=ylabel,
+        title=title,
+        output_path=get_plot_path(
+            plot_root,
+            plot_type,
+            f"{Path(filename).stem}_zoom.png",
+        ),
+        zoom=True,
+    )
 
 
 # -------------------------------------------------------------------------
@@ -557,9 +669,16 @@ def extract_p95_data(visited_nodes_data):
     df = pd.DataFrame(rows)
 
     if not df.empty:
-        df["sort_key"] = df["model"].map(model_sort_key)
-        df = df.sort_values(["sort_key", "dimension"], na_position="first")
-        df = df.drop(columns=["sort_key"]).reset_index(drop=True)
+        df["sort_key"] = df.apply(
+            lambda row: run_sort_key(
+                row["model"],
+                row["dimension"],
+                row["algorithm"],
+            ),
+            axis=1,
+        )
+        df = df.sort_values(["sort_key"]).drop(columns=["sort_key"])
+        df = df.reset_index(drop=True)
 
     return df
 
@@ -605,10 +724,8 @@ def plot_p95_bar_chart(p95_df, output_path, successful_only=True):
     ax.grid(True, axis="y", alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight")
-    plt.close()
-
-    print(f"Saved p95 bar chart: {output_path}")
+    save_plot(fig, output_path)
+    plt.close(fig)
 
 
 def plot_p95_vs_dimension(p95_df, output_path, successful_only=True):
@@ -648,10 +765,8 @@ def plot_p95_vs_dimension(p95_df, output_path, successful_only=True):
     ax.legend(fontsize=8)
 
     plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight")
-    plt.close()
-
-    print(f"Saved p95-vs-dimension plot: {output_path}")
+    save_plot(fig, output_path)
+    plt.close(fig)
 
 
 def plot_visited_distributions_grid(
@@ -762,24 +877,58 @@ def plot_visited_distributions_grid(
     )
 
     plt.tight_layout(rect=[0, 0, 1, 0.97])
-    plt.savefig(output_path, bbox_inches="tight")
-    plt.close()
-
-    print(f"Saved visited distribution grid: {output_path}")
+    save_plot(fig, output_path)
+    plt.close(fig)
 
 
 # -------------------------------------------------------------------------
 # Per-example histogram plots from evaluation_results.json
 # -------------------------------------------------------------------------
 
+def get_per_example_run_groups(per_example_df):
+    if per_example_df.empty:
+        return []
+
+    groups = []
+
+    group_cols = ["model", "dimension", "algorithm"]
+
+    for (model, dimension, algorithm), subset in per_example_df.groupby(
+        group_cols,
+        dropna=False,
+    ):
+        model_label = subset["model_label"].iloc[0]
+        title = build_run_label(model_label, dimension, algorithm)
+
+        groups.append(
+            {
+                "model": model,
+                "dimension": dimension,
+                "algorithm": algorithm,
+                "model_label": model_label,
+                "title": title,
+                "subset": subset,
+                "sort_key": run_sort_key(model, dimension, algorithm),
+            }
+        )
+
+    groups = sorted(groups, key=lambda item: item["sort_key"])
+
+    return groups
+
+
 def plot_per_example_histograms(per_example_df, value_col, output_path, log_x=False):
     if per_example_df.empty or value_col not in per_example_df.columns:
         print(f"No data for {value_col}. Skipping.")
         return
 
-    models = sorted(per_example_df["model"].unique(), key=model_sort_key)
+    groups = get_per_example_run_groups(per_example_df)
 
-    n = len(models)
+    if not groups:
+        print(f"No grouped per-example data for {value_col}. Skipping.")
+        return
+
+    n = len(groups)
     n_cols = min(3, n)
     n_rows = math.ceil(n / n_cols)
 
@@ -791,9 +940,8 @@ def plot_per_example_histograms(per_example_df, value_col, output_path, log_x=Fa
 
     axes = np.array(axes).flatten()
 
-    for ax, model in zip(axes, models):
-        subset = per_example_df[per_example_df["model"] == model]
-        values = subset[value_col].dropna()
+    for ax, group in zip(axes, groups):
+        values = group["subset"][value_col].dropna()
 
         if values.empty:
             ax.axis("off")
@@ -810,19 +958,235 @@ def plot_per_example_histograms(per_example_df, value_col, output_path, log_x=Fa
         if log_x:
             ax.set_xscale("log")
 
-        ax.set_title(parse_model_label(model))
+        ax.set_title(group["title"], fontsize=9)
         ax.set_xlabel(value_col)
         ax.set_ylabel("Frequency")
         ax.grid(True, alpha=0.3)
 
-    for ax in axes[len(models):]:
+    for ax in axes[len(groups):]:
         ax.axis("off")
 
     plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight")
-    plt.close()
+    save_plot(fig, output_path)
+    plt.close(fig)
 
-    print(f"Saved histogram: {output_path}")
+
+# -------------------------------------------------------------------------
+# Confusion matrix plots from evaluation_results.json
+# -------------------------------------------------------------------------
+
+def format_confusion_value(value, total=None, normalize=False):
+    if not normalize or total is None or total == 0:
+        return str(int(value))
+
+    percent = 100.0 * value / total
+    return f"{int(value)}\n({percent:.1f}%)"
+
+
+def compute_confusion_counts(subset):
+    true_values = subset["true"].astype(bool)
+    pred_values = subset["pred"].astype(bool)
+
+    tp = int(((true_values == True) & (pred_values == True)).sum())
+    fn = int(((true_values == True) & (pred_values == False)).sum())
+    fp = int(((true_values == False) & (pred_values == True)).sum())
+    tn = int(((true_values == False) & (pred_values == False)).sum())
+
+    return tp, fn, fp, tn
+
+
+def plot_single_confusion_matrix(ax, matrix, title, normalize=False):
+    im = ax.imshow(matrix)
+
+    ax.set_title(title, fontsize=9)
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(["Pred False", "Pred True"])
+    ax.set_yticklabels(["True False", "True True"])
+
+    total = matrix.sum()
+
+    for i in range(2):
+        for j in range(2):
+            ax.text(
+                j,
+                i,
+                format_confusion_value(matrix[i, j], total, normalize),
+                ha="center",
+                va="center",
+                fontsize=9,
+            )
+
+    ax.set_xlabel("Prediction")
+    ax.set_ylabel("Ground Truth")
+
+    return im
+
+
+def extract_confusion_matrix_rows(per_example_df):
+    rows = []
+
+    if per_example_df.empty:
+        return pd.DataFrame(rows)
+
+    required_cols = {"model", "dimension", "algorithm", "true", "pred"}
+    missing_cols = required_cols - set(per_example_df.columns)
+
+    if missing_cols:
+        print(f"Missing columns for confusion matrices: {missing_cols}.")
+        return pd.DataFrame(rows)
+
+    df = per_example_df.copy()
+    df = df[df["true"].notna() & df["pred"].notna()]
+
+    if df.empty:
+        return pd.DataFrame(rows)
+
+    group_cols = ["model", "dimension", "algorithm"]
+
+    for (model, dimension, algorithm), subset in df.groupby(group_cols, dropna=False):
+        tp, fn, fp, tn = compute_confusion_counts(subset)
+
+        accuracy = (tp + tn) / max(tp + fn + fp + tn, 1)
+
+        if tp + fp == 0:
+            precision = 0.0
+        else:
+            precision = tp / (tp + fp)
+
+        if tp + fn == 0:
+            recall = 0.0
+        else:
+            recall = tp / (tp + fn)
+
+        if precision + recall == 0:
+            f1_score = 0.0
+        else:
+            f1_score = 2 * precision * recall / (precision + recall)
+
+        model_label = parse_model_label(model)
+
+        rows.append(
+            {
+                "model": model,
+                "model_label": model_label,
+                "dimension": dimension,
+                "algorithm": algorithm,
+                "tp": tp,
+                "fn": fn,
+                "fp": fp,
+                "tn": tn,
+                "accuracy": accuracy,
+                "f1_score": f1_score,
+                "precision": precision,
+                "recall": recall,
+                "sort_key": run_sort_key(model, dimension, algorithm),
+            }
+        )
+
+    matrix_df = pd.DataFrame(rows)
+
+    if not matrix_df.empty:
+        matrix_df = matrix_df.sort_values(["sort_key"]).drop(columns=["sort_key"])
+        matrix_df = matrix_df.reset_index(drop=True)
+
+    return matrix_df
+
+
+def select_best_dimension_per_model(matrix_df):
+    selected_rows = []
+
+    for model in sorted(matrix_df["model"].unique(), key=model_sort_key):
+        subset = matrix_df[matrix_df["model"] == model].copy()
+        subset = subset.sort_values(
+            ["f1_score", "accuracy", "dimension"],
+            ascending=[False, False, True],
+            na_position="first",
+        )
+        selected_rows.append(subset.iloc[0])
+
+    return pd.DataFrame(selected_rows).reset_index(drop=True)
+
+
+def plot_confusion_matrices_grid(
+    per_example_df,
+    output_path,
+    normalize=False,
+    best_dimension_only=False,
+):
+    matrix_df = extract_confusion_matrix_rows(per_example_df)
+
+    if matrix_df.empty:
+        print("No confusion matrix rows created. Skipping.")
+        return
+
+    if best_dimension_only:
+        matrix_df = select_best_dimension_per_model(matrix_df)
+
+    n = len(matrix_df)
+    n_cols = min(4, n)
+    n_rows = math.ceil(n / n_cols)
+
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(4.2 * n_cols, 4.0 * n_rows),
+        constrained_layout=True,
+    )
+
+    axes = np.array(axes).flatten()
+
+    last_im = None
+
+    for ax, (_, row) in zip(axes, matrix_df.iterrows()):
+        # Matrix layout:
+        #
+        #              Pred False    Pred True
+        # True False       TN            FP
+        # True True        FN            TP
+        #
+        matrix = np.array(
+            [
+                [row["tn"], row["fp"]],
+                [row["fn"], row["tp"]],
+            ]
+        )
+
+        title = build_run_label(
+            row["model_label"],
+            row["dimension"],
+            row["algorithm"],
+        )
+        title = f"{title}\nF1={row['f1_score']:.3f}, Acc={row['accuracy']:.3f}"
+
+        last_im = plot_single_confusion_matrix(
+            ax=ax,
+            matrix=matrix,
+            title=title,
+            normalize=normalize,
+        )
+
+    for ax in axes[len(matrix_df):]:
+        ax.axis("off")
+
+    title_suffix = "Best Dimension per Model" if best_dimension_only else "All Runs"
+    norm_suffix = "Normalized" if normalize else "Counts"
+
+    fig.suptitle(
+        f"Confusion Matrices — {title_suffix} — {norm_suffix}",
+        fontsize=16,
+        fontweight="bold",
+    )
+
+    if last_im is not None:
+        fig.colorbar(
+            last_im,
+            ax=axes[:len(matrix_df)].tolist(),
+            shrink=0.75,
+        )
+
+    save_plot(fig, output_path)
+    plt.close(fig)
 
 
 # -------------------------------------------------------------------------
@@ -843,6 +1207,7 @@ if __name__ == "__main__":
     print(f"P95 source dataset: {p95_source_dataset}")
     print(f"Visited nodes analysis: {visited_nodes_path}")
     print(f"Plot output dir: {plot_root}")
+    print(f"Plot formats: {PLOT_FORMATS}")
 
     eval_data = load_json(eval_results_path)
 
@@ -854,156 +1219,115 @@ if __name__ == "__main__":
     # Standard evaluation metric plots
     # -------------------------------------------------------------------------
 
-    plot_metric_vs_dimension(
+    plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key="avg_nodes_visited",
         ylabel="Average Visited Nodes",
         title="Average Visited Nodes (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "nodes_visited", "metric_nodes_visited.png"),
-        zoom=False,
+        plot_root=plot_root,
+        plot_type="nodes_visited",
+        filename="metric_nodes_visited.png",
         y_min=0,
     )
 
-    plot_metric_vs_dimension(
-        df=df,
-        baselines=baselines,
-        metric_key="avg_nodes_visited",
-        ylabel="Average Visited Nodes",
-        title="Average Visited Nodes (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "nodes_visited", "metric_nodes_visited_zoom.png"),
-        zoom=True,
-    )
-
-    plot_metric_vs_dimension(
+    plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key="avg_time_sec",
         ylabel="Average Time (seconds)",
         title="Average Runtime (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "execution_time", "metric_time.png"),
-        zoom=False,
+        plot_root=plot_root,
+        plot_type="execution_time",
+        filename="metric_time.png",
         y_min=0,
     )
 
-    plot_metric_vs_dimension(
-        df=df,
-        baselines=baselines,
-        metric_key="avg_time_sec",
-        ylabel="Average Time (seconds)",
-        title="Average Runtime (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "execution_time", "metric_time_zoom.png"),
-        zoom=True,
-    )
-
-    plot_metric_vs_dimension(
+    plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key="avg_path_length",
         ylabel="Average Path Length",
         title="Average Path Length (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "path_length", "metric_path_length.png"),
-        zoom=False,
+        plot_root=plot_root,
+        plot_type="path_length",
+        filename="metric_path_length.png",
         y_min=0,
     )
 
-    plot_metric_vs_dimension(
-        df=df,
-        baselines=baselines,
-        metric_key="avg_path_length",
-        ylabel="Average Path Length",
-        title="Average Path Length (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "path_length", "metric_path_length_zoom.png"),
-        zoom=True,
-    )
-
-    plot_metric_vs_dimension(
+    plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key="accuracy",
         ylabel="Accuracy",
         title="Accuracy (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "accuracy", "metric_accuracy.png"),
-        zoom=False,
+        plot_root=plot_root,
+        plot_type="accuracy",
+        filename="metric_accuracy.png",
         y_min=0,
         y_max=1.05,
     )
 
-    plot_metric_vs_dimension(
-        df=df,
-        baselines=baselines,
-        metric_key="accuracy",
-        ylabel="Accuracy",
-        title="Accuracy (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "accuracy", "metric_accuracy_zoom.png"),
-        zoom=True,
-    )
-
-    plot_metric_vs_dimension(
+    plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key="f1_score",
         ylabel="F1 Score",
         title="F1 Score (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "f1_score", "metric_f1_score.png"),
-        zoom=False,
+        plot_root=plot_root,
+        plot_type="f1_score",
+        filename="metric_f1_score.png",
         y_min=0,
         y_max=1.05,
     )
 
-    plot_metric_vs_dimension(
-        df=df,
-        baselines=baselines,
-        metric_key="f1_score",
-        ylabel="F1 Score",
-        title="F1 Score (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "f1_score", "metric_f1_score_zoom.png"),
-        zoom=True,
-    )
-
-    plot_metric_vs_dimension(
+    plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key="precision",
         ylabel="Precision",
         title="Precision (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "precision", "metric_precision.png"),
-        zoom=False,
+        plot_root=plot_root,
+        plot_type="precision",
+        filename="metric_precision.png",
         y_min=0,
         y_max=1.05,
     )
 
-    plot_metric_vs_dimension(
+    plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key="recall",
         ylabel="Recall",
         title="Recall (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "recall", "metric_recall.png"),
-        zoom=False,
+        plot_root=plot_root,
+        plot_type="recall",
+        filename="metric_recall.png",
         y_min=0,
         y_max=1.05,
     )
 
-    plot_metric_vs_dimension(
+    plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key="avg_path_cost",
         ylabel="Average Path Cost",
         title="Average Path Cost (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "astar_path_cost", "metric_astar_path_cost.png"),
-        zoom=False,
+        plot_root=plot_root,
+        plot_type="astar_path_cost",
+        filename="metric_astar_path_cost.png",
         y_min=0,
     )
 
-    plot_metric_vs_dimension(
+    plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key="avg_cost_per_hop",
         ylabel="Average Cost per Hop",
         title="Average Cost per Hop (A*) vs Embedding Size",
-        output_path=get_plot_path(plot_root, "astar_cost_per_hop", "metric_astar_cost_per_hop.png"),
-        zoom=False,
+        plot_root=plot_root,
+        plot_type="astar_cost_per_hop",
+        filename="metric_astar_cost_per_hop.png",
         y_min=0,
     )
 
@@ -1090,6 +1414,54 @@ if __name__ == "__main__":
         "time_sec",
         get_plot_path(plot_root, "histograms", "hist_time_sec.png"),
         log_x=True,
+    )
+
+    # -------------------------------------------------------------------------
+    # Confusion matrices from current evaluation_results.json
+    # -------------------------------------------------------------------------
+
+    plot_confusion_matrices_grid(
+        per_example_df=per_example_df,
+        output_path=get_plot_path(
+            plot_root,
+            "confusion_matrices",
+            "confusion_matrices_all_runs.png",
+        ),
+        normalize=False,
+        best_dimension_only=False,
+    )
+
+    plot_confusion_matrices_grid(
+        per_example_df=per_example_df,
+        output_path=get_plot_path(
+            plot_root,
+            "confusion_matrices",
+            "confusion_matrices_all_runs_normalized.png",
+        ),
+        normalize=True,
+        best_dimension_only=False,
+    )
+
+    plot_confusion_matrices_grid(
+        per_example_df=per_example_df,
+        output_path=get_plot_path(
+            plot_root,
+            "confusion_matrices",
+            "confusion_matrices_best_dimension_per_model.png",
+        ),
+        normalize=False,
+        best_dimension_only=True,
+    )
+
+    plot_confusion_matrices_grid(
+        per_example_df=per_example_df,
+        output_path=get_plot_path(
+            plot_root,
+            "confusion_matrices",
+            "confusion_matrices_best_dimension_per_model_normalized.png",
+        ),
+        normalize=True,
+        best_dimension_only=True,
     )
 
     print("\nAll plots created.")
