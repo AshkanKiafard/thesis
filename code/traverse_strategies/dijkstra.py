@@ -17,14 +17,15 @@ def dijkstra_traverse(
     if config is None:
         config = {}
 
-    max_visits = config.get('dijkstra_max_visits', -1)
+    max_visits = config.get("dijkstra_max_visits", -1)
 
     # Priority queue entries are:
     # (current_distance, current_node, path_so_far)
     open_set = [(0, start_node, [start_node])]
 
-    # Reset visited flags before each traversal.
-    nx.set_node_attributes(graph, False, "visited")
+    # Local closed set.
+    # Faster than writing "visited" metadata into the NetworkX graph.
+    visited = set()
     visited_count = 0
 
     # Best known distance from the start node to each node.
@@ -38,10 +39,10 @@ def dijkstra_traverse(
             return path, visited_count
 
         # Skip nodes that were already finalized.
-        if graph.nodes[current_node]["visited"]:
+        if current_node in visited:
             continue
 
-        nx.set_node_attributes(graph, {current_node: {"visited": True}})
+        visited.add(current_node)
         visited_count += 1
 
         # Optional limit used during evaluation to prevent extremely expensive runs.
@@ -51,7 +52,7 @@ def dijkstra_traverse(
         current_node_embed = embeder.embed(current_node)
 
         for successor in graph.successors(current_node):
-            if graph.nodes[successor]["visited"]:
+            if successor in visited:
                 continue
 
             successor_embed = embeder.embed(successor)

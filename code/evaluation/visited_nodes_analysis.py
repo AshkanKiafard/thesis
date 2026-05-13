@@ -10,7 +10,7 @@ import torch
 
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from core.utils import load_graph, traverse_graph, get_model_distance_metric
+from core.utils import traverse_graph, get_model_distance_metric, load_causal_graph, load_rl_graph
 
 # -------------------------------------------------------------------------
 # Global paths
@@ -158,13 +158,21 @@ def run_visited_nodes_loop(
 
         start_time = time.time()
 
+        strategy_config = config
+        if strategy_name == "RL":
+            strategy_config = dict(config) if config is not None else {}
+            strategy_config["question"] = item.get(
+                "question",
+                f"can {cause} cause {effect}?"
+            )
+
         path, visited_nodes = traverse_graph(
             graph,
             cause,
             effect,
             embeder,
             strategy,
-            config,
+            strategy_config,
         )
 
         end_time = time.time()
@@ -248,10 +256,11 @@ if __name__ == "__main__":
     # RL still needs these parameters
     RL_ANALYSIS_CONFIG = {
         "rl_model_path": "data/models/rl/msmarco_evaluation_state_dict.pt",
-        "rl_beam_width": 5,
-        "rl_max_path_len": -1,
+        "rl_beam_width": 50,
+        "rl_max_path_len": 2,
+        "rl_max_actions": 5000,
+        "rl_max_visits": -1,
     }
-
     dataset_name, split, output_dir, output_json_file = build_output_paths(
         dataset_path
     )
@@ -264,8 +273,9 @@ if __name__ == "__main__":
     with open(dataset_path, encoding="utf-8") as file:
         data = json.load(file)
 
-    print("Loading graph...")
-    causal_graph = load_graph(GRAPH_PATH)
+    print("Loading graphs...")
+    causal_graph = load_causal_graph(GRAPH_PATH)
+    rl_graph = load_rl_graph(GRAPH_PATH)
 
     existing_results = load_results_file(output_json_file)
 
@@ -313,7 +323,7 @@ if __name__ == "__main__":
 
             rl_result = run_visited_nodes_loop(
                 data=data,
-                graph=causal_graph,
+                graph=rl_graph,
                 embeder=rl_embeder,
                 strategy=ts.rl_traverse,
                 strategy_name="RL",

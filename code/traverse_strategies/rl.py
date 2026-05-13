@@ -1,14 +1,16 @@
-from typing import List, Tuple, Any, Dict
+from typing import List, Tuple, Any, Dict, Optional
 from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
-import networkx as nx
 
 from core.rl_model import LSTMActorCriticAgent
 
 # Use GPU if available, otherwise run on CPU.
-DEVICE = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+DEVICE = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
+# Avoid reloading the RL checkpoint for every evaluated question.
+_RL_MODEL_CACHE = {}
 
 
 @dataclass
@@ -22,138 +24,267 @@ class BeamCandidate:
     # LSTM hidden state associated with this candidate.
     lstm_state: Any
 
-    # Nodes already visited by this candidate to avoid cycles.
-    visited: set
+    # Index of the previous beam item.
+    # Kept for compatibility with the original beam-search structure.
+    prev_id: Optional[int] = 0
 
 
-def rl_traverse(
-    graph: nx.DiGraph,
-    start_node: str,
-    end_node: str,
-    embeder: Any,
-    config: Dict[str, Any] = None
-) -> Tuple[List[Any], int]:
-    # Optional runtime config for model path and search constraints.
-    if config is None:
-        config = {}
-
-    model_path = config.get('rl_model_path', "data/models/rl/msmarco_evaluation_state_dict.pt")
-    beam_width = config.get('rl_beam_width', 5)
-    max_path_len = config.get('rl_max_path_len', -1)
-    max_visits = config.get('rl_max_visits', -1)
+def _load_rl_model(model_path: str) -> LSTMActorCriticAgent:
+    if model_path in _RL_MODEL_CACHE:
+        return _RL_MODEL_CACHE[model_path]
 
     # Recreate the RL policy/value model and load pretrained weights.
     model = LSTMActorCriticAgent(
         input_dim=600,
         output_dim=600,
         hidden_dim_mlp=2048,
-        hidden_dim_lstm=1024
+        hidden_dim_lstm=1024,
     )
 
-    state_dict = torch.load(model_path, map_location=DEVICE, weights_only=True)
+    try:
+        state_dict = torch.load(model_path, map_location=DEVICE, weights_only=True)
+    except TypeError:
+        # Older PyTorch versions do not support weights_only.
+        state_dict = torch.load(model_path, map_location=DEVICE)
+
     model.load_state_dict(state_dict)
     model.to(DEVICE)
     model.eval()
 
+    _RL_MODEL_CACHE[model_path] = model
+    return model
+
+
+def _edge_sentence(graph: Any, current_node: str, neighbor: str) -> str:
+    data = graph.get_edge_data(current_node, neighbor, default={})
+    sentence = data.get("sentence", "")
+
+    if sentence:
+        return sentence
+
+    # Fallback if no sentence was stored.
+    return f"{current_node} can cause {neighbor}"
+
+
+def _build_observation(question_text: str, current_node: str, embeder: Any) -> torch.Tensor:
+    # Original EnvironmentTorch:
+    # current_question_emb = question.embedding
+    # current_node_emb = graph.entity_embeddings[node]
+    # observation = [question_embedding, current_node_embedding]
+    question_emb = torch.tensor(
+        embeder.embed_question(question_text),
+        device=DEVICE,
+        dtype=torch.float32,
+    )
+
+    current_emb = torch.tensor(
+        embeder.embed_entity(current_node),
+        device=DEVICE,
+        dtype=torch.float32,
+    )
+
+    if question_emb.numel() != 300 or current_emb.numel() != 300:
+        raise ValueError(
+            f"RL Agent requires 300-dim GloVe embeddings. "
+            f"Got question={question_emb.numel()}, entity={current_emb.numel()}."
+        )
+
+    return torch.cat([question_emb, current_emb], dim=0).view(1, 1, -1)
+
+
+def _build_action_tensor(
+    graph: Any,
+    current_node: str,
+    neighbors: List[str],
+    embeder: Any,
+    max_actions: int,
+) -> Tuple[torch.Tensor, List[str]]:
+    # Original environment always inserts the stop action at index 0.
+    #
+    # In the original code, stop_action is a real artificial entity:
+    #     "stop stop action"
+    #
+    # During decoding, if the selected entity is stop_action, the path appends
+    # the current node again. So here we score stop using the stop-action
+    # embedding, but map it back to current_node as the next path label.
+    action_vectors = []
+    path_labels = []
+
+    stop_relation_emb = torch.tensor(
+        embeder.embed_relation("stop"),
+        device=DEVICE,
+        dtype=torch.float32,
+    )
+    stop_entity_emb = torch.tensor(
+        embeder.embed_entity("stop stop action"),
+        device=DEVICE,
+        dtype=torch.float32,
+    )
+
+    action_vectors.append(torch.cat([stop_relation_emb, stop_entity_emb], dim=0))
+    path_labels.append(current_node)
+
+    # Original max_actions behavior: neighbors are truncated after the stop action
+    # exists in the adjacency list. Here we reserve one slot for stop.
+    for neighbor in neighbors[: max_actions - 1]:
+        relation_text = _edge_sentence(graph, current_node, neighbor)
+
+        relation_emb = torch.tensor(
+            embeder.embed_relation(relation_text),
+            device=DEVICE,
+            dtype=torch.float32,
+        )
+        neighbor_emb = torch.tensor(
+            embeder.embed_entity(neighbor),
+            device=DEVICE,
+            dtype=torch.float32,
+        )
+
+        action_vectors.append(torch.cat([relation_emb, neighbor_emb], dim=0))
+        path_labels.append(neighbor)
+
+    real_action_count = len(action_vectors)
+
+    if real_action_count == 0:
+        raise ValueError("Action tensor cannot be empty.")
+
+    action_tensor = torch.stack(action_vectors)
+
+    # Pad to max_actions like the original EnvironmentTorch.
+    if real_action_count < max_actions:
+        padding = torch.zeros(
+            (max_actions - real_action_count, action_tensor.shape[1]),
+            device=DEVICE,
+            dtype=torch.float32,
+        )
+        action_tensor = torch.cat([action_tensor, padding], dim=0)
+
+    # Shape: (batch=1, seq_len=1, max_actions, action_dim=600)
+    return action_tensor.view(1, 1, max_actions, -1), path_labels
+
+
+def _run_agent(agent, obs, action_tensor, state):
+    with torch.no_grad():
+        action_pred, _, agent_state = agent(obs, action_tensor, state)
+
+    # Original code masks zero scores, mainly to remove padded actions.
+    action_pred = action_pred.clone()
+    action_pred.masked_fill_(action_pred == 0.0, float("-inf"))
+
+    log_probs = torch.log(
+        F.softmax(action_pred, dim=-1).clamp(min=torch.finfo(torch.float32).eps)
+    )
+
+    return log_probs.view(-1).detach().cpu().numpy(), agent_state
+
+
+def rl_traverse(
+    graph: Any,
+    start_node: str,
+    end_node: str,
+    embeder: Any,
+    config: Dict[str, Any] = None,
+) -> Tuple[List[Any], int]:
+    # Optional runtime config for model path and search constraints.
+    if config is None:
+        config = {}
+
+    model_path = config.get(
+        "rl_model_path",
+        "data/models/rl/msmarco_evaluation_state_dict.pt",
+    )
+
+    # Original evaluation defaults.
+    beam_width = config.get("rl_beam_width", 50)
+    max_path_len = config.get("rl_max_path_len", 2)
+    max_actions = config.get("rl_max_actions", 5000)
+
+    # Keep this optional, but do not use it for reproducing the original RL baseline.
+    max_visits = config.get("rl_max_visits", -1)
+
+    question_text = config.get("question")
+    if question_text is None:
+        # Fallback, but this is not exactly the original MS MARCO question.
+        question_text = f"can {start_node} cause {end_node}?"
+
+    agent = _load_rl_model(model_path)
+
     # Start beam with a single candidate containing only the start node.
-    initial_state = model.get_initial_state(DEVICE)
-    candidates = [
+    paths = [
         BeamCandidate(
             path=[start_node],
             prob=0.0,
-            lstm_state=initial_state,
-            visited={start_node}
+            lstm_state=agent.get_initial_state(DEVICE),
+            prev_id=0,
         )
     ]
 
-    visited_count = 0
-    step_count = 0
+    # Original node-count semantics:
+    # unique nodes in retained beam paths until the effect is first seen.
+    nodes = {start_node}
+    found = False
 
-    while candidates:
-        # Optional limit on path length / number of decision steps.
-        if max_path_len != -1 and step_count >= max_path_len:
-            break
+    for _ in range(max_path_len):
+        candidates = []
 
-        step_count += 1
-        next_candidates = []
+        for beam_idx, p in enumerate(paths):
+            current_node = p.path[-1]
 
-        for cand in candidates:
-            current_node = cand.path[-1]
-
-            # If any beam candidate already reached the target, return immediately.
-            if current_node == end_node:
-                return cand.path, visited_count
-
-            curr_vec = embeder.embed(current_node)
-            target_vec = embeder.embed(end_node)
-
-            # This RL model was trained on 300-dim GloVe embeddings.
-            if len(curr_vec) != 300:
-                raise ValueError(f"RL Agent requires 300-dim Glove embeddings. Got {len(curr_vec)}.")
-
-            curr_emb = torch.tensor(curr_vec, device=DEVICE, dtype=torch.float32)
-            target_emb = torch.tensor(target_vec, device=DEVICE, dtype=torch.float32)
-
-            # Observation = concatenation of target embedding and current node embedding.
-            # Shape after view: (batch=1, seq_len=1, feature_dim=600)
-            obs = torch.cat([target_emb, curr_emb], dim=0).view(1, 1, -1)
+            obs = _build_observation(question_text, current_node, embeder)
 
             neighbors = list(graph.successors(current_node))
-            visited_count += 1
 
-            # Optional safety cap to keep RL traversal bounded.
-            if max_visits != -1 and visited_count > max_visits:
-                return [], visited_count
+            action_tensor, action_path_labels = _build_action_tensor(
+                graph=graph,
+                current_node=current_node,
+                neighbors=neighbors,
+                embeder=embeder,
+                max_actions=max_actions,
+            )
 
-            # Prevent revisiting nodes that are already on this candidate path.
-            valid_neighbors = [n for n in neighbors if n not in cand.visited]
+            log_probs, agent_state = _run_agent(
+                agent=agent,
+                obs=obs,
+                action_tensor=action_tensor,
+                state=p.lstm_state,
+            )
 
-            if not valid_neighbors:
-                continue
+            # Only keep real actions: stop + actual graph neighbors.
+            log_probs = log_probs[: len(action_path_labels)]
 
-            neighbor_embs = [
-                torch.tensor(embeder.embed(n), device=DEVICE, dtype=torch.float32)
-                for n in valid_neighbors
-            ]
+            for action_idx, log_prob in enumerate(log_probs):
+                entity_label = action_path_labels[action_idx]
 
-            # The model expects 600-dim action vectors.
-            # Here relation part is padded with zeros and neighbor embedding fills the second half.
-            zero_relation = torch.zeros(300, device=DEVICE)
-            padded_actions = [torch.cat([zero_relation, n_emb], dim=0) for n_emb in neighbor_embs]
-
-            # Shape: (batch=1, seq_len=1, num_actions, action_dim=600)
-            action_tensor = torch.stack(padded_actions).view(1, 1, len(valid_neighbors), -1)
-
-            with torch.no_grad():
-                scores, _, new_state = model(obs, action_tensor, cand.lstm_state)
-
-            # Convert scores into log-probabilities for beam search expansion.
-            valid_scores = scores.view(-1)
-            log_probs = F.log_softmax(valid_scores, dim=0).cpu().numpy()
-
-            for i, neighbor in enumerate(valid_neighbors):
-                new_prob = cand.prob + log_probs[i]
-                new_visited = cand.visited.copy()
-                new_visited.add(neighbor)
-
-                next_candidates.append(
+                candidates.append(
                     BeamCandidate(
-                        path=cand.path + [neighbor],
-                        prob=new_prob,
-                        lstm_state=new_state,
-                        visited=new_visited
+                        path=p.path + [entity_label],
+                        prob=p.prob + float(log_prob),
+                        lstm_state=agent_state,
+                        prev_id=beam_idx,
                     )
                 )
 
-        if not next_candidates:
+        if not candidates:
             break
 
-        # Keep only the top-k most likely candidates.
-        candidates = sorted(next_candidates, key=lambda x: x.prob, reverse=True)[:beam_width]
+        candidates = sorted(candidates, key=lambda x: x.prob, reverse=True)
+        paths = candidates[:beam_width]
 
-        # Small shortcut: if the best candidate already ends at the target, return it.
-        if candidates[0].path[-1] == end_node:
-            return candidates[0].path, visited_count
+        # Match original beam_search node counting.
+        for p in paths:
+            if not found:
+                nodes.update(p.path)
 
-    # No path found within the beam / limits.
-    return [], visited_count
+            if end_node in nodes:
+                found = True
+
+        if max_visits != -1 and len(nodes) > max_visits:
+            return [], len(nodes)
+
+    # Original prediction is positive if the effect occurs anywhere in any
+    # retained candidate path.
+    for p in paths:
+        if end_node in p.path:
+            return p.path, len(nodes)
+
+    return [], len(nodes)

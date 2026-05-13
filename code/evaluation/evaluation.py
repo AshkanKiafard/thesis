@@ -18,7 +18,13 @@ from sklearn.metrics import (
 
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from core.utils import get_model_distance_metric, get_matryoshka_dims, load_graph, traverse_graph
+from core.utils import (
+    get_model_distance_metric,
+    get_matryoshka_dims,
+    load_causal_graph,
+    load_rl_graph,
+    traverse_graph,
+)
 from evaluation.select_best_model import select_best_astar_model, print_selection
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
@@ -382,13 +388,21 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
         for name, strategy in strategies.items():
             start_time = time.time()
 
+            strategy_config = config
+            if name == "RL":
+                strategy_config = dict(config) if config is not None else {}
+                strategy_config["question"] = item.get(
+                    "question",
+                    f"can {cause} cause {effect}?"
+                )
+
             path, visited_nodes = traverse_graph(
                 graph,
                 cause,
                 effect,
                 embeder,
                 strategy,
-                config,
+                strategy_config,
             )
 
             elapsed = time.time() - start_time
@@ -508,8 +522,9 @@ if __name__ == "__main__":
     with open(dataset_path, encoding="utf-8") as file:
         valid_data = json.load(file)
 
-    print("Loading graph...")
-    causal_graph = load_graph(GRAPH_PATH)
+    print("Loading graphs...")
+    causal_graph = load_causal_graph(GRAPH_PATH)
+    rl_graph = load_rl_graph(GRAPH_PATH)
 
     existing_results = load_results_file(output_json_file)
 
@@ -559,14 +574,18 @@ if __name__ == "__main__":
 
         rl_config = {
             "rl_model_path": "data/models/rl/msmarco_evaluation_state_dict.pt",
-            "rl_beam_width": 5,
-            "rl_max_path_len": -1,
-            "rl_max_visits": p95_configs[("RL_Baseline", None)],
+            "rl_beam_width": 50,
+            "rl_max_path_len": 2,
+            "rl_max_actions": 5000,
+
+            # Original RL baseline is hop-limited, not expansion-limited.
+            # Keep disabled if you want to reproduce their numbers.
+            "rl_max_visits": -1,
         }
 
         rl_summary = run_evaluation_loop(
             valid_data,
-            causal_graph,
+            rl_graph,
             rl_embeder,
             {"RL": ts.rl_traverse},
             f"RL Baseline | {dataset_name}",

@@ -17,7 +17,7 @@ def astar_traverse(
     if config is None:
         config = {}
 
-    max_visits = config.get('astar_max_visits', -1)
+    max_visits = config.get("astar_max_visits", -1)
 
     # Priority queue entries are:
     # (f_score, g_score, current_node, path_so_far)
@@ -27,8 +27,9 @@ def astar_traverse(
     # h = heuristic estimate from current node to end node
     open_set = [(0, 0, start_node, [start_node])]
 
-    # Reset visited flags before each traversal.
-    nx.set_node_attributes(graph, False, "visited")
+    # Local closed set.
+    # Faster than writing "visited" metadata into the NetworkX graph.
+    visited = set()
     visited_count = 0
 
     # Embed the target node once so we do not recompute it for every expansion.
@@ -42,10 +43,10 @@ def astar_traverse(
             return path, visited_count
 
         # Skip nodes that were already finalized.
-        if graph.nodes[current_node]["visited"]:
+        if current_node in visited:
             continue
 
-        nx.set_node_attributes(graph, {current_node: {"visited": True}})
+        visited.add(current_node)
         visited_count += 1
 
         # Optional safety cap for evaluation / runtime control.
@@ -55,7 +56,7 @@ def astar_traverse(
         current_node_embed = embeder.embed(current_node)
 
         for successor in graph.successors(current_node):
-            if graph.nodes[successor]["visited"]:
+            if successor in visited:
                 continue
 
             successor_embed = embeder.embed(successor)

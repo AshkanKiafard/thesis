@@ -3,6 +3,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
 from sentence_transformers import SentenceTransformer
 
 from core.constants import DistanceMetric
@@ -96,27 +98,67 @@ class GloveEmbeder:
         self.embeddings = {}
         self.default_dim = 300
 
+        # Match original causal-qa-rl preprocessing.
+        self.stop_words = set(stopwords.words("english"))
+
         if not os.path.exists(glove_file_path):
             raise FileNotFoundError(
                 f"Please unzip glove.6B.zip and place glove.6B.300d.txt at {glove_file_path}"
             )
 
         print("Loading glove.6B embeddings...")
-        with open(glove_file_path, 'r', encoding='utf-8') as f:
+        with open(glove_file_path, "r", encoding="utf-8") as f:
             for line in f:
                 values = line.split()
                 word = values[0]
-                vector = np.asarray(values[1:], "float32")
+                vector = np.asarray(values[1:], dtype="float32")
                 self.embeddings[word] = vector
 
-    def embed(self, text: str) -> np.ndarray:
-        text = text.lower()
+    def _remove_stop_words(self, context: str):
+        # Original graph_utils.remove_stop_words:
+        # tokens = word_tokenize(context)
+        # return [t for t in tokens if t not in STOP_WORDS]
+        tokens = word_tokenize(context)
+        return [t for t in tokens if t not in self.stop_words]
 
-        # Return the word vector if it exists, otherwise use a zero vector.
-        if text in self.embeddings:
-            return self.embeddings[text]
-        else:
-            return np.zeros(self.default_dim, dtype="float32")
+    def _mean_embedding(self, parts):
+        # Original GloveEmbeddingProvider._get_embedding:
+        # part_embeddings = [np.array(self.embeddings[part]) for part in parts if part in self.embeddings]
+        # emb = np.mean(part_embeddings, axis=0) if len(part_embeddings) > 0 else np.ones(self.num_dimensions)
+        part_embeddings = [
+            np.asarray(self.embeddings[part], dtype="float32")
+            for part in parts
+            if part in self.embeddings
+        ]
+
+        if len(part_embeddings) == 0:
+            return np.ones(self.default_dim, dtype="float32")
+
+        return np.mean(part_embeddings, axis=0).astype("float32")
+
+    def embed_entity(self, text: str) -> np.ndarray:
+        # Original entity embedding:
+        # entity.split(" ")
+        #
+        # Important: no custom tokenizer and no stopword removal here.
+        return self._mean_embedding(text.split(" "))
+
+    def embed_question(self, text: str) -> np.ndarray:
+        # Original question embedding:
+        # graph_utils.remove_stop_words(question)
+        return self._mean_embedding(self._remove_stop_words(text))
+
+    def embed_relation(self, text: str) -> np.ndarray:
+        # Original relation/source embedding:
+        # if relation is a string, relation.split(" ") happens in original relation_embeddings()
+        # for CauseNet sources, graph_sources already stores remove_stop_words(source).
+        #
+        # In our port, we receive the raw source sentence, so we apply remove_stop_words here.
+        return self._mean_embedding(self._remove_stop_words(text))
+
+    def embed(self, text: str) -> np.ndarray:
+        # Keep old API for path-cost computation.
+        return self.embed_entity(text)
 
     def get_distance(self, embed1, embed2):
         e1 = embed1.flatten()

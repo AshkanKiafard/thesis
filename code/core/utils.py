@@ -2,46 +2,214 @@ import json
 from pathlib import Path
 from typing import Callable
 
+import bz2
 import networkx as nx
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Tuple
 
 from core.constants import ActivationFunc, DistanceMetric
 from core.embeddings import STEmbedder
 
 
-def load_graph(file_path, remove_self_loops=True):
-    # Loads the causal graph from a JSONL file (one JSON object per line).
-    # Each entry represents a causal relation (cause -> effect).
+@dataclass
+class RLGraph:
+    # Original-style adjacency list for the RL baseline.
     #
-    # The graph is constructed as a directed graph where:
-    # - nodes = concepts (strings)
-    # - edges = causal relations
+    # Important:
+    # - preserves duplicate neighbor actions
+    # - preserves insertion order from CauseNet
+    # - stores source/relation text per directed edge
+    #
+    # This is intentionally not a NetworkX graph because nx.DiGraph collapses
+    # duplicate (cause, effect) edges.
+    adjacency: Dict[str, List[str]]
+    edge_sources: Dict[Tuple[str, str], str]
+    nodes: set
+
+    def successors(self, node: str) -> List[str]:
+        return self.adjacency.get(node, [])
+
+    def get_edge_data(self, source: str, target: str, default=None):
+        sentence = self.edge_sources.get((source, target))
+
+        if sentence is None:
+            return default if default is not None else {}
+
+        return {"sentence": sentence}
+
+
+def _open_graph_file(file_path):
+    path = str(file_path)
+
+    if path.endswith(".bz2"):
+        return bz2.open(path, mode="rt", encoding="utf-8")
+
+    return open(path, encoding="utf-8")
+
+
+def _build_source(connection, cause, effect):
+    # Match original causal-qa-rl graph_utils._build_source.
+    if connection == "causes":
+        source = cause + " causes " + effect
+    elif connection == "Cause":
+        source = cause + " can cause " + effect
+    elif connection == "cause":
+        source = cause + " can cause " + effect
+    elif connection == "risks":
+        source = cause + " risks " + effect
+    elif connection == "symptoms":
+        source = effect + " is a symptom of " + cause
+    elif connection == "Symptoms":
+        source = effect + " is a symptom of " + cause
+    elif connection == "Signs and symptoms":
+        source = effect + " is a sign or symptom of " + cause
+    elif connection == "Causes":
+        source = cause + " causes " + effect
+    elif connection == "Risk factor":
+        source = cause + " is a risk factor for " + effect
+    else:
+        raise ValueError(f"No source with {connection} connection")
+
+    return source
+
+
+def _build_causenet_source(d, cause, effect):
+    # Match original causal-qa-rl graph_utils._get_source as closely as possible.
+    #
+    # Original behavior:
+    # 1. Return the first clueweb12_sentence or wikipedia_sentence.
+    # 2. If none exists, use the LAST source object from the loop.
+    #    This is a bit weird, but it is what their code does because the
+    #    variable `source` remains bound after the loop.
+    sources = d.get("sources", [])
+
+    if not sources:
+        return f"{cause} can cause {effect}"
+
+    last_source = None
+
+    for source in sources:
+        last_source = source
+
+        if source.get("type") in {"clueweb12_sentence", "wikipedia_sentence"}:
+            sentence = source.get("payload", {}).get("sentence", "")
+            if sentence:
+                return sentence
+
+    source_type = last_source.get("type")
+    payload = last_source.get("payload", {})
+
+    if source_type == "wikipedia_list":
+        connection = payload.get("list_toc_section_heading")
+    else:
+        connection = payload.get("infobox_argument")
+
+    if connection is None:
+        return f"{cause} can cause {effect}"
+
+    try:
+        return _build_source(connection, cause, effect)
+    except ValueError:
+        # Safer than crashing your whole evaluation if CauseNet has an
+        # unexpected source field. The original would crash here.
+        return f"{cause} can cause {effect}"
+
+
+def load_causal_graph(file_path, remove_self_loops=True, use_inverse=False):
+    # Loads the causal graph from a JSONL file (one JSON object per line).
+    # This graph is used for BFS and A*.
+    #
+    # It intentionally uses nx.DiGraph:
+    # - normal graph traversal behavior
+    # - one edge per (cause, effect)
     # - edge attributes store metadata like support and example sentence
 
-    with open(file_path) as f:
-        return nx.DiGraph([
-            (
-                c,  # cause node
-                e,  # effect node
-                {
-                    # Number of supporting sources for this causal relation
-                    "support": d.get("support", 0),
+    graph = nx.DiGraph()
 
-                    # Example sentence (if available) showing the relation
-                    "sentence": d.get("sources", [{}])[0].get("payload", {}).get("sentence", "")
-                }
+    with _open_graph_file(file_path) as f:
+        for d in map(json.loads, f):
+            c = d["causal_relation"]["cause"]["concept"].replace("_", " ")
+            e = d["causal_relation"]["effect"]["concept"].replace("_", " ")
+
+            if remove_self_loops and c == e:
+                continue
+
+            sentence = _build_causenet_source(d, c, e)
+
+            graph.add_edge(
+                c,
+                e,
+                support=d.get("support", 0),
+                sentence=sentence,
             )
-            # Read file line-by-line and parse JSON
-            for d in map(json.loads, f)
 
-            # Extract cause and effect concepts and normalize them
-            # (replace "_" with spaces to get readable text)
-            if (
-                       (c := d["causal_relation"]["cause"]["concept"].replace('_', ' ')) !=
-                       (e := d["causal_relation"]["effect"]["concept"].replace('_', ' '))
-               )
-               # Optionally remove self-loops (cause == effect)
-               or not remove_self_loops
-        ])
+            if use_inverse:
+                graph.add_edge(
+                    e,
+                    c,
+                    support=d.get("support", 0),
+                    sentence=sentence,
+                    inverse=True,
+                )
+
+    return graph
+
+
+def load_rl_graph(file_path, remove_self_loops=True, use_inverse=True):
+    # Loads the causal graph in a format closer to the original RL repo.
+    #
+    # Original causal-qa-rl behavior:
+    # - graph is a defaultdict(list)
+    # - duplicate neighbor entries are preserved
+    # - neighbor order follows the CauseNet file order
+    # - inverse edges are enabled by default during RL evaluation
+    #
+    # We do NOT insert the stop action here because rl.py currently prepends
+    # the stop action inside _build_action_tensor(). This keeps stop handling
+    # centralized in one place.
+
+    adjacency = defaultdict(list)
+    edge_sources = {}
+    nodes = set()
+
+    with _open_graph_file(file_path) as f:
+        for d in map(json.loads, f):
+            c = d["causal_relation"]["cause"]["concept"].replace("_", " ")
+            e = d["causal_relation"]["effect"]["concept"].replace("_", " ")
+
+            if remove_self_loops and c == e:
+                continue
+
+            sentence = _build_causenet_source(d, c, e)
+
+            nodes.add(c)
+            nodes.add(e)
+
+            # Preserve duplicate actions and insertion order.
+            adjacency[c].append(e)
+
+            # Match original graph_sources behavior:
+            # if duplicate (c, e) exists, the last source wins.
+            edge_sources[(c, e)] = sentence
+
+            if use_inverse:
+                adjacency[e].append(c)
+                edge_sources[(e, c)] = sentence
+
+    # Make sure every node has an adjacency list.
+    for node in nodes:
+        adjacency.setdefault(node, [])
+
+    # Keep the artificial stop node available for embeddings/fallbacks.
+    nodes.add("stop stop action")
+    adjacency.setdefault("stop stop action", [])
+
+    return RLGraph(
+        adjacency=dict(adjacency),
+        edge_sources=edge_sources,
+        nodes=nodes,
+    )
 
 
 def traverse_graph(

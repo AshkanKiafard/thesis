@@ -17,14 +17,15 @@ def bfs_traverse(
     if config is None:
         config = {}
 
-    max_visits = config.get('bfs_max_visits', -1)
+    max_visits = config.get("bfs_max_visits", -1)
 
     # Standard BFS queue:
     # each entry stores the current node and the full path to it.
     queue = deque([(start_node, [start_node])])
 
-    # Reset visited flags before every traversal.
-    nx.set_node_attributes(graph, False, "visited")
+    # Local visited set.
+    # Faster than writing "visited" metadata into the NetworkX graph.
+    visited = set()
     visited_count = 0
 
     while queue:
@@ -34,26 +35,28 @@ def bfs_traverse(
         if current_node == end_node:
             return path, visited_count
 
-        if not graph.nodes[current_node]["visited"]:
-            nx.set_node_attributes(graph, {current_node: {"visited": True}})
-            visited_count += 1
+        if current_node in visited:
+            continue
 
-            if max_visits != -1 and visited_count > max_visits:
-                return [], visited_count
+        visited.add(current_node)
+        visited_count += 1
 
-            # BFS itself is unweighted, but we still sort successors by edge support
-            # so that stronger / better-supported edges are explored first.
-            sorted_successors = SortedList(
-                [
-                    (s, graph.get_edge_data(current_node, s)["support"])
-                    for s in graph.successors(current_node)
-                ],
-                key=lambda x: -x[1]
-            )
+        if max_visits != -1 and visited_count > max_visits:
+            return [], visited_count
 
-            for successor, _ in sorted_successors:
-                if not graph.nodes[successor]["visited"]:
-                    queue.append((successor, path + [successor]))
+        # BFS itself is unweighted, but we still sort successors by edge support
+        # so that stronger / better-supported edges are explored first.
+        sorted_successors = SortedList(
+            [
+                (s, graph.get_edge_data(current_node, s)["support"])
+                for s in graph.successors(current_node)
+            ],
+            key=lambda x: -x[1]
+        )
+
+        for successor, _ in sorted_successors:
+            if successor not in visited:
+                queue.append((successor, path + [successor]))
 
     # No path found.
     return [], visited_count
