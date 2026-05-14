@@ -347,8 +347,13 @@ def cleanup_zombie_trials(study, label: str = ""):
 def find_latest_hparam_study(optuna_hparam_search_dir, curr_model_name, normalize_str, mrl_str):
     study_prefix = f"{curr_model_name}_{normalize_str}_{mrl_str}_"
 
+    matching_studies = [
+        p for p in optuna_hparam_search_dir.glob(f"{study_prefix}*.sqlite3")
+        if not p.name.endswith(".sqlite3.sqlite3")
+    ]
+
     matching_studies = sorted(
-        optuna_hparam_search_dir.glob(f"{study_prefix}*.sqlite3"),
+        matching_studies,
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
