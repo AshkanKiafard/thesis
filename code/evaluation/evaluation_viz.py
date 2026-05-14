@@ -979,8 +979,9 @@ def plot_single_confusion_matrix(ax, matrix, title, normalize=False):
     ax.set_title(title, fontsize=9)
     ax.set_xticks([0, 1])
     ax.set_yticks([0, 1])
-    ax.set_xticklabels(["Pred False", "Pred True"])
-    ax.set_yticklabels(["True False", "True True"])
+
+    ax.set_xticklabels(["Predicted False", "Predicted True"])
+    ax.set_yticklabels(["Actual False", "Actual True"])
 
     total = matrix.sum()
 
@@ -1119,9 +1120,9 @@ def plot_confusion_matrices_grid(
     for ax, (_, row) in zip(axes, matrix_df.iterrows()):
         # Matrix layout:
         #
-        #              Pred False    Pred True
-        # True False       TN            FP
-        # True True        FN            TP
+        #                    Predicted False    Predicted True
+        # Actual False              TN                FP
+        # Actual True               FN                TP
         #
         matrix = np.array(
             [

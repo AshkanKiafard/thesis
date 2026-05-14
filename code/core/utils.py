@@ -279,7 +279,7 @@ def get_matryoshka_dims(model_dim: int) -> list[int]:
 
     # Generate powers-of-two dimensions starting from 64.
     # These represent progressively compressed embedding sizes.
-    base_dim = 64
+    base_dim = 2
     while base_dim < model_dim:
         dims.add(base_dim)
         base_dim *= 2

@@ -28,7 +28,7 @@ from finetune.astar_training_core import (
     str_to_bool,
 )
 from core.embeddings import STEmbedder
-from core.utils import load_graph, parse_activation_func, parse_distance_metric
+from core.utils import load_causal_graph, parse_activation_func, parse_distance_metric
 
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
 torch.set_float32_matmul_precision("medium")
@@ -81,13 +81,20 @@ def parse_args():
         help="Number of validation epochs without improvement before early stopping"
     )
 
+    parser.add_argument(
+        "--run-suffix",
+        type=str,
+        default="best_v2",
+        help="Suffix for checkpoint/log/model directory names"
+    )
+
     return parser.parse_args()
 
 
 def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
           f_batch_size, f_accumulate_grad_batches, f_normalize,
-          f_use_matryoshka, f_max_epochs, f_patience, f_causal_graph,
-          f_activation_func_str, f_distance_metric_str, f_lr,
+          f_use_matryoshka, f_max_epochs, f_patience, f_run_suffix,
+          f_causal_graph, f_activation_func_str, f_distance_metric_str, f_lr,
           f_source_study_name):
     f_activation_func = parse_activation_func(f_activation_func_str)
     f_distance_metric = parse_distance_metric(f_distance_metric_str)
@@ -113,7 +120,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
 
     f_run_model_str = (
         f"{f_curr_model_name}_{f_activation_func_str}_{f_distance_metric_str}_"
-        f"{f_normalize_str}_{f_mrl_str}_best"
+        f"{f_normalize_str}_{f_mrl_str}_{f_run_suffix}"
     )
 
     checkpoint_dir = DATA_DIR / "checkpoints" / f_run_model_str
@@ -124,6 +131,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
 
     print("=" * 80)
     print(f"Final training run: {f_run_model_str}")
+    print(f"Run suffix: {f_run_suffix}")
     print(f"Source Optuna study: {f_source_study_name}")
     print(f"Activation: {f_activation_func_str}")
     print(f"Distance: {f_distance_metric_str}")
@@ -235,6 +243,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
     metadata = {
         "model_path": f_model_path,
         "run_model_str": f_run_model_str,
+        "run_suffix": f_run_suffix,
         "source_optuna_study": f_source_study_name,
         "activation": f_activation_func_str,
         "distance": f_distance_metric_str,
@@ -274,6 +283,7 @@ if __name__ == "__main__":
     use_matryoshka = args.matryoshka
     epochs = args.epochs
     patience = args.patience
+    run_suffix = args.run_suffix
 
     if batch_size > 128:
         raise ValueError("batch_size must be <= 128")
@@ -292,9 +302,10 @@ if __name__ == "__main__":
     print(f"Effective batch size: {batch_size * accumulate_grad_batches}")
     print(f"Final training epochs: {epochs}")
     print(f"Final training patience: {patience}")
+    print(f"Run suffix: {run_suffix}")
     print(f"SLURM job ID: {SLURM_JOB_ID}")
 
-    causal_graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
+    causal_graph = load_causal_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
 
     with open(DATA_DIR / "datasets" / "msmarco_train.json", encoding="utf-8") as train_file:
         train_data = json.load(train_file)
@@ -372,6 +383,7 @@ if __name__ == "__main__":
         f_use_matryoshka=use_matryoshka,
         f_max_epochs=epochs,
         f_patience=patience,
+        f_run_suffix=run_suffix,
         f_causal_graph=causal_graph,
         f_activation_func_str=activation_func_str,
         f_distance_metric_str=distance_metric_str,

@@ -33,7 +33,7 @@ from finetune.astar_training_core import (
     str_to_bool,
 )
 from core.embeddings import STEmbedder
-from core.utils import load_graph, parse_activation_func, parse_distance_metric
+from core.utils import load_causal_graph, parse_activation_func, parse_distance_metric
 
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
 torch.set_float32_matmul_precision("medium")
@@ -267,7 +267,7 @@ if __name__ == "__main__":
     print(f"Search patience: {patience}")
     print(f"Optuna trials: {target_trials}")
 
-    causal_graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
+    causal_graph = load_causal_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
 
     with open(DATA_DIR / "datasets" / "msmarco_train.json", encoding="utf-8") as train_file:
         train_data = json.load(train_file)
