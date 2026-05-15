@@ -12,6 +12,7 @@ import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.utils import (
     traverse_graph,
+    get_fine_tuned_models,
     get_model_distance_metric,
     load_causal_graph,
     load_rl_graph,
@@ -22,7 +23,6 @@ from core.utils import (
 # -------------------------------------------------------------------------
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
-LIGHTNING_DIR = "data/models/lightning"
 
 # Base models evaluated with A*
 base_models = [
@@ -35,27 +35,6 @@ base_models = [
     "Qwen/Qwen3-Embedding-0.6B",
     # "Qwen/Qwen3-Embedding-4B",
 ]
-
-
-def get_fine_tuned_models(run_suffix: str):
-    """
-    Load only fine-tuned models belonging to this run suffix.
-
-    Expected final-training export pattern:
-    <model>_<activation>_<distance>_<norm>_<mrl>_<run_suffix>_finetuned
-    """
-    if not os.path.exists(LIGHTNING_DIR):
-        return []
-
-    expected_suffix = f"_{run_suffix}_finetuned"
-
-    return [
-        os.path.join(LIGHTNING_DIR, name).replace("\\", "/")
-        for name in os.listdir(LIGHTNING_DIR)
-        if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
-        and name != "old"
-        and name.endswith(expected_suffix)
-    ]
 
 
 def build_output_paths(dataset_path: str, run_suffix: str):

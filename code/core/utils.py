@@ -1,5 +1,6 @@
 import bz2
 import json
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,7 +8,7 @@ from typing import Callable, Dict, List, Tuple
 
 import networkx as nx
 
-from core.constants import ActivationFunc, DistanceMetric
+from core.constants import ActivationFunc, DistanceMetric, LIGHTNING_DIR
 from core.embeddings import STEmbedder
 
 
@@ -337,3 +338,24 @@ def get_model_distance_metric(model_path: str) -> DistanceMetric:
         return parse_distance_metric(distance)
 
     return DistanceMetric.COSINE
+
+
+def get_fine_tuned_models(run_suffix: str):
+    """
+    Load only fine-tuned models belonging to this run suffix.
+
+    Expected final-training export pattern:
+    <model>_<activation>_<distance>_<norm>_<mrl>_<run_suffix>_finetuned
+    """
+    if not os.path.exists(LIGHTNING_DIR):
+        return []
+
+    expected_suffix = f"_{run_suffix}_finetuned"
+
+    return [
+        os.path.join(LIGHTNING_DIR, name).replace("\\", "/")
+        for name in os.listdir(LIGHTNING_DIR)
+        if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
+           and name != "old"
+           and name.endswith(expected_suffix)
+    ]

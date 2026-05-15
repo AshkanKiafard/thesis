@@ -19,6 +19,7 @@ from sklearn.metrics import (
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.utils import (
+    get_fine_tuned_models,
     get_model_distance_metric,
     get_matryoshka_dims,
     load_causal_graph,
@@ -28,7 +29,6 @@ from core.utils import (
 from evaluation.select_best_model import select_best_astar_model, print_selection
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
-LIGHTNING_DIR = "data/models/lightning"
 
 base_models = [
     "sentence-transformers/all-mpnet-base-v2",
@@ -40,27 +40,6 @@ base_models = [
     "Qwen/Qwen3-Embedding-0.6B",
     # "Qwen/Qwen3-Embedding-4B",
 ]
-
-
-def get_fine_tuned_models(run_suffix: str):
-    """
-    Load only fine-tuned models belonging to this run suffix.
-
-    Expected final-training export pattern:
-    <model>_<activation>_<distance>_<norm>_<mrl>_<run_suffix>_finetuned
-    """
-    if not os.path.exists(LIGHTNING_DIR):
-        return []
-
-    expected_suffix = f"_{run_suffix}_finetuned"
-
-    return [
-        os.path.join(LIGHTNING_DIR, name).replace("\\", "/")
-        for name in os.listdir(LIGHTNING_DIR)
-        if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
-        and name != "old"
-        and name.endswith(expected_suffix)
-    ]
 
 
 def detect_split(dataset_name: str):
@@ -133,10 +112,10 @@ def load_p95_configs(eval_dataset_name: str, run_suffix: str):
     config_source_dataset_name = get_config_source_dataset_name(eval_dataset_name)
 
     analysis_file = (
-        Path("data/evaluation")
-        / config_source_dataset_name
-        / run_suffix
-        / "visited_nodes_analysis.json"
+            Path("data/evaluation")
+            / config_source_dataset_name
+            / run_suffix
+            / "visited_nodes_analysis.json"
     )
 
     if not analysis_file.exists():
@@ -503,10 +482,10 @@ if __name__ == "__main__":
     if current_split == "test":
         valid_dataset_name = dataset_name.replace("test", "valid")
         valid_results_file = (
-            Path("data/evaluation")
-            / valid_dataset_name
-            / run_suffix
-            / "evaluation_results.json"
+                Path("data/evaluation")
+                / valid_dataset_name
+                / run_suffix
+                / "evaluation_results.json"
         )
 
         selection = select_best_astar_model(valid_results_file)
@@ -643,9 +622,9 @@ if __name__ == "__main__":
                 existing_results = load_results_file(output_json_file)
 
                 if any(
-                    entry.get("model") == model_name
-                    and entry.get("dimension") == dim
-                    for entry in existing_results
+                        entry.get("model") == model_name
+                        and entry.get("dimension") == dim
+                        for entry in existing_results
                 ):
                     print(f"Skipping {model_name} dim {dim}")
                     continue

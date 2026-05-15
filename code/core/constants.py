@@ -9,3 +9,6 @@ class ActivationFunc(Enum):
 class DistanceMetric(Enum):
     COSINE = 1
     EUCLIDEAN = 2
+
+
+LIGHTNING_DIR = "data/models/lightning"
