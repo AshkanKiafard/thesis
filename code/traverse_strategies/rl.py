@@ -191,7 +191,7 @@ def rl_traverse(
 
     model_path = config.get(
         "rl_model_path",
-        "data/models/rl/msmarco_evaluation_state_dict.pt",
+        "data/models/rl/msmarco_no_inverse_state_dict.pt",
     )
 
     # Original evaluation defaults.

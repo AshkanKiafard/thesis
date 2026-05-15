@@ -155,14 +155,14 @@ def load_causal_graph(file_path, remove_self_loops=True, use_inverse=False):
     return graph
 
 
-def load_rl_graph(file_path, remove_self_loops=True, use_inverse=True):
+def load_rl_graph(file_path, remove_self_loops=True, use_inverse=False):
     # Loads the causal graph in a format closer to the original RL repo.
     #
     # Original causal-qa-rl behavior:
     # - graph is a defaultdict(list)
     # - duplicate neighbor entries are preserved
     # - neighbor order follows the CauseNet file order
-    # - inverse edges are enabled by default during RL evaluation
+    # - inverse edges are disabled by default during RL evaluation
     #
     # We do NOT insert the stop action here because rl.py currently prepends
     # the stop action inside _build_action_tensor(). This keeps stop handling

@@ -530,8 +530,8 @@ if __name__ == "__main__":
         valid_data = json.load(file)
 
     print("Loading graphs...")
-    causal_graph = load_causal_graph(GRAPH_PATH)
-    rl_graph = load_rl_graph(GRAPH_PATH)
+    causal_graph = load_causal_graph(GRAPH_PATH, use_inverse=False)
+    rl_graph = load_rl_graph(GRAPH_PATH, use_inverse=False)
 
     existing_results = load_results_file(output_json_file)
 
@@ -575,7 +575,7 @@ if __name__ == "__main__":
         )
 
         rl_config = {
-            "rl_model_path": "data/models/rl/msmarco_evaluation_state_dict.pt",
+            "rl_model_path": "data/models/rl/msmarco_no_inverse_state_dict.pt",
             "rl_beam_width": 50,
             "rl_max_path_len": 2,
             "rl_max_actions": 5000,
