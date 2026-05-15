@@ -28,32 +28,35 @@ from core.utils import (
 from evaluation.select_best_model import select_best_astar_model, print_selection
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+LIGHTNING_DIR = "data/models/lightning"
 
 base_models = [
     "sentence-transformers/all-mpnet-base-v2",
-    # "BAAI/bge-base-en-v1.5",
-    # "ibm-granite/granite-embedding-small-english-r2",
     "BAAI/bge-large-en-v1.5",
-    # "ibm-granite/granite-embedding-english-r2",
     "mixedbread-ai/mxbai-embed-large-v1",
     "Qwen/Qwen3-Embedding-0.6B",
-    # "Qwen/Qwen3-Embedding-4B",
 ]
 
-lightning_dir = "data/models/lightning"
-fine_tuned_models = []
 
-# Pick up all exported fine-tuned models automatically.
-if os.path.exists(lightning_dir):
-    fine_tuned_models = [
-        os.path.join(lightning_dir, name).replace("\\", "/")
-        for name in os.listdir(lightning_dir)
-        if os.path.isdir(os.path.join(lightning_dir, name)) and name != "old"
+def get_fine_tuned_models(run_suffix: str):
+    """
+    Load only fine-tuned models belonging to this run suffix.
+
+    Expected final-training export pattern:
+    <model>_<activation>_<distance>_<norm>_<mrl>_<run_suffix>_finetuned
+    """
+    if not os.path.exists(LIGHTNING_DIR):
+        return []
+
+    expected_suffix = f"_{run_suffix}_finetuned"
+
+    return [
+        os.path.join(LIGHTNING_DIR, name).replace("\\", "/")
+        for name in os.listdir(LIGHTNING_DIR)
+        if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
+        and name != "old"
+        and name.endswith(expected_suffix)
     ]
-
-model_queue = base_models + fine_tuned_models
-
-print("Model queue:", model_queue)
 
 
 def detect_split(dataset_name: str):
@@ -93,49 +96,50 @@ def get_config_source_dataset_name(dataset_name: str):
     )
 
 
-def build_output_paths(dataset_path: str):
+def build_output_paths(dataset_path: str, run_suffix: str):
     """
-    Build evaluation output paths from dataset name.
+    Build evaluation output paths from dataset name and run suffix.
 
     Example:
-    data/datasets/msmarco_valid_filtered.json
+    data/datasets/msmarco_valid_filtered.json + best_v2
     ->
-    data/evaluation/msmarco_valid/evaluation_results.json
-    data/evaluation/msmarco_valid/evaluation_results.csv
+    data/evaluation/msmarco_valid/best_v2/evaluation_results.json
+    data/evaluation/msmarco_valid/best_v2/evaluation_results.csv
     """
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
 
-    output_dir = Path("data/evaluation") / dataset_name
+    output_dir = Path("data/evaluation") / dataset_name / run_suffix
     output_json_file = output_dir / "evaluation_results.json"
     output_csv_file = output_dir / "evaluation_results.csv"
 
     return dataset_name, output_dir, str(output_json_file), str(output_csv_file)
 
 
-def load_p95_configs(eval_dataset_name: str):
+def load_p95_configs(eval_dataset_name: str, run_suffix: str):
     """
     Load per-model traversal caps from the previous split's
     visited_nodes_analysis.json.
 
     We use p95_visited_successful_only.
 
-    Rationale:
-    If 95% of successful searches finish below X visits,
-    searching much longer than X is usually wasted compute.
+    valid evaluation -> data/evaluation/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
+    test evaluation  -> data/evaluation/<valid_dataset>/<run_suffix>/visited_nodes_analysis.json
     """
     config_source_dataset_name = get_config_source_dataset_name(eval_dataset_name)
 
     analysis_file = (
         Path("data/evaluation")
         / config_source_dataset_name
+        / run_suffix
         / "visited_nodes_analysis.json"
     )
 
     if not analysis_file.exists():
         raise FileNotFoundError(
             f"Missing {analysis_file}. "
-            f"Run visited_nodes_analysis.py first on '{config_source_dataset_name}'."
+            f"Run visited_nodes_analysis.py first on "
+            f"'{config_source_dataset_name}' with run suffix '{run_suffix}'."
         )
 
     print(f"Loading p95 configs from: {analysis_file}")
@@ -156,7 +160,6 @@ def load_p95_configs(eval_dataset_name: str):
         if p95_value is None:
             continue
 
-        # Max visits must be an integer.
         p95_map[(model, dimension)] = int(np.ceil(p95_value))
 
     print("\nLoaded p95 configs:")
@@ -175,9 +178,6 @@ def get_astar_max_visits(p95_configs, model_name, dim, full_dim):
 
     Fallback:
     - full-dim p95
-
-    This fallback is useful if visited_nodes_analysis.py was run only
-    for the full model dimension.
     """
     if (model_name, dim) in p95_configs:
         return p95_configs[(model_name, dim)]
@@ -196,11 +196,9 @@ def get_astar_max_visits(p95_configs, model_name, dim, full_dim):
 
 
 def compute_embedding_path_cost(path, embeder):
-    # No path means no cost can be computed.
     if not path:
         return None
 
-    # A single-node path has zero movement cost.
     if len(path) < 2:
         return 0.0
 
@@ -222,6 +220,7 @@ def save_all_results_csv(all_results, output_csv_file):
         "model",
         "dimension",
         "split",
+        "run_suffix",
         "config_source_dataset",
         "used_max_visits",
         "timestamp",
@@ -235,7 +234,7 @@ def save_all_results_csv(all_results, output_csv_file):
         "tn",
         "avg_nodes_visited",
         "avg_path_length",
-        "avg_time_sec",
+        "avg_time_ms",
         "avg_path_cost",
         "avg_cost_per_hop",
         "num_costed_paths",
@@ -249,8 +248,10 @@ def save_all_results_csv(all_results, output_csv_file):
 
         used_max_visits = (
             used_config.get("bfs_max_visits")
-            or used_config.get("rl_max_visits")
-            or used_config.get("astar_max_visits")
+            if "bfs_max_visits" in used_config
+            else used_config.get("rl_max_visits")
+            if "rl_max_visits" in used_config
+            else used_config.get("astar_max_visits")
         )
 
         for algorithm, strategy_result in entry.get("evaluation", {}).items():
@@ -261,16 +262,12 @@ def save_all_results_csv(all_results, output_csv_file):
                 "model": entry.get("model"),
                 "dimension": entry.get("dimension", ""),
                 "split": entry.get("split", ""),
+                "run_suffix": entry.get("run_suffix", ""),
                 "config_source_dataset": entry.get("config_source_dataset", ""),
                 "used_max_visits": used_max_visits,
                 "timestamp": entry.get("timestamp"),
                 **metrics,
             }
-
-            # Convert floats for German Excel.
-            for k, v in row.items():
-                if isinstance(v, float):
-                    row[k] = str(v).replace(".", ",")
 
             rows.append(row)
 
@@ -294,11 +291,9 @@ def save_result(result_entry, output_json_file, output_csv_file):
     current_results = load_results_file(output_json_file)
     current_results.append(result_entry)
 
-    # Save JSON.
     with open(output_json_file, "w", encoding="utf-8") as file:
         json.dump(current_results, file, indent=4)
 
-    # Save CSV.
     save_all_results_csv(current_results, output_csv_file)
 
     print(f"Saved results for '{result_entry['model']}'")
@@ -317,15 +312,12 @@ def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times, path_c
         labels=[False, True],
     ).ravel()
 
-    # Ignore empty paths when averaging path length.
     valid_lengths = path_lengths[path_lengths > 0]
     avg_path_len = float(valid_lengths.mean()) if len(valid_lengths) > 0 else 0.0
 
-    # Only count costs that were actually computed.
     valid_costs = [c for c in path_costs if c is not None]
     avg_cost = float(np.mean(valid_costs)) if len(valid_costs) > 0 else 0.0
 
-    # Cost per hop is more comparable than raw path cost when paths differ in length.
     cost_per_hop = []
     for path_length, path_cost in zip(path_lengths, path_costs):
         if path_cost is not None and path_length > 1:
@@ -344,7 +336,7 @@ def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times, path_c
         "tn": int(tn),
         "avg_nodes_visited": float(nodes_visited.mean()) if len(nodes_visited) else 0.0,
         "avg_path_length": float(avg_path_len),
-        "avg_time_sec": float(times.mean()) if len(times) else 0.0,
+        "avg_time_ms": float(times.mean() * 1000) if len(times) else 0.0,
         "avg_path_cost": float(avg_cost),
         "avg_cost_per_hop": float(avg_cost_per_hop),
         "num_costed_paths": int(len(valid_costs)),
@@ -353,7 +345,6 @@ def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times, path_c
 
 
 def run_evaluation_loop(data, graph, embeder, strategies, description, config=None):
-    # Keep raw outputs for each strategy and summarize at the end.
     results = {
         name: {
             "y_true": [],
@@ -362,8 +353,6 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
             "path_lengths": [],
             "times": [],
             "path_costs": [],
-            # Store per-example predictions so that significance tests can be
-            # performed later on paired model outputs.
             "per_example": [],
         }
         for name in strategies.keys()
@@ -378,7 +367,6 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
         cause = item["cause"]
         effect = item["effect"]
 
-        # Skip examples that are not covered by the current graph.
         if cause not in graph.nodes or effect not in graph.nodes:
             continue
 
@@ -429,6 +417,7 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
                     "nodes_visited": int(visited_nodes),
                     "path_length": int(path_length),
                     "time_sec": float(elapsed),
+                    "time_ms": float(elapsed * 1000),
                     "path_cost": path_cost,
                 }
             )
@@ -454,16 +443,16 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
         print(
             f"Acc: {metrics['accuracy']:.3f} | "
             f"F1: {metrics['f1_score']:.3f} | "
+            f"Precision: {metrics['precision']:.3f} | "
+            f"Recall: {metrics['recall']:.3f} | "
             f"Avg Nodes: {metrics['avg_nodes_visited']:.1f} | "
-            f"Avg Cost: {metrics['avg_path_cost']:.3f} | "
-            f"Cost/Hop: {metrics['avg_cost_per_hop']:.3f}"
+            f"Avg Time: {metrics['avg_time_ms']:.2f} ms"
         )
 
     return summary
 
 
 def parse_args():
-    # Read dataset path from the command line so the same script can be reused.
     parser = argparse.ArgumentParser(
         description="Evaluate normalized causal dataset."
     )
@@ -471,16 +460,31 @@ def parse_args():
         "dataset_path",
         help="Path to normalized dataset JSON.",
     )
+    parser.add_argument(
+        "--run-suffix",
+        type=str,
+        required=True,
+        help="Final-training run suffix, e.g. best_v2.",
+    )
 
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+
     dataset_path = args.dataset_path
+    run_suffix = args.run_suffix
+
+    fine_tuned_models = get_fine_tuned_models(run_suffix)
+    model_queue = base_models + fine_tuned_models
+
+    print(f"Run suffix: {run_suffix}")
+    print("Model queue:", model_queue)
 
     dataset_name, output_dir, output_json_file, output_csv_file = build_output_paths(
-        dataset_path
+        dataset_path,
+        run_suffix,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -488,15 +492,17 @@ if __name__ == "__main__":
 
     print(f"Current evaluation dataset: {dataset_name}")
     print(f"Current split: {current_split}")
+    print(f"Output directory: {output_dir}")
 
     selected_test_model = None
 
     if current_split == "test":
         valid_dataset_name = dataset_name.replace("test", "valid")
         valid_results_file = (
-                Path("data/evaluation")
-                / valid_dataset_name
-                / "evaluation_results.json"
+            Path("data/evaluation")
+            / valid_dataset_name
+            / run_suffix
+            / "evaluation_results.json"
         )
 
         selection = select_best_astar_model(valid_results_file)
@@ -508,15 +514,12 @@ if __name__ == "__main__":
         print("Ignoring full model queue for A*.")
         print("Only evaluating validation-selected model and dimension.")
 
-    # -------------------------------------------------------------------------
-    # Load p95 caps from the previous split.
-    #
-    # valid evaluation -> train p95
-    # test evaluation  -> valid p95
-    # -------------------------------------------------------------------------
-    p95_configs, config_source_dataset_name = load_p95_configs(dataset_name)
+    p95_configs, config_source_dataset_name = load_p95_configs(
+        dataset_name,
+        run_suffix,
+    )
 
-    print(f"Using traversal caps from: {config_source_dataset_name}")
+    print(f"Using traversal caps from: {config_source_dataset_name}/{run_suffix}")
 
     print("Loading dataset...")
     with open(dataset_path, encoding="utf-8") as file:
@@ -528,9 +531,6 @@ if __name__ == "__main__":
 
     existing_results = load_results_file(output_json_file)
 
-    # -------------------------------------------------------------------------
-    # BFS baseline
-    # -------------------------------------------------------------------------
     if not any(entry["model"] == "BFS_Baseline" for entry in existing_results):
         bfs_config = {
             "bfs_max_visits": p95_configs[("BFS_Baseline", None)]
@@ -541,7 +541,7 @@ if __name__ == "__main__":
             causal_graph,
             None,
             {"BFS": ts.bfs_traverse},
-            f"BFS Baseline | {dataset_name}",
+            f"BFS Baseline | {dataset_name} | {run_suffix}",
             config=bfs_config,
         )
 
@@ -550,6 +550,7 @@ if __name__ == "__main__":
                 "model": "BFS_Baseline",
                 "dimension": None,
                 "split": current_split,
+                "run_suffix": run_suffix,
                 "config_source_dataset": config_source_dataset_name,
                 "used_config": bfs_config,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -563,9 +564,6 @@ if __name__ == "__main__":
 
     existing_results = load_results_file(output_json_file)
 
-    # -------------------------------------------------------------------------
-    # RL baseline
-    # -------------------------------------------------------------------------
     if not any(entry["model"] == "RL_Baseline" for entry in existing_results):
         rl_embeder = GloveEmbeder(
             "data/embeddings/glove.6B/glove.6B.300d.txt",
@@ -577,9 +575,6 @@ if __name__ == "__main__":
             "rl_beam_width": 50,
             "rl_max_path_len": 2,
             "rl_max_actions": 5000,
-
-            # Original RL baseline is hop-limited, not expansion-limited.
-            # Keep disabled if you want to reproduce their numbers.
             "rl_max_visits": -1,
         }
 
@@ -588,7 +583,7 @@ if __name__ == "__main__":
             rl_graph,
             rl_embeder,
             {"RL": ts.rl_traverse},
-            f"RL Baseline | {dataset_name}",
+            f"RL Baseline | {dataset_name} | {run_suffix}",
             config=rl_config,
         )
 
@@ -597,6 +592,7 @@ if __name__ == "__main__":
                 "model": "RL_Baseline",
                 "dimension": None,
                 "split": current_split,
+                "run_suffix": run_suffix,
                 "config_source_dataset": config_source_dataset_name,
                 "used_config": rl_config,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -611,17 +607,6 @@ if __name__ == "__main__":
     else:
         print("Skipping RL_Baseline because it already exists.")
 
-    existing_results = load_results_file(output_json_file)
-
-    # -------------------------------------------------------------------------
-    # valid evaluation:
-    # - evaluate all queued base/fine-tuned models
-    # - evaluate all Matryoshka dimensions
-    #
-    # test evaluation:
-    # - ignore the full model queue
-    # - evaluate only the model/dimension selected from validation
-    # -------------------------------------------------------------------------
     if current_split == "test":
         astar_model_queue = [selected_test_model["model_path"]]
         selected_test_dimension = selected_test_model["dimension"]
@@ -637,6 +622,7 @@ if __name__ == "__main__":
         try:
             distance_metric = get_model_distance_metric(model_path)
             print(f"Distance metric: {distance_metric}")
+
             main_embeder = STEmbedder(
                 model_path=model_path,
                 distance_metric=distance_metric,
@@ -679,7 +665,7 @@ if __name__ == "__main__":
                     causal_graph,
                     main_embeder,
                     {"A*": ts.astar_traverse},
-                    f"{model_path} | dim {dim}",
+                    f"{model_path} | dim {dim} | {run_suffix}",
                     config=astar_config,
                 )
 
@@ -689,6 +675,7 @@ if __name__ == "__main__":
                         "model_path": model_path,
                         "dimension": dim,
                         "split": current_split,
+                        "run_suffix": run_suffix,
                         "config_source_dataset": config_source_dataset_name,
                         "used_config": astar_config,
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),

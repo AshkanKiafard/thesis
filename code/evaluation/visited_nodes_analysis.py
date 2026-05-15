@@ -10,13 +10,19 @@ import torch
 
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from core.utils import traverse_graph, get_model_distance_metric, load_causal_graph, load_rl_graph
+from core.utils import (
+    traverse_graph,
+    get_model_distance_metric,
+    load_causal_graph,
+    load_rl_graph,
+)
 
 # -------------------------------------------------------------------------
 # Global paths
 # -------------------------------------------------------------------------
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+LIGHTNING_DIR = "data/models/lightning"
 
 # Base models evaluated with A*
 base_models = [
@@ -24,36 +30,42 @@ base_models = [
     # "BAAI/bge-base-en-v1.5",
     # "ibm-granite/granite-embedding-small-english-r2",
     "BAAI/bge-large-en-v1.5",
-    # "ibm-granite/granite-embedding-english-r2",
+    "ibm-granite/granite-embedding-english-r2",
     "mixedbread-ai/mxbai-embed-large-v1",
     "Qwen/Qwen3-Embedding-0.6B",
     # "Qwen/Qwen3-Embedding-4B",
 ]
 
-# Fine-tuned models are discovered automatically
-lightning_dir = "data/models/lightning"
-fine_tuned_models = []
 
-if os.path.exists(lightning_dir):
-    fine_tuned_models = [
-        os.path.join(lightning_dir, name).replace("\\", "/")
-        for name in os.listdir(lightning_dir)
-        if os.path.isdir(os.path.join(lightning_dir, name)) and name != "old"
+def get_fine_tuned_models(run_suffix: str):
+    """
+    Load only fine-tuned models belonging to this run suffix.
+
+    Expected final-training export pattern:
+    <model>_<activation>_<distance>_<norm>_<mrl>_<run_suffix>_finetuned
+    """
+    if not os.path.exists(LIGHTNING_DIR):
+        return []
+
+    expected_suffix = f"_{run_suffix}_finetuned"
+
+    return [
+        os.path.join(LIGHTNING_DIR, name).replace("\\", "/")
+        for name in os.listdir(LIGHTNING_DIR)
+        if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
+        and name != "old"
+        and name.endswith(expected_suffix)
     ]
 
-model_queue = base_models + fine_tuned_models
 
-print("Model queue:", model_queue)
-
-
-def build_output_paths(dataset_path: str):
+def build_output_paths(dataset_path: str, run_suffix: str):
     """
-    Build output path from dataset name.
+    Build output path from dataset name and run suffix.
 
     Example:
-    data/datasets/msmarco_valid_filtered.json
+    data/datasets/msmarco_valid_filtered.json + best_v2
     ->
-    data/evaluation/msmarco_valid/visited_nodes_analysis.json
+    data/evaluation/msmarco_valid/best_v2/visited_nodes_analysis.json
     """
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
@@ -68,7 +80,7 @@ def build_output_paths(dataset_path: str):
     else:
         split = "unknown"
 
-    output_dir = Path("data/evaluation") / dataset_name
+    output_dir = Path("data/evaluation") / dataset_name / run_suffix
     output_json_file = output_dir / "visited_nodes_analysis.json"
 
     return dataset_name, split, output_dir, str(output_json_file)
@@ -197,6 +209,7 @@ def run_visited_nodes_loop(
                 "nodes_visited": int(visited_nodes),
                 "path_length": int(path_length),
                 "time_sec": float(elapsed),
+                "time_ms": float(elapsed * 1000),
                 "path": path if path else [],
             }
         )
@@ -246,12 +259,25 @@ def parse_args():
         "dataset_path",
         help="Path to normalized dataset JSON file."
     )
+    parser.add_argument(
+        "--run-suffix",
+        type=str,
+        required=True,
+        help="Final-training run suffix, e.g. best_v2.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     dataset_path = args.dataset_path
+    run_suffix = args.run_suffix
+
+    fine_tuned_models = get_fine_tuned_models(run_suffix)
+    model_queue = base_models + fine_tuned_models
+
+    print(f"Run suffix: {run_suffix}")
+    print("Model queue:", model_queue)
 
     # RL still needs these parameters
     RL_ANALYSIS_CONFIG = {
@@ -261,13 +287,16 @@ if __name__ == "__main__":
         "rl_max_actions": 5000,
         "rl_max_visits": -1,
     }
+
     dataset_name, split, output_dir, output_json_file = build_output_paths(
-        dataset_path
+        dataset_path,
+        run_suffix,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Dataset: {dataset_name}")
     print(f"Split: {split}")
+    print(f"Output directory: {output_dir}")
 
     print("Loading dataset...")
     with open(dataset_path, encoding="utf-8") as file:
@@ -291,7 +320,7 @@ if __name__ == "__main__":
             embeder=None,
             strategy=ts.bfs_traverse,
             strategy_name="BFS",
-            description=f"BFS | {dataset_name}",
+            description=f"BFS | {dataset_name} | {run_suffix}",
             config=None,
         )
 
@@ -301,6 +330,7 @@ if __name__ == "__main__":
                 "dimension": None,
                 "dataset": dataset_name,
                 "split": split,
+                "run_suffix": run_suffix,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "analysis": bfs_result,
             },
@@ -308,6 +338,8 @@ if __name__ == "__main__":
         )
     else:
         print("\n=== skipping BFS Baseline ===")
+
+    existing_results = load_results_file(output_json_file)
 
     # -------------------------------------------------------------------------
     # RL baseline
@@ -327,7 +359,7 @@ if __name__ == "__main__":
                 embeder=rl_embeder,
                 strategy=ts.rl_traverse,
                 strategy_name="RL",
-                description=f"RL | {dataset_name}",
+                description=f"RL | {dataset_name} | {run_suffix}",
                 config=RL_ANALYSIS_CONFIG,
             )
 
@@ -337,6 +369,7 @@ if __name__ == "__main__":
                     "dimension": None,
                     "dataset": dataset_name,
                     "split": split,
+                    "run_suffix": run_suffix,
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "analysis": rl_result,
                 },
@@ -362,6 +395,7 @@ if __name__ == "__main__":
         try:
             distance_metric = get_model_distance_metric(model_path)
             print(f"Distance metric: {distance_metric}")
+
             main_embeder = STEmbedder(
                 model_path=model_path,
                 distance_metric=distance_metric,
@@ -373,9 +407,7 @@ if __name__ == "__main__":
             existing_results = load_results_file(output_json_file)
 
             if already_done(existing_results, model_name, model_dim):
-                print(
-                    f"Skipping {model_name} dim {model_dim}"
-                )
+                print(f"Skipping {model_name} dim {model_dim}")
             else:
                 main_embeder.set_matryoshka_dim(model_dim)
 
@@ -385,7 +417,7 @@ if __name__ == "__main__":
                     embeder=main_embeder,
                     strategy=ts.astar_traverse,
                     strategy_name="A*",
-                    description=f"{model_name} | {dataset_name}",
+                    description=f"{model_name} | {dataset_name} | {run_suffix}",
                     config=None,
                 )
 
@@ -396,6 +428,7 @@ if __name__ == "__main__":
                         "dimension": model_dim,
                         "dataset": dataset_name,
                         "split": split,
+                        "run_suffix": run_suffix,
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "analysis": astar_result,
                     },
