@@ -210,6 +210,38 @@ def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=N
         break
 
 
+def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
+    """
+    Populate the ST embedding cache before timed A* evaluation.
+
+    This is a fallback for cases where graph nodes were not pre-embedded before
+    evaluation. It keeps measured evaluation data from being influenced by
+    first-time SentenceTransformer.encode() calls inside the timed traversal
+    loop.
+    """
+    nodes = list(graph.nodes)
+    cached_before = sum(1 for node in nodes if node in embeder.cache)
+
+    print(
+        f"Preloading graph embeddings for {embeder.get_model_name()} "
+        f"({cached_before}/{len(nodes)} cached)..."
+    )
+
+    start_time = time.time()
+    added = embeder.preload(
+        nodes,
+        batch_size=batch_size,
+        save=save_cache,
+    )
+    elapsed = time.time() - start_time
+
+    print(
+        f"Embedding preload complete: {added} added, "
+        f"{cached_before + added}/{len(nodes)} graph nodes cached, "
+        f"{elapsed:.1f}s"
+    )
+
+
 def save_all_results_csv(all_results, output_csv_file):
     fieldnames = [
         "algorithm",
@@ -462,6 +494,25 @@ def parse_args():
         required=True,
         help="Final-training run suffix, e.g. best_v2.",
     )
+    parser.add_argument(
+        "--skip-embedding-preload",
+        action="store_true",
+        help=(
+            "Do not prepopulate ST graph-node embeddings before timed A* "
+            "evaluation."
+        ),
+    )
+    parser.add_argument(
+        "--embedding-batch-size",
+        type=int,
+        default=64,
+        help="Batch size used when preloading ST graph-node embeddings.",
+    )
+    parser.add_argument(
+        "--no-save-embedding-cache",
+        action="store_true",
+        help="Do not persist newly preloaded ST embeddings to data/embeddings.",
+    )
 
     return parser.parse_args()
 
@@ -659,22 +710,44 @@ if __name__ == "__main__":
             else:
                 dims = get_matryoshka_dims(full_dim)
 
-            for dim in dims:
-                existing_results = load_results_file(output_json_file)
+            existing_results = load_results_file(output_json_file)
+            pending_dims = []
 
-                if any(
-                        entry.get("model") == model_name
-                        and entry.get("dimension") == dim
-                        for entry in existing_results
-                ):
+            for dim in dims:
+                already_evaluated = any(
+                    entry.get("model") == model_name
+                    and entry.get("dimension") == dim
+                    for entry in existing_results
+                )
+
+                if already_evaluated:
                     print(f"Skipping {model_name} dim {dim}")
                     continue
 
-                print(f"--- Dim: {dim} ---")
-                main_embeder.set_matryoshka_dim(dim)
-
                 if (model_name, dim) not in p95_configs:
                     raise KeyError(f"Missing p95 config for {(model_name, dim)}")
+
+                pending_dims.append(dim)
+
+            if not pending_dims:
+                print(f"No pending dimensions for {model_name}.")
+                del main_embeder
+                gc.collect()
+                torch.cuda.empty_cache()
+                continue
+
+            if not args.skip_embedding_preload:
+                preload_graph_embeddings(
+                    main_embeder,
+                    causal_graph,
+                    batch_size=args.embedding_batch_size,
+                    save_cache=not args.no_save_embedding_cache,
+                )
+
+            for dim in pending_dims:
+
+                print(f"--- Dim: {dim} ---")
+                main_embeder.set_matryoshka_dim(dim)
 
                 astar_config = {
                     "astar_max_visits": p95_configs[(model_name, dim)]

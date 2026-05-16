@@ -55,8 +55,8 @@ def select_best_astar_model(
                     "avg_nodes_visited",
                     float("inf"),
                 ),
-                "avg_time_sec": metrics.get(
-                    "avg_time_sec",
+                "avg_time_ms": metrics.get(
+                    "avg_time_ms",
                     float("inf"),
                 ),
                 "num_examples": metrics.get("num_examples", 0),
@@ -71,8 +71,8 @@ def select_best_astar_model(
     cheapest_candidates = sorted(
         candidates,
         key=lambda x: (
+            x["avg_time_ms"],
             x["avg_nodes_visited"],
-            x["avg_time_sec"],
             -x["f1_score"],
         ),
     )
@@ -88,7 +88,7 @@ def select_best_astar_model(
         efficient_pool,
         key=lambda x: (
             -x["f1_score"],
-            x["avg_time_sec"],
+            x["avg_time_ms"],
             x["avg_nodes_visited"],
         ),
     )
@@ -131,7 +131,7 @@ def print_selection(selection_result, top_k=20):
     print(f"Recall:             {best['recall']:.6f}")
     print(f"Precision:          {best['precision']:.6f}")
     print(f"Avg visited nodes:  {best['avg_nodes_visited']:.2f}")
-    print(f"Avg time sec:       {best['avg_time_sec']:.6f}")
+    print(f"Avg time sec:       {best['avg_time_ms']:.6f}")
     print(f"Num examples:       {best['num_examples']}")
 
     print(f"\nCHEAPEST {len(efficient_pool)} A* CANDIDATES")
@@ -143,7 +143,7 @@ def print_selection(selection_result, top_k=20):
             f"{candidate['model']} | "
             f"dim={candidate['dimension']} | "
             f"nodes={candidate['avg_nodes_visited']:.2f} | "
-            f"time={candidate['avg_time_sec']:.6f} | "
+            f"time={candidate['avg_time_ms']:.6f} | "
             f"f1={candidate['f1_score']:.6f} | "
             f"accuracy={candidate['accuracy']:.6f}"
         )
@@ -158,7 +158,7 @@ def print_selection(selection_result, top_k=20):
             f"dim={candidate['dimension']} | "
             f"f1={candidate['f1_score']:.6f} | "
             f"nodes={candidate['avg_nodes_visited']:.2f} | "
-            f"time={candidate['avg_time_sec']:.6f} | "
+            f"time={candidate['avg_time_ms']:.6f} | "
             f"accuracy={candidate['accuracy']:.6f}"
         )
 

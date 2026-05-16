@@ -1,5 +1,5 @@
+import argparse
 import gc
-import os
 import sys
 from pathlib import Path
 
@@ -14,110 +14,132 @@ DATA_DIR = REPO_ROOT / "code" / "data"
 sys.path.append(str(REPO_ROOT / "code"))
 
 from core.embeddings import STEmbedder
-from core.utils import get_model_distance_metric, load_graph
+from core.utils import (
+    get_fine_tuned_models,
+    get_model_distance_metric,
+    load_causal_graph,
+)
 
-embeddings_dir = DATA_DIR / "embeddings"
-embeddings_dir.mkdir(parents=True, exist_ok=True)
 
-# We only need the graph structure and node names here.
-graph = load_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl", False)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Precompute graph-node embeddings for base and fine-tuned models."
+    )
+    parser.add_argument(
+        "--run-suffix",
+        type=str,
+        default="best_v2",
+        help="Only include fine-tuned models with this suffix, e.g. best_v2.",
+    )
+    return parser.parse_args()
 
-base_models = [
-    # Strong general-purpose baseline
-    "sentence-transformers/all-mpnet-base-v2",
 
-    # Lightweight embedding models
-    # "BAAI/bge-base-en-v1.5",
-    # "ibm-granite/granite-embedding-small-english-r2",
+if __name__ == "__main__":
+    args = parse_args()
+    run_suffix = args.run_suffix
 
-    # Higher-capacity embedding models
-    "BAAI/bge-large-en-v1.5",
-    # "ibm-granite/granite-embedding-english-r2",
-    "mixedbread-ai/mxbai-embed-large-v1",
+    embeddings_dir = DATA_DIR / "embeddings"
+    embeddings_dir.mkdir(parents=True, exist_ok=True)
 
-    # Large language model-based embeddings
-    "Qwen/Qwen3-Embedding-0.6B",
+    # We only need the graph structure and node names here.
+    graph = load_causal_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl", use_inverse=False)
 
-    # Very large model (high memory requirements)
-    # "Qwen/Qwen3-Embedding-4B",
-]
+    base_models = [
+        # Strong general-purpose baseline
+        "sentence-transformers/all-mpnet-base-v2",
 
-lightning_dir = DATA_DIR / "models" / "lightning"
-fine_tuned_models = []
+        # Lightweight embedding models
+        # "BAAI/bge-base-en-v1.5",
+        # "ibm-granite/granite-embedding-small-english-r2",
 
-# Collect all fine-tuned models that were exported into the Lightning model directory.
-if lightning_dir.exists():
-    fine_tuned_models = [
-        str((lightning_dir / name).resolve()).replace("\\", "/")
-        for name in os.listdir(lightning_dir)
-        if (lightning_dir / name).is_dir()
+        # Higher-capacity embedding models
+        "BAAI/bge-large-en-v1.5",
+        "ibm-granite/granite-embedding-english-r2",
+        "mixedbread-ai/mxbai-embed-large-v1",
+
+        # Large language model-based embeddings
+        "Qwen/Qwen3-Embedding-0.6B",
+
+        # Very large model (high memory requirements)
+        # "Qwen/Qwen3-Embedding-4B",
     ]
-    print(f"Found {len(fine_tuned_models)} fine-tuned models in {lightning_dir}")
-else:
-    print(f"Warning: Directory {lightning_dir} not found.")
 
-# Process base models first, then any discovered fine-tuned models.
-model_queue = base_models + fine_tuned_models
+    # Only collect fine-tuned models from the requested final-training suffix.
+    fine_tuned_models = get_fine_tuned_models(run_suffix)
 
-batch_size = 64
+    print(f"Run suffix: {run_suffix}")
+    print(f"Found {len(fine_tuned_models)} fine-tuned models for suffix '{run_suffix}'.")
 
-for model_path in model_queue:
-    print(f"\n{'=' * 50}")
-    print(f"PROCESSING MODEL: {model_path}")
-    print(f"{'=' * 50}")
+    # Process base models first, then matching fine-tuned models.
+    model_queue = base_models + fine_tuned_models
 
-    # Extract a clean model name for the embedding cache filename.
-    raw_name = Path(model_path).name
-    save_path = embeddings_dir / f"{raw_name}_embeddings.npy"
+    print("Model queue:")
+    for model_path in model_queue:
+        print(f"  {model_path}")
 
-    try:
-        # Reuse an existing cache if available so interrupted runs can resume.
-        embeddings = np.load(save_path, allow_pickle=True).item()
-        print(f"Loaded {len(embeddings)} existing embeddings from {save_path}")
-    except FileNotFoundError:
-        print("No existing cache found. Starting fresh.")
-        embeddings = {}
+    batch_size = 64
 
-    # Only embed nodes that are still missing from the cache.
-    uncached_nodes = [node for node in graph.nodes if node not in embeddings]
-    print(f"Found {len(uncached_nodes)} nodes that need embedding.")
+    for model_path in model_queue:
+        print(f"\n{'=' * 50}")
+        print(f"PROCESSING MODEL: {model_path}")
+        print(f"{'=' * 50}")
 
-    if len(uncached_nodes) > 0:
-        print("Loading model...")
+        # Extract a clean model name for the embedding cache filename.
+        raw_name = Path(model_path).name
+        save_path = embeddings_dir / f"{raw_name}_embeddings.npy"
 
-        distance_metric = get_model_distance_metric(model_path)
-        print(f"Distance metric: {distance_metric}")
-        embeder = STEmbedder(model_path=model_path, distance_metric=distance_metric)
+        try:
+            # Reuse an existing cache if available so interrupted runs can resume.
+            embeddings = np.load(save_path, allow_pickle=True).item()
+            print(f"Loaded {len(embeddings)} existing embeddings from {save_path}")
+        except FileNotFoundError:
+            print("No existing cache found. Starting fresh.")
+            embeddings = {}
 
-        total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
+        # Only embed nodes that are still missing from the cache.
+        uncached_nodes = [node for node in graph.nodes if node not in embeddings]
+        print(f"Found {len(uncached_nodes)} nodes that need embedding.")
 
-        for i in range(0, len(uncached_nodes), batch_size):
-            batch = uncached_nodes[i:i + batch_size]
+        if len(uncached_nodes) > 0:
+            print("Loading model...")
 
-            # Embed the current batch one node at a time through the wrapper.
-            batch_embeddings = [embeder.embed(node) for node in batch]
+            distance_metric = get_model_distance_metric(model_path)
+            print(f"Distance metric: {distance_metric}")
 
-            for node, emb in zip(batch, batch_embeddings):
-                embeddings[node] = emb
+            embeder = STEmbedder(
+                model_path=model_path,
+                distance_metric=distance_metric,
+            )
 
-            # Print progress every 10 batches so the console is still readable.
-            if (i // batch_size) % 10 == 0:
-                print(
-                    f"Processed batch {i // batch_size + 1}/{total_batches} "
-                    f"(Total: {i + len(batch)}/{len(uncached_nodes)})"
-                )
+            total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
 
-        print(f"Saving embeddings to {save_path}...")
-        np.save(save_path, embeddings)
-        print("Save complete.")
+            for i in range(0, len(uncached_nodes), batch_size):
+                batch = uncached_nodes[i:i + batch_size]
 
-        # Explicit cleanup helps when multiple large models are processed in one run.
-        print("Cleaning up memory ...")
-        del embeder
-        del embeddings
-        gc.collect()
-        torch.cuda.empty_cache()
-    else:
-        print("All nodes already cached. Skipping computation.")
+                # Embed the current batch one node at a time through the wrapper.
+                batch_embeddings = [embeder.embed(node) for node in batch]
 
-print("\nAll models processed.")
+                for node, emb in zip(batch, batch_embeddings):
+                    embeddings[node] = emb
+
+                # Print progress every 10 batches so the console is still readable.
+                if (i // batch_size) % 10 == 0:
+                    print(
+                        f"Processed batch {i // batch_size + 1}/{total_batches} "
+                        f"(Total: {i + len(batch)}/{len(uncached_nodes)})"
+                    )
+
+            print(f"Saving embeddings to {save_path}...")
+            np.save(save_path, embeddings)
+            print("Save complete.")
+
+            # Explicit cleanup helps when multiple large models are processed in one run.
+            print("Cleaning up memory ...")
+            del embeder
+            del embeddings
+            gc.collect()
+            torch.cuda.empty_cache()
+        else:
+            print("All nodes already cached. Skipping computation.")
+
+    print("\nAll models processed.")

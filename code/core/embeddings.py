@@ -34,12 +34,12 @@ class STEmbedder:
         # This avoids writing to ../data, which resolves outside /app inside the Slurm container.
         cache_dir = DATA_DIR / "embeddings"
         os.makedirs(cache_dir, exist_ok=True)
-        cache_file = cache_dir / f"{self.model_name}_embeddings.npy"
+        self.cache_file = cache_dir / f"{self.model_name}_embeddings.npy"
 
         # Load precomputed embeddings if they exist.
-        if os.path.exists(cache_file):
-            self.cache = np.load(cache_file, allow_pickle=True).item()
-            print(f"Loaded cached embeddings from {cache_file}")
+        if os.path.exists(self.cache_file):
+            self.cache = np.load(self.cache_file, allow_pickle=True).item()
+            print(f"Loaded cached embeddings from {self.cache_file}")
 
         tokenizer_kwargs = {}
         # Fix known tokenizer regex issue for Mistral/Qwen-style tokenizers.
@@ -65,6 +65,39 @@ class STEmbedder:
         emb = self.model.encode(text, convert_to_numpy=True, show_progress_bar=False)
         self.cache[text] = emb
         return emb
+
+    def preload(self, texts, batch_size: int = 64, save: bool = True) -> int:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than 0")
+
+        missing_texts = [
+            text
+            for text in dict.fromkeys(texts)
+            if text not in self.cache
+        ]
+
+        if not missing_texts:
+            return 0
+
+        for start in range(0, len(missing_texts), batch_size):
+            batch = missing_texts[start:start + batch_size]
+            batch_embeddings = self.model.encode(
+                batch,
+                batch_size=batch_size,
+                convert_to_numpy=True,
+                show_progress_bar=False,
+            )
+
+            for text, emb in zip(batch, batch_embeddings):
+                self.cache[text] = emb
+
+        if save:
+            self.save_cache()
+
+        return len(missing_texts)
+
+    def save_cache(self):
+        np.save(self.cache_file, self.cache)
 
     def get_distance(self, embed1, embed2):
         e1 = embed1.flatten()
