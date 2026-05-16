@@ -22,6 +22,7 @@ from core.utils import (
     get_fine_tuned_models,
     get_model_distance_metric,
     get_matryoshka_dims,
+    sort_model_queue,
     load_causal_graph,
     load_rl_graph,
     traverse_graph,
@@ -152,32 +153,6 @@ def load_p95_configs(eval_dataset_name: str, run_suffix: str):
     return p95_map, config_source_dataset_name
 
 
-def get_astar_max_visits(p95_configs, model_name, dim, full_dim):
-    """
-    Get A* max visits for this model/dimension.
-
-    Preferred:
-    - exact model/dim p95
-
-    Fallback:
-    - full-dim p95
-    """
-    if (model_name, dim) in p95_configs:
-        return p95_configs[(model_name, dim)]
-
-    if (model_name, full_dim) in p95_configs:
-        print(
-            f"Warning: no p95 for {model_name} dim {dim}. "
-            f"Using full-dim p95 from dim {full_dim}."
-        )
-        return p95_configs[(model_name, full_dim)]
-
-    raise KeyError(
-        f"No p95 config found for {model_name} dim {dim} "
-        f"or full dim {full_dim}."
-    )
-
-
 def compute_embedding_path_cost(path, embeder):
     if not path:
         return None
@@ -195,6 +170,44 @@ def compute_embedding_path_cost(path, embeder):
         total += embeder.get_distance(ea, eb)
 
     return float(total)
+
+
+def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=None):
+    """
+    Run one untimed traversal before evaluation.
+
+    This removes startup artifacts from timing:
+    - CUDA/model lazy initialization
+    - first embedding/cache access
+    - first graph traversal overhead
+
+    The result is ignored and not stored.
+    """
+    for item in data:
+        cause = item["cause"]
+        effect = item["effect"]
+
+        if cause not in graph.nodes or effect not in graph.nodes:
+            continue
+
+        strategy_config = config
+        if strategy_name == "RL":
+            strategy_config = dict(config) if config is not None else {}
+            strategy_config["question"] = item.get(
+                "question",
+                f"can {cause} cause {effect}?"
+            )
+
+        traverse_graph(
+            graph,
+            cause,
+            effect,
+            embeder,
+            strategy,
+            strategy_config,
+        )
+
+        break
 
 
 def save_all_results_csv(all_results, output_csv_file):
@@ -357,8 +370,6 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
         true_label = bool(item["answer"])
 
         for name, strategy in strategies.items():
-            start_time = time.time()
-
             strategy_config = config
             if name == "RL":
                 strategy_config = dict(config) if config is not None else {}
@@ -366,6 +377,8 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
                     "question",
                     f"can {cause} cause {effect}?"
                 )
+
+            start_time = time.time()
 
             path, visited_nodes = traverse_graph(
                 graph,
@@ -460,7 +473,7 @@ if __name__ == "__main__":
     run_suffix = args.run_suffix
 
     fine_tuned_models = get_fine_tuned_models(run_suffix)
-    model_queue = base_models + fine_tuned_models
+    model_queue = sort_model_queue(base_models + fine_tuned_models, run_suffix)
 
     print(f"Run suffix: {run_suffix}")
     print("Model queue:", model_queue)
@@ -491,7 +504,13 @@ if __name__ == "__main__":
         selection = select_best_astar_model(valid_results_file)
         print_selection(selection)
 
-        selected_test_model = selection["best"]
+        selected_test_model = selection.get("best")
+
+        if selected_test_model is None:
+            raise ValueError(
+                f"No validation-selected A* model found in {valid_results_file}. "
+                "Run validation evaluation first or check select_best_astar_model()."
+            )
 
         print("\nTest split detected.")
         print("Ignoring full model queue for A*.")
@@ -515,9 +534,21 @@ if __name__ == "__main__":
     existing_results = load_results_file(output_json_file)
 
     if not any(entry["model"] == "BFS_Baseline" for entry in existing_results):
+        if ("BFS_Baseline", None) not in p95_configs:
+            raise KeyError("Missing p95 config for BFS_Baseline.")
+
         bfs_config = {
             "bfs_max_visits": p95_configs[("BFS_Baseline", None)]
         }
+
+        run_warmup_traversal(
+            valid_data,
+            causal_graph,
+            None,
+            ts.bfs_traverse,
+            "BFS",
+            config=bfs_config,
+        )
 
         bfs_summary = run_evaluation_loop(
             valid_data,
@@ -560,6 +591,15 @@ if __name__ == "__main__":
             "rl_max_actions": 5000,
             "rl_max_visits": -1,
         }
+
+        run_warmup_traversal(
+            valid_data,
+            rl_graph,
+            rl_embeder,
+            ts.rl_traverse,
+            "RL",
+            config=rl_config,
+        )
 
         rl_summary = run_evaluation_loop(
             valid_data,
@@ -632,16 +672,21 @@ if __name__ == "__main__":
                 print(f"--- Dim: {dim} ---")
                 main_embeder.set_matryoshka_dim(dim)
 
-                astar_max_visits = get_astar_max_visits(
-                    p95_configs=p95_configs,
-                    model_name=model_name,
-                    dim=dim,
-                    full_dim=full_dim,
-                )
+                if (model_name, dim) not in p95_configs:
+                    raise KeyError(f"Missing p95 config for {(model_name, dim)}")
 
                 astar_config = {
-                    "astar_max_visits": astar_max_visits
+                    "astar_max_visits": p95_configs[(model_name, dim)]
                 }
+
+                run_warmup_traversal(
+                    valid_data,
+                    causal_graph,
+                    main_embeder,
+                    ts.astar_traverse,
+                    "A*",
+                    config=astar_config,
+                )
 
                 main_summary = run_evaluation_loop(
                     valid_data,

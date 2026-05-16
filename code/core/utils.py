@@ -359,3 +359,43 @@ def get_fine_tuned_models(run_suffix: str):
            and name != "old"
            and name.endswith(expected_suffix)
     ]
+
+
+def sort_model_queue(model_queue, run_suffix):
+    """
+    Sort models so each base model is followed by its fine-tuned variant.
+
+    Example:
+    MPNet base
+    MPNet finetuned
+    BGE base
+    BGE finetuned
+    ...
+
+    Base models come before fine-tuned variants.
+    """
+
+    def sort_key(model_path):
+        model_name = model_path.split("/")[-1]
+
+        normalized_name = (
+            model_name
+            .replace(
+                f"_relu_cosine_nonorm_matryoshka_{run_suffix}_finetuned", ""
+            )
+            .replace(
+                f"_relu_euclid_nonorm_matryoshka_{run_suffix}_finetuned", ""
+            )
+            .replace(
+                f"_gelu_cosine_nonorm_matryoshka_{run_suffix}_finetuned", ""
+            )
+            .replace(
+                f"_gelu_euclid_nonorm_matryoshka_{run_suffix}_finetuned", ""
+            )
+        )
+
+        is_finetuned = "finetuned" in model_name
+
+        return normalized_name, is_finetuned
+
+    return sorted(model_queue, key=sort_key)

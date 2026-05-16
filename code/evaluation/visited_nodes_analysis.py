@@ -14,6 +14,7 @@ from core.utils import (
     traverse_graph,
     get_fine_tuned_models,
     get_model_distance_metric,
+    get_matryoshka_dims,
     load_causal_graph,
     load_rl_graph,
 )
@@ -88,7 +89,10 @@ def save_result(result_entry, output_json_file):
     with open(output_json_file, "w", encoding="utf-8") as file:
         json.dump(current_results, file, indent=4)
 
-    print(f"Saved visited-node results for '{result_entry['model']}'")
+    print(
+        f"Saved visited-node results for "
+        f"'{result_entry['model']}' dim {result_entry.get('dimension')}"
+    )
 
 
 def already_done(existing_results, model, dimension=None):
@@ -380,15 +384,23 @@ if __name__ == "__main__":
                 distance_metric=distance_metric,
             )
 
-            # Only full dimension
+            # Collect one uncapped distribution per Matryoshka dimension.
             model_dim = main_embeder.get_model_dim()
+            matryoshka_dims = get_matryoshka_dims(model_dim)
 
-            existing_results = load_results_file(output_json_file)
+            print(f"Model dim: {model_dim}")
+            print(f"Matryoshka dims: {matryoshka_dims}")
 
-            if already_done(existing_results, model_name, model_dim):
-                print(f"Skipping {model_name} dim {model_dim}")
-            else:
-                main_embeder.set_matryoshka_dim(model_dim)
+            for dim in matryoshka_dims:
+                existing_results = load_results_file(output_json_file)
+
+                if already_done(existing_results, model_name, dim):
+                    print(f"Skipping {model_name} dim {dim}")
+                    continue
+
+                print(f"\n--- Running A* dim {dim} ---")
+
+                main_embeder.set_matryoshka_dim(dim)
 
                 astar_result = run_visited_nodes_loop(
                     data=data,
@@ -396,7 +408,10 @@ if __name__ == "__main__":
                     embeder=main_embeder,
                     strategy=ts.astar_traverse,
                     strategy_name="A*",
-                    description=f"{model_name} | {dataset_name} | {run_suffix}",
+                    description=(
+                        f"{model_name} | dim {dim} | "
+                        f"{dataset_name} | {run_suffix}"
+                    ),
                     config=None,
                 )
 
@@ -404,7 +419,7 @@ if __name__ == "__main__":
                     {
                         "model": model_name,
                         "model_path": model_path,
-                        "dimension": model_dim,
+                        "dimension": dim,
                         "dataset": dataset_name,
                         "split": split,
                         "run_suffix": run_suffix,
