@@ -626,6 +626,7 @@ if __name__ == "__main__":
         )
 
         del rl_embeder
+        del rl_graph
         gc.collect()
     else:
         print("Skipping RL_Baseline because it already exists.")
