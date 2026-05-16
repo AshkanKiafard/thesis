@@ -44,6 +44,11 @@ def parse_args():
             "msmarco_valid or data/datasets/filtered/msmarco_valid_filtered.json"
         ),
     )
+    parser.add_argument(
+        "--run-suffix",
+        default="best_v2",
+        help="Run suffix used in evaluation and plot paths, e.g. best_v2.",
+    )
     return parser.parse_args()
 
 
@@ -69,17 +74,16 @@ def detect_split(dataset_name: str):
     return "unknown"
 
 
-def build_input_paths(dataset_name: str):
-    eval_dir = Path("data/evaluation") / dataset_name
+def build_input_paths(dataset_name: str, run_suffix: str):
+    eval_dir = Path("data/evaluation") / dataset_name / run_suffix
     eval_results_path = eval_dir / "evaluation_results.json"
-
     visited_nodes_path = eval_dir / "visited_nodes_analysis.json"
 
     return eval_results_path, visited_nodes_path
 
 
-def build_plot_output_dir(dataset_name: str):
-    return Path(PLOT_OUTPUT_DIR) / dataset_name
+def build_plot_output_dir(dataset_name: str, run_suffix: str):
+    return Path(PLOT_OUTPUT_DIR) / dataset_name / run_suffix
 
 
 def ensure_directory(path):
@@ -119,6 +123,15 @@ def load_json(path):
 
     with open(path, "r", encoding="utf-8") as file:
         return json.load(file)
+
+
+def sanitize_path_component(value):
+    value = str(value)
+    value = value.replace("/", "_")
+    value = value.replace("\\", "_")
+    value = value.replace(":", "_")
+    value = value.replace(" ", "_")
+    return value
 
 
 # -------------------------------------------------------------------------
@@ -275,11 +288,12 @@ def dimension_sort_value(dimension):
     return int(dimension)
 
 
-def build_run_id(model, dimension, algorithm):
-    if pd.isna(dimension):
-        return f"{model}__{algorithm}"
-
-    return f"{model}__dim{int(dimension)}__{algorithm}"
+def run_sort_key(model, dimension, algorithm):
+    return (
+        model_sort_key(model),
+        dimension_sort_value(dimension),
+        algorithm or "",
+    )
 
 
 def build_run_label(model_label, dimension=None, algorithm=None):
@@ -294,12 +308,32 @@ def build_run_label(model_label, dimension=None, algorithm=None):
     return label
 
 
-def run_sort_key(model, dimension, algorithm):
-    return (
-        model_sort_key(model),
-        dimension_sort_value(dimension),
-        algorithm or "",
-    )
+def normalize_metric_name(metric_key):
+    if metric_key == "f1_score":
+        return "F1 Score"
+    if metric_key == "accuracy":
+        return "Accuracy"
+    if metric_key == "precision":
+        return "Precision"
+    if metric_key == "recall":
+        return "Recall"
+    if metric_key == "avg_time_sec":
+        return "Average Runtime (seconds)"
+
+    return metric_key
+
+
+def get_metric_value(metrics, metric_key):
+    # New evaluation.py stores avg_time_ms.
+    # Older code expected avg_time_sec.
+    if metric_key == "avg_time_sec":
+        if metrics.get("avg_time_sec") is not None:
+            return metrics.get("avg_time_sec")
+        if metrics.get("avg_time_ms") is not None:
+            return metrics.get("avg_time_ms") / 1000.0
+        return None
+
+    return metrics.get(metric_key)
 
 
 # -------------------------------------------------------------------------
@@ -323,17 +357,12 @@ def extract_baselines(eval_data):
             baselines[model] = {
                 "algorithm": algorithm,
                 "model_label": parse_model_label(model),
-                "accuracy": metrics.get("accuracy"),
-                "f1_score": metrics.get("f1_score"),
-                "precision": metrics.get("precision"),
-                "recall": metrics.get("recall"),
-                "avg_nodes_visited": metrics.get("avg_nodes_visited"),
-                "avg_time_sec": metrics.get("avg_time_sec"),
-                "avg_path_length": metrics.get("avg_path_length"),
-                "avg_path_cost": metrics.get("avg_path_cost"),
-                "avg_cost_per_hop": metrics.get("avg_cost_per_hop"),
-                "used_config": entry.get("used_config"),
-                "config_source_dataset": entry.get("config_source_dataset"),
+                "accuracy": get_metric_value(metrics, "accuracy"),
+                "f1_score": get_metric_value(metrics, "f1_score"),
+                "precision": get_metric_value(metrics, "precision"),
+                "recall": get_metric_value(metrics, "recall"),
+                "avg_time_sec": get_metric_value(metrics, "avg_time_sec"),
+                "avg_nodes_visited": get_metric_value(metrics, "avg_nodes_visited"),
             }
 
     return baselines
@@ -365,17 +394,12 @@ def extract_semantic_data(eval_data):
                     "model_label": parse_model_label(model_name),
                     "dimension": int(dimension),
                     "algorithm": algorithm,
-                    "accuracy": metrics.get("accuracy"),
-                    "f1_score": metrics.get("f1_score"),
-                    "precision": metrics.get("precision"),
-                    "recall": metrics.get("recall"),
-                    "avg_nodes_visited": metrics.get("avg_nodes_visited"),
-                    "avg_time_sec": metrics.get("avg_time_sec"),
-                    "avg_path_length": metrics.get("avg_path_length"),
-                    "avg_path_cost": metrics.get("avg_path_cost"),
-                    "avg_cost_per_hop": metrics.get("avg_cost_per_hop"),
-                    "used_config": entry.get("used_config"),
-                    "config_source_dataset": entry.get("config_source_dataset"),
+                    "accuracy": get_metric_value(metrics, "accuracy"),
+                    "f1_score": get_metric_value(metrics, "f1_score"),
+                    "precision": get_metric_value(metrics, "precision"),
+                    "recall": get_metric_value(metrics, "recall"),
+                    "avg_time_sec": get_metric_value(metrics, "avg_time_sec"),
+                    "avg_nodes_visited": get_metric_value(metrics, "avg_nodes_visited"),
                 }
             )
 
@@ -408,15 +432,9 @@ def extract_per_example_rows(eval_data):
                         "model_label": parse_model_label(model),
                         "dimension": dimension,
                         "algorithm": algorithm,
-                        "run_id": build_run_id(model, dimension, algorithm),
                         "id": row.get("id"),
                         "true": row.get("true"),
                         "pred": row.get("pred"),
-                        "correct": row.get("correct"),
-                        "nodes_visited": row.get("nodes_visited"),
-                        "path_length": row.get("path_length"),
-                        "time_sec": row.get("time_sec"),
-                        "path_cost": row.get("path_cost"),
                     }
                 )
 
@@ -438,25 +456,8 @@ def extract_per_example_rows(eval_data):
 
 
 # -------------------------------------------------------------------------
-# General plotting helpers
+# Metric plots from evaluation_results.json
 # -------------------------------------------------------------------------
-
-def set_zoomed_ylim_from_models(ax, values, pad_ratio=0.08, min_pad=1e-6):
-    clean = pd.Series(values).dropna()
-
-    if clean.empty:
-        return
-
-    y_min = clean.min()
-    y_max = clean.max()
-
-    if y_min == y_max:
-        pad = max(abs(y_min) * pad_ratio, min_pad)
-    else:
-        pad = max((y_max - y_min) * pad_ratio, min_pad)
-
-    ax.set_ylim(y_min - pad, y_max + pad)
-
 
 def get_model_subsets(df, value_col):
     subsets = []
@@ -472,27 +473,6 @@ def get_model_subsets(df, value_col):
             subsets.append((model, label, subset))
 
     return subsets
-
-
-def plot_standard_lines(ax, df, value_col):
-    all_values = []
-
-    for _, label, subset in get_model_subsets(df, value_col):
-        y = subset[value_col]
-        ax.plot(subset["dimension"], y, marker="o", label=label)
-        all_values.extend(y.dropna().tolist())
-
-    return all_values
-
-
-def apply_common_axis_style(ax, df, ylabel, title):
-    ax.set_title(title)
-    ax.set_xlabel("Embedding Size")
-    ax.set_ylabel(ylabel)
-    ax.grid(True, alpha=0.3)
-
-    if not df.empty:
-        ax.set_xticks(sorted(df["dimension"].unique()))
 
 
 def add_baseline_lines(ax, baselines, metric_key):
@@ -516,40 +496,290 @@ def add_baseline_lines(ax, baselines, metric_key):
         )
 
 
+def collect_metric_values(df, baselines, metric_key):
+    values = []
+
+    if not df.empty and metric_key in df.columns:
+        values.extend(df[metric_key].dropna().astype(float).tolist())
+
+    for baseline in baselines.values():
+        value = baseline.get(metric_key)
+        if value is not None and not pd.isna(value):
+            values.append(float(value))
+
+    return values
+
+
+def compute_zoom_ylim(df, baselines, metric_key, pad_ratio=0.12, min_pad=1e-6):
+    values = collect_metric_values(df, baselines, metric_key)
+
+    if not values:
+        return None, None
+
+    y_min = min(values)
+    y_max = max(values)
+
+    if y_min == y_max:
+        pad = max(abs(y_min) * pad_ratio, min_pad)
+    else:
+        pad = max((y_max - y_min) * pad_ratio, min_pad)
+
+    return y_min - pad, y_max + pad
+
+
+def plot_model_lines_on_axis(ax, df, metric_key):
+    for _, label, subset in get_model_subsets(df, metric_key):
+        ax.plot(
+            subset["dimension"],
+            subset[metric_key],
+            marker="o",
+            label=label,
+        )
+
+
+def plot_selected_baseline_lines_on_axis(ax, baselines, metric_key, selected_names):
+    for baseline_name in selected_names:
+        baseline = baselines.get(baseline_name)
+
+        if not baseline:
+            continue
+
+        value = baseline.get(metric_key)
+
+        if value is None or pd.isna(value):
+            continue
+
+        if baseline_name == "BFS_Baseline":
+            ax.axhline(
+                y=value,
+                color="black",
+                linestyle="--",
+                label="BFS Baseline",
+            )
+
+        elif baseline_name == "RL_Baseline":
+            ax.axhline(
+                y=value,
+                color="red",
+                linestyle="-.",
+                label="RL Baseline",
+            )
+
+
+def plot_metric_lines_on_axis(ax, df, baselines, metric_key):
+    plot_model_lines_on_axis(ax, df, metric_key)
+    plot_selected_baseline_lines_on_axis(
+        ax=ax,
+        baselines=baselines,
+        metric_key=metric_key,
+        selected_names=["BFS_Baseline", "RL_Baseline"],
+    )
+
+
+def compute_model_and_close_baseline_ylim(
+    df,
+    baselines,
+    metric_key,
+    pad_ratio=0.18,
+    min_pad=1e-6,
+):
+    if df.empty or metric_key not in df.columns:
+        return None, None
+
+    values = df[metric_key].dropna().astype(float).tolist()
+
+    # Keep BFS with the A* model lines when it is close.
+    bfs = baselines.get("BFS_Baseline")
+    if bfs and bfs.get(metric_key) is not None and not pd.isna(bfs.get(metric_key)):
+        values.append(float(bfs.get(metric_key)))
+
+    if not values:
+        return None, None
+
+    y_min = min(values)
+    y_max = max(values)
+
+    if y_min == y_max:
+        pad = max(abs(y_min) * pad_ratio, min_pad)
+    else:
+        pad = max((y_max - y_min) * pad_ratio, min_pad)
+
+    return y_min - pad, y_max + pad
+
+
+def compute_far_baseline_ylim(baselines, metric_key, lower_ylim, upper_ylim, pad_ratio=0.12):
+    far_values = []
+
+    # For now RL is the only intended far-away baseline.
+    # BFS should stay in the lower panel with the models.
+    rl = baselines.get("RL_Baseline")
+
+    if rl and rl.get(metric_key) is not None and not pd.isna(rl.get(metric_key)):
+        value = float(rl.get(metric_key))
+
+        if lower_ylim is None or upper_ylim is None or value > upper_ylim:
+            far_values.append(value)
+
+    if not far_values:
+        return None, None
+
+    y_min = min(far_values)
+    y_max = max(far_values)
+
+    if y_min == y_max:
+        pad = max(abs(y_min) * pad_ratio, 1e-6)
+    else:
+        pad = max((y_max - y_min) * pad_ratio, 1e-6)
+
+    return y_min - pad, y_max + pad
+
+
+def add_broken_axis_marks(ax_top, ax_bottom):
+    # Draw small diagonal break marks between the upper and lower y-axis panels.
+    d = 0.012
+
+    kwargs = dict(transform=ax_top.transAxes, color="black", clip_on=False)
+    ax_top.plot((-d, +d), (-d, +d), **kwargs)
+    ax_top.plot((1 - d, 1 + d), (-d, +d), **kwargs)
+
+    kwargs = dict(transform=ax_bottom.transAxes, color="black", clip_on=False)
+    ax_bottom.plot((-d, +d), (1 - d, 1 + d), **kwargs)
+    ax_bottom.plot((1 - d, 1 + d), (1 - d, 1 + d), **kwargs)
+
+
 def plot_metric_vs_dimension(
     df,
     baselines,
     metric_key,
-    ylabel,
-    title,
     output_path,
-    zoom=False,
     y_min=None,
     y_max=None,
 ):
     if df.empty:
-        print(f"No semantic data. Skipping {title}")
+        print(f"No semantic data. Skipping {metric_key}")
         return
 
     fig, ax = plt.subplots(figsize=(11, 6))
 
-    all_model_values = plot_standard_lines(ax, df, metric_key)
+    plot_metric_lines_on_axis(ax, df, baselines, metric_key)
 
-    if zoom:
-        set_zoomed_ylim_from_models(ax, all_model_values, pad_ratio=0.12)
-        title = f"{title} — Zoomed"
-    else:
-        add_baseline_lines(ax, baselines, metric_key)
+    ylabel = normalize_metric_name(metric_key)
 
-        if y_min is not None or y_max is not None:
-            ax.set_ylim(bottom=y_min, top=y_max)
-        else:
-            ax.set_ylim(bottom=0)
+    ax.set_title(f"{ylabel} vs Embedding Size")
+    ax.set_xlabel("Embedding Size")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.3)
+    ax.set_xticks(sorted(df["dimension"].unique()))
 
-    apply_common_axis_style(ax, df, ylabel, title)
+    if y_min is not None or y_max is not None:
+        ax.set_ylim(bottom=y_min, top=y_max)
 
     ax.legend(fontsize=8)
     plt.tight_layout()
+    save_plot(fig, output_path)
+    plt.close(fig)
+
+
+def plot_metric_vs_dimension_broken_axis(
+    df,
+    baselines,
+    metric_key,
+    output_path,
+):
+    if df.empty:
+        print(f"No semantic data. Skipping broken-axis {metric_key}")
+        return
+
+    lower_min, lower_max = compute_model_and_close_baseline_ylim(
+        df=df,
+        baselines=baselines,
+        metric_key=metric_key,
+    )
+    upper_min, upper_max = compute_far_baseline_ylim(
+        baselines=baselines,
+        metric_key=metric_key,
+        lower_ylim=lower_min,
+        upper_ylim=lower_max,
+    )
+
+    # If no baseline is outside the model range, regular zoom is enough.
+    if upper_min is None or upper_max is None:
+        fig, ax = plt.subplots(figsize=(11, 6))
+
+        plot_metric_lines_on_axis(ax, df, baselines, metric_key)
+
+        ylabel = normalize_metric_name(metric_key)
+
+        ax.set_title(f"{ylabel} vs Embedding Size — Zoomed")
+        ax.set_xlabel("Embedding Size")
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(sorted(df["dimension"].unique()))
+        ax.set_ylim(bottom=lower_min, top=lower_max)
+        ax.legend(fontsize=8)
+
+        plt.tight_layout()
+        save_plot(fig, output_path)
+        plt.close(fig)
+        return
+
+    fig, (ax_top, ax_bottom) = plt.subplots(
+        2,
+        1,
+        sharex=True,
+        figsize=(11, 7),
+        gridspec_kw={"height_ratios": [1, 3], "hspace": 0.06},
+    )
+
+    # Top panel: only far-away baseline(s), e.g. RL.
+    # Do NOT plot A* model lines here, otherwise they appear twice.
+    plot_selected_baseline_lines_on_axis(
+        ax=ax_top,
+        baselines=baselines,
+        metric_key=metric_key,
+        selected_names=["RL_Baseline"],
+    )
+
+    # Bottom panel: all A* model lines plus close baseline(s), e.g. BFS.
+    plot_model_lines_on_axis(ax_bottom, df, metric_key)
+    plot_selected_baseline_lines_on_axis(
+        ax=ax_bottom,
+        baselines=baselines,
+        metric_key=metric_key,
+        selected_names=["BFS_Baseline"],
+    )
+
+    ax_top.set_ylim(bottom=upper_min, top=upper_max)
+    ax_bottom.set_ylim(bottom=lower_min, top=lower_max)
+
+    ylabel = normalize_metric_name(metric_key)
+
+    ax_top.set_title(f"{ylabel} vs Embedding Size — Broken Axis")
+    ax_bottom.set_xlabel("Embedding Size")
+    fig.text(0.04, 0.5, ylabel, va="center", rotation="vertical")
+
+    ax_bottom.set_xticks(sorted(df["dimension"].unique()))
+
+    ax_top.grid(True, alpha=0.3)
+    ax_bottom.grid(True, alpha=0.3)
+
+    ax_top.spines["bottom"].set_visible(False)
+    ax_bottom.spines["top"].set_visible(False)
+    ax_top.tick_params(labeltop=False)
+    ax_bottom.xaxis.tick_bottom()
+
+    add_broken_axis_marks(ax_top, ax_bottom)
+
+    handles, labels = ax_bottom.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="center right",
+        fontsize=8,
+        bbox_to_anchor=(0.98, 0.5),
+    )
+
+    plt.tight_layout(rect=[0.06, 0.02, 0.82, 0.98])
     save_plot(fig, output_path)
     plt.close(fig)
 
@@ -558,11 +788,7 @@ def plot_metric_pair(
     df,
     baselines,
     metric_key,
-    ylabel,
-    title,
     plot_root,
-    plot_type,
-    filename,
     y_min=None,
     y_max=None,
 ):
@@ -570,31 +796,241 @@ def plot_metric_pair(
         df=df,
         baselines=baselines,
         metric_key=metric_key,
-        ylabel=ylabel,
-        title=title,
-        output_path=get_plot_path(plot_root, plot_type, filename),
-        zoom=False,
+        output_path=get_plot_path(
+            plot_root,
+            "metrics",
+            f"{metric_key}.png",
+        ),
         y_min=y_min,
         y_max=y_max,
     )
 
-    plot_metric_vs_dimension(
+    plot_metric_vs_dimension_broken_axis(
         df=df,
         baselines=baselines,
         metric_key=metric_key,
-        ylabel=ylabel,
-        title=title,
         output_path=get_plot_path(
             plot_root,
-            plot_type,
-            f"{Path(filename).stem}_zoom.png",
+            "metrics_zoom",
+            f"{metric_key}_zoomed.png",
         ),
-        zoom=True,
     )
 
 
+def plot_all_standard_metrics(df, baselines, plot_root):
+    metrics = [
+        ("f1_score", 0, 1.05),
+        ("accuracy", 0, 1.05),
+        ("precision", 0, 1.05),
+        ("recall", 0, 1.05),
+        ("avg_time_sec", 0, None),
+    ]
+
+    for metric_key, y_min, y_max in metrics:
+        plot_metric_pair(
+            df=df,
+            baselines=baselines,
+            metric_key=metric_key,
+            plot_root=plot_root,
+            y_min=y_min,
+            y_max=y_max,
+        )
+
+
 # -------------------------------------------------------------------------
-# P95 / visited-node analysis extraction and plots
+# One normalized confusion matrix grid from evaluation_results.json
+# -------------------------------------------------------------------------
+
+def compute_confusion_counts(subset):
+    true_values = subset["true"].astype(bool)
+    pred_values = subset["pred"].astype(bool)
+
+    tp = int(((true_values == True) & (pred_values == True)).sum())
+    fn = int(((true_values == True) & (pred_values == False)).sum())
+    fp = int(((true_values == False) & (pred_values == True)).sum())
+    tn = int(((true_values == False) & (pred_values == False)).sum())
+
+    return tp, fn, fp, tn
+
+
+def extract_confusion_matrix_rows(per_example_df):
+    rows = []
+
+    if per_example_df.empty:
+        return pd.DataFrame(rows)
+
+    required_cols = {"model", "dimension", "algorithm", "true", "pred"}
+    missing_cols = required_cols - set(per_example_df.columns)
+
+    if missing_cols:
+        print(f"Missing columns for confusion matrices: {missing_cols}.")
+        return pd.DataFrame(rows)
+
+    df = per_example_df.copy()
+    df = df[df["true"].notna() & df["pred"].notna()]
+
+    if df.empty:
+        return pd.DataFrame(rows)
+
+    group_cols = ["model", "dimension", "algorithm"]
+
+    for (model, dimension, algorithm), subset in df.groupby(group_cols, dropna=False):
+        tp, fn, fp, tn = compute_confusion_counts(subset)
+
+        total = tp + fn + fp + tn
+        accuracy = (tp + tn) / max(total, 1)
+
+        if tp + fp == 0:
+            precision = 0.0
+        else:
+            precision = tp / (tp + fp)
+
+        if tp + fn == 0:
+            recall = 0.0
+        else:
+            recall = tp / (tp + fn)
+
+        if precision + recall == 0:
+            f1_value = 0.0
+        else:
+            f1_value = 2 * precision * recall / (precision + recall)
+
+        rows.append(
+            {
+                "model": model,
+                "model_label": parse_model_label(model),
+                "dimension": dimension,
+                "algorithm": algorithm,
+                "tp": tp,
+                "fn": fn,
+                "fp": fp,
+                "tn": tn,
+                "total": total,
+                "accuracy": accuracy,
+                "f1_score": f1_value,
+                "precision": precision,
+                "recall": recall,
+                "sort_key": run_sort_key(model, dimension, algorithm),
+            }
+        )
+
+    matrix_df = pd.DataFrame(rows)
+
+    if not matrix_df.empty:
+        matrix_df = matrix_df.sort_values(["sort_key"]).drop(columns=["sort_key"])
+        matrix_df = matrix_df.reset_index(drop=True)
+
+    return matrix_df
+
+
+def format_confusion_percentage(value, total):
+    if total == 0:
+        return "0\n(0.0%)"
+
+    percent = 100.0 * value / total
+    return f"{int(value)}\n({percent:.1f}%)"
+
+
+def plot_single_normalized_confusion_matrix(ax, matrix, title):
+    im = ax.imshow(matrix)
+
+    ax.set_title(title, fontsize=9)
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+
+    ax.set_xticklabels(["Pred False", "Pred True"])
+    ax.set_yticklabels(["Actual False", "Actual True"])
+
+    total = matrix.sum()
+
+    for i in range(2):
+        for j in range(2):
+            ax.text(
+                j,
+                i,
+                format_confusion_percentage(matrix[i, j], total),
+                ha="center",
+                va="center",
+                fontsize=9,
+            )
+
+    ax.set_xlabel("Prediction")
+    ax.set_ylabel("Ground Truth")
+
+    return im
+
+
+def plot_normalized_confusion_matrices_all_models(per_example_df, output_path):
+    matrix_df = extract_confusion_matrix_rows(per_example_df)
+
+    if matrix_df.empty:
+        print("No confusion matrix rows created. Skipping.")
+        return
+
+    n = len(matrix_df)
+    n_cols = min(4, n)
+    n_rows = math.ceil(n / n_cols)
+
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(4.2 * n_cols, 4.0 * n_rows),
+        constrained_layout=True,
+    )
+
+    axes = np.array(axes).flatten()
+
+    last_im = None
+
+    for ax, (_, row) in zip(axes, matrix_df.iterrows()):
+        # Matrix layout:
+        #
+        #                    Predicted False    Predicted True
+        # Actual False              TN                FP
+        # Actual True               FN                TP
+        #
+        matrix = np.array(
+            [
+                [row["tn"], row["fp"]],
+                [row["fn"], row["tp"]],
+            ]
+        )
+
+        title = build_run_label(
+            row["model_label"],
+            row["dimension"],
+            row["algorithm"],
+        )
+        title = f"{title}\nF1={row['f1_score']:.3f}, Acc={row['accuracy']:.3f}"
+
+        last_im = plot_single_normalized_confusion_matrix(
+            ax=ax,
+            matrix=matrix,
+            title=title,
+        )
+
+    for ax in axes[len(matrix_df):]:
+        ax.axis("off")
+
+    fig.suptitle(
+        "Normalized Confusion Matrices — All Models",
+        fontsize=16,
+        fontweight="bold",
+    )
+
+    if last_im is not None:
+        fig.colorbar(
+            last_im,
+            ax=axes[:len(matrix_df)].tolist(),
+            shrink=0.75,
+        )
+
+    save_plot(fig, output_path)
+    plt.close(fig)
+
+
+# -------------------------------------------------------------------------
+# P95 / visited-node analysis extraction
 # -------------------------------------------------------------------------
 
 def extract_p95_data(visited_nodes_data):
@@ -660,6 +1096,10 @@ def extract_p95_data(visited_nodes_data):
 
     return df
 
+
+# -------------------------------------------------------------------------
+# P95 / visited-node analysis plots
+# -------------------------------------------------------------------------
 
 def plot_p95_bar_chart(p95_df, output_path, successful_only=True):
     if p95_df.empty:
@@ -747,10 +1187,34 @@ def plot_p95_vs_dimension(p95_df, output_path, successful_only=True):
     plt.close(fig)
 
 
+def get_histogram_bins(counts, log_x=True):
+    min_count = min(counts)
+    max_count = max(counts)
+
+    if min_count == max_count:
+        return 10
+
+    if log_x:
+        return np.logspace(
+            np.log10(min_count),
+            np.log10(max_count),
+            30,
+        )
+
+    return 30
+
+
+def get_clean_counts(counts):
+    if not isinstance(counts, list):
+        return []
+
+    return [int(v) for v in counts if v is not None and v > 0]
+
+
 def plot_visited_distributions_grid(
     p95_df,
     output_path,
-    successful_only=True,
+    successful_only=False,
 ):
     if p95_df.empty:
         print("No p95 distribution data found. Skipping distribution grid.")
@@ -773,12 +1237,7 @@ def plot_visited_distributions_grid(
     rows = []
 
     for _, row in p95_df.iterrows():
-        counts = row.get(value_col, [])
-
-        if not isinstance(counts, list) or len(counts) == 0:
-            continue
-
-        clean_counts = [v for v in counts if v > 0]
+        clean_counts = get_clean_counts(row.get(value_col, []))
 
         if not clean_counts:
             continue
@@ -802,17 +1261,7 @@ def plot_visited_distributions_grid(
     axes = np.array(axes).flatten()
 
     for ax, (row, counts) in zip(axes, rows):
-        min_count = min(counts)
-        max_count = max(counts)
-
-        if min_count == max_count:
-            bins = 10
-        else:
-            bins = np.logspace(
-                np.log10(min_count),
-                np.log10(max_count),
-                30,
-            )
+        bins = get_histogram_bins(counts, log_x=True)
 
         ax.hist(
             counts,
@@ -821,7 +1270,7 @@ def plot_visited_distributions_grid(
             alpha=0.75,
         )
 
-        if min_count != max_count:
+        if min(counts) != max(counts):
             ax.set_xscale("log")
 
         label = row["model_label"]
@@ -859,313 +1308,149 @@ def plot_visited_distributions_grid(
     plt.close(fig)
 
 
-# -------------------------------------------------------------------------
-# Per-example histogram plots from evaluation_results.json
-# -------------------------------------------------------------------------
+def build_individual_histogram_path(plot_root, model, dimension):
+    model_dir = sanitize_path_component(model)
 
-def get_per_example_run_groups(per_example_df):
-    if per_example_df.empty:
-        return []
+    if pd.isna(dimension):
+        dim_dir = "baseline"
+    else:
+        dim_dir = f"dim_{int(dimension)}"
 
-    groups = []
-
-    group_cols = ["model", "dimension", "algorithm"]
-
-    for (model, dimension, algorithm), subset in per_example_df.groupby(
-        group_cols,
-        dropna=False,
-    ):
-        model_label = subset["model_label"].iloc[0]
-        title = build_run_label(model_label, dimension, algorithm)
-
-        groups.append(
-            {
-                "model": model,
-                "dimension": dimension,
-                "algorithm": algorithm,
-                "model_label": model_label,
-                "title": title,
-                "subset": subset,
-                "sort_key": run_sort_key(model, dimension, algorithm),
-            }
-        )
-
-    groups = sorted(groups, key=lambda item: item["sort_key"])
-
-    return groups
-
-
-def plot_per_example_histograms(per_example_df, value_col, output_path, log_x=False):
-    if per_example_df.empty or value_col not in per_example_df.columns:
-        print(f"No data for {value_col}. Skipping.")
-        return
-
-    groups = get_per_example_run_groups(per_example_df)
-
-    if not groups:
-        print(f"No grouped per-example data for {value_col}. Skipping.")
-        return
-
-    n = len(groups)
-    n_cols = min(3, n)
-    n_rows = math.ceil(n / n_cols)
-
-    fig, axes = plt.subplots(
-        n_rows,
-        n_cols,
-        figsize=(6 * n_cols, 4.5 * n_rows),
+    output_dir = (
+        Path(plot_root)
+        / "p95_analysis"
+        / "individual_histograms"
+        / model_dir
+        / dim_dir
     )
 
-    axes = np.array(axes).flatten()
+    ensure_directory(output_dir)
 
-    for ax, group in zip(axes, groups):
-        values = group["subset"][value_col].dropna()
+    return output_dir / "histogram"
 
-        if values.empty:
-            ax.axis("off")
-            continue
 
-        values = values[values > 0] if log_x else values
+def plot_single_visited_counts_histogram(
+    counts,
+    p95_value,
+    title,
+    output_path,
+):
+    clean_counts = get_clean_counts(counts)
 
-        if values.empty:
-            ax.axis("off")
-            continue
+    if not clean_counts:
+        print(f"No valid visited counts for {title}. Skipping.")
+        return
 
-        ax.hist(values, bins=30, edgecolor="black", alpha=0.75)
+    bins = get_histogram_bins(clean_counts, log_x=True)
 
-        if log_x:
-            ax.set_xscale("log")
+    fig, ax = plt.subplots(figsize=(7, 4.5))
 
-        ax.set_title(group["title"], fontsize=9)
-        ax.set_xlabel(value_col)
-        ax.set_ylabel("Frequency")
-        ax.grid(True, alpha=0.3)
+    ax.hist(
+        clean_counts,
+        bins=bins,
+        edgecolor="black",
+        alpha=0.75,
+    )
 
-    for ax in axes[len(groups):]:
-        ax.axis("off")
+    if min(clean_counts) != max(clean_counts):
+        ax.set_xscale("log")
+
+    if p95_value is not None and not pd.isna(p95_value):
+        ax.axvline(
+            p95_value,
+            linestyle="--",
+            linewidth=2,
+            label=f"P95: {p95_value:.1f}",
+        )
+        ax.legend(fontsize=8)
+
+    ax.set_title(title)
+    ax.set_xlabel("Visited Nodes")
+    ax.set_ylabel("Frequency")
+    ax.grid(True, which="both", alpha=0.3)
 
     plt.tight_layout()
     save_plot(fig, output_path)
     plt.close(fig)
 
 
-# -------------------------------------------------------------------------
-# Confusion matrix plots from evaluation_results.json
-# -------------------------------------------------------------------------
-
-def format_confusion_value(value, total=None, normalize=False):
-    if not normalize or total is None or total == 0:
-        return str(int(value))
-
-    percent = 100.0 * value / total
-    return f"{int(value)}\n({percent:.1f}%)"
-
-
-def compute_confusion_counts(subset):
-    true_values = subset["true"].astype(bool)
-    pred_values = subset["pred"].astype(bool)
-
-    tp = int(((true_values == True) & (pred_values == True)).sum())
-    fn = int(((true_values == True) & (pred_values == False)).sum())
-    fp = int(((true_values == False) & (pred_values == True)).sum())
-    tn = int(((true_values == False) & (pred_values == False)).sum())
-
-    return tp, fn, fp, tn
-
-
-def plot_single_confusion_matrix(ax, matrix, title, normalize=False):
-    im = ax.imshow(matrix)
-
-    ax.set_title(title, fontsize=9)
-    ax.set_xticks([0, 1])
-    ax.set_yticks([0, 1])
-
-    ax.set_xticklabels(["Predicted False", "Predicted True"])
-    ax.set_yticklabels(["Actual False", "Actual True"])
-
-    total = matrix.sum()
-
-    for i in range(2):
-        for j in range(2):
-            ax.text(
-                j,
-                i,
-                format_confusion_value(matrix[i, j], total, normalize),
-                ha="center",
-                va="center",
-                fontsize=9,
-            )
-
-    ax.set_xlabel("Prediction")
-    ax.set_ylabel("Ground Truth")
-
-    return im
-
-
-def extract_confusion_matrix_rows(per_example_df):
-    rows = []
-
-    if per_example_df.empty:
-        return pd.DataFrame(rows)
-
-    required_cols = {"model", "dimension", "algorithm", "true", "pred"}
-    missing_cols = required_cols - set(per_example_df.columns)
-
-    if missing_cols:
-        print(f"Missing columns for confusion matrices: {missing_cols}.")
-        return pd.DataFrame(rows)
-
-    df = per_example_df.copy()
-    df = df[df["true"].notna() & df["pred"].notna()]
-
-    if df.empty:
-        return pd.DataFrame(rows)
-
-    group_cols = ["model", "dimension", "algorithm"]
-
-    for (model, dimension, algorithm), subset in df.groupby(group_cols, dropna=False):
-        tp, fn, fp, tn = compute_confusion_counts(subset)
-
-        accuracy = (tp + tn) / max(tp + fn + fp + tn, 1)
-
-        if tp + fp == 0:
-            precision = 0.0
-        else:
-            precision = tp / (tp + fp)
-
-        if tp + fn == 0:
-            recall = 0.0
-        else:
-            recall = tp / (tp + fn)
-
-        if precision + recall == 0:
-            f1_value = 0.0
-        else:
-            f1_value = 2 * precision * recall / (precision + recall)
-
-        model_label = parse_model_label(model)
-
-        rows.append(
-            {
-                "model": model,
-                "model_label": model_label,
-                "dimension": dimension,
-                "algorithm": algorithm,
-                "tp": tp,
-                "fn": fn,
-                "fp": fp,
-                "tn": tn,
-                "accuracy": accuracy,
-                "f1_score": f1_value,
-                "precision": precision,
-                "recall": recall,
-                "sort_key": run_sort_key(model, dimension, algorithm),
-            }
-        )
-
-    matrix_df = pd.DataFrame(rows)
-
-    if not matrix_df.empty:
-        matrix_df = matrix_df.sort_values(["sort_key"]).drop(columns=["sort_key"])
-        matrix_df = matrix_df.reset_index(drop=True)
-
-    return matrix_df
-
-
-def select_best_dimension_per_model(matrix_df):
-    selected_rows = []
-
-    for model in sorted(matrix_df["model"].unique(), key=model_sort_key):
-        subset = matrix_df[matrix_df["model"] == model].copy()
-        subset = subset.sort_values(
-            ["f1_score", "accuracy", "dimension"],
-            ascending=[False, False, True],
-            na_position="first",
-        )
-        selected_rows.append(subset.iloc[0])
-
-    return pd.DataFrame(selected_rows).reset_index(drop=True)
-
-
-def plot_confusion_matrices_grid(
-    per_example_df,
-    output_path,
-    normalize=False,
-    best_dimension_only=False,
-):
-    matrix_df = extract_confusion_matrix_rows(per_example_df)
-
-    if matrix_df.empty:
-        print("No confusion matrix rows created. Skipping.")
+def plot_individual_visited_node_histograms(p95_df, plot_root):
+    if p95_df.empty:
+        print("No visited-node analysis data found. Skipping individual histograms.")
         return
 
-    if best_dimension_only:
-        matrix_df = select_best_dimension_per_model(matrix_df)
+    for _, row in p95_df.iterrows():
+        counts = row.get("visited_counts_all", [])
 
-    n = len(matrix_df)
-    n_cols = min(4, n)
-    n_rows = math.ceil(n / n_cols)
+        if not isinstance(counts, list) or len(counts) == 0:
+            continue
 
-    fig, axes = plt.subplots(
-        n_rows,
-        n_cols,
-        figsize=(4.2 * n_cols, 4.0 * n_rows),
-        constrained_layout=True,
-    )
+        model = row["model"]
+        dimension = row["dimension"]
 
-    axes = np.array(axes).flatten()
+        title = row["model_label"]
 
-    last_im = None
+        if pd.notna(dimension):
+            title = f"{title} | Dim {int(dimension)}"
 
-    for ax, (_, row) in zip(axes, matrix_df.iterrows()):
-        # Matrix layout:
-        #
-        #                    Predicted False    Predicted True
-        # Actual False              TN                FP
-        # Actual True               FN                TP
-        #
-        matrix = np.array(
-            [
-                [row["tn"], row["fp"]],
-                [row["fn"], row["tp"]],
-            ]
+        title = f"{title} — Visited Nodes Histogram"
+
+        output_path = build_individual_histogram_path(
+            plot_root=plot_root,
+            model=model,
+            dimension=dimension,
         )
 
-        title = build_run_label(
-            row["model_label"],
-            row["dimension"],
-            row["algorithm"],
-        )
-        title = f"{title}\nF1={row['f1_score']:.3f}, Acc={row['accuracy']:.3f}"
-
-        last_im = plot_single_confusion_matrix(
-            ax=ax,
-            matrix=matrix,
+        plot_single_visited_counts_histogram(
+            counts=counts,
+            p95_value=row.get("p95_visited_all"),
             title=title,
-            normalize=normalize,
+            output_path=output_path,
         )
 
-    for ax in axes[len(matrix_df):]:
-        ax.axis("off")
 
-    title_suffix = "Best Dimension per Model" if best_dimension_only else "All Runs"
-    norm_suffix = "Normalized" if normalize else "Counts"
-
-    fig.suptitle(
-        f"Confusion Matrices — {title_suffix} — {norm_suffix}",
-        fontsize=16,
-        fontweight="bold",
+def plot_all_p95_analysis(p95_df, plot_root):
+    # Bar chart with p95 values for every baseline/model/dimension.
+    plot_p95_bar_chart(
+        p95_df=p95_df,
+        output_path=get_plot_path(
+            plot_root,
+            "p95_analysis",
+            "p95_successful_only_bar.png",
+        ),
+        successful_only=True,
     )
 
-    if last_im is not None:
-        fig.colorbar(
-            last_im,
-            ax=axes[:len(matrix_df)].tolist(),
-            shrink=0.75,
-        )
+    # Line plot: A* p95 over Matryoshka dimensions.
+    plot_p95_vs_dimension(
+        p95_df=p95_df,
+        output_path=get_plot_path(
+            plot_root,
+            "p95_analysis",
+            "p95_successful_only_vs_dimension.png",
+        ),
+        successful_only=True,
+    )
 
-    save_plot(fig, output_path)
-    plt.close(fig)
+    # One grid plot with all visited-node histograms together.
+    plot_visited_distributions_grid(
+        p95_df=p95_df,
+        output_path=get_plot_path(
+            plot_root,
+            "p95_analysis",
+            "visited_counts_all_grid.png",
+        ),
+        successful_only=False,
+    )
+
+    # Individual histogram:
+    # - one for BFS
+    # - one for RL
+    # - one per A* model and Matryoshka dimension
+    plot_individual_visited_node_histograms(
+        p95_df=p95_df,
+        plot_root=plot_root,
+    )
 
 
 # -------------------------------------------------------------------------
@@ -1177,8 +1462,14 @@ if __name__ == "__main__":
     dataset_name = dataset_name_from_arg(args.dataset)
     current_split = detect_split(dataset_name)
 
-    eval_results_path, visited_nodes_path = build_input_paths(dataset_name)
-    plot_root = build_plot_output_dir(dataset_name)
+    eval_results_path, visited_nodes_path = build_input_paths(
+        dataset_name,
+        args.run_suffix,
+    )
+    plot_root = build_plot_output_dir(
+        dataset_name,
+        args.run_suffix,
+    )
 
     ensure_directory(plot_root)
 
@@ -1192,9 +1483,18 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     # Standard evaluation plots from evaluation_results.json
     #
-    # These plots are only possible when evaluation_results.json exists.
-    # This allows train-only visited-node analysis plots to be created even
-    # when train has no evaluation_results.json.
+    # Created plots:
+    # - metrics/f1_score.pdf
+    # - metrics/accuracy.pdf
+    # - metrics/precision.pdf
+    # - metrics/recall.pdf
+    # - metrics/avg_time_sec.pdf
+    # - metrics_zoom/f1_score_zoomed.pdf
+    # - metrics_zoom/accuracy_zoomed.pdf
+    # - metrics_zoom/precision_zoomed.pdf
+    # - metrics_zoom/recall_zoomed.pdf
+    # - metrics_zoom/avg_time_sec_zoomed.pdf
+    # - confusion_matrix/confusion_matrices_all_models_normalized.pdf
     # -------------------------------------------------------------------------
 
     if eval_results_path.exists():
@@ -1204,255 +1504,46 @@ if __name__ == "__main__":
         baselines = extract_baselines(eval_data)
         per_example_df = extract_per_example_rows(eval_data)
 
-        plot_metric_pair(
+        plot_all_standard_metrics(
             df=df,
             baselines=baselines,
-            metric_key="avg_nodes_visited",
-            ylabel="Average Visited Nodes",
-            title="Average Visited Nodes (A*) vs Embedding Size",
             plot_root=plot_root,
-            plot_type="nodes_visited",
-            filename="metric_nodes_visited.png",
-            y_min=0,
         )
 
-        plot_metric_pair(
-            df=df,
-            baselines=baselines,
-            metric_key="avg_time_sec",
-            ylabel="Average Time (seconds)",
-            title="Average Runtime (A*) vs Embedding Size",
-            plot_root=plot_root,
-            plot_type="execution_time",
-            filename="metric_time.png",
-            y_min=0,
-        )
-
-        plot_metric_pair(
-            df=df,
-            baselines=baselines,
-            metric_key="avg_path_length",
-            ylabel="Average Path Length",
-            title="Average Path Length (A*) vs Embedding Size",
-            plot_root=plot_root,
-            plot_type="path_length",
-            filename="metric_path_length.png",
-            y_min=0,
-        )
-
-        plot_metric_pair(
-            df=df,
-            baselines=baselines,
-            metric_key="accuracy",
-            ylabel="Accuracy",
-            title="Accuracy (A*) vs Embedding Size",
-            plot_root=plot_root,
-            plot_type="accuracy",
-            filename="metric_accuracy.png",
-            y_min=0,
-            y_max=1.05,
-        )
-
-        plot_metric_pair(
-            df=df,
-            baselines=baselines,
-            metric_key="f1_score",
-            ylabel="F1 Score",
-            title="F1 Score (A*) vs Embedding Size",
-            plot_root=plot_root,
-            plot_type="f1_score",
-            filename="metric_f1_score.png",
-            y_min=0,
-            y_max=1.05,
-        )
-
-        plot_metric_pair(
-            df=df,
-            baselines=baselines,
-            metric_key="precision",
-            ylabel="Precision",
-            title="Precision (A*) vs Embedding Size",
-            plot_root=plot_root,
-            plot_type="precision",
-            filename="metric_precision.png",
-            y_min=0,
-            y_max=1.05,
-        )
-
-        plot_metric_pair(
-            df=df,
-            baselines=baselines,
-            metric_key="recall",
-            ylabel="Recall",
-            title="Recall (A*) vs Embedding Size",
-            plot_root=plot_root,
-            plot_type="recall",
-            filename="metric_recall.png",
-            y_min=0,
-            y_max=1.05,
-        )
-
-        plot_metric_pair(
-            df=df,
-            baselines=baselines,
-            metric_key="avg_path_cost",
-            ylabel="Average Path Cost",
-            title="Average Path Cost (A*) vs Embedding Size",
-            plot_root=plot_root,
-            plot_type="astar_path_cost",
-            filename="metric_astar_path_cost.png",
-            y_min=0,
-        )
-
-        plot_metric_pair(
-            df=df,
-            baselines=baselines,
-            metric_key="avg_cost_per_hop",
-            ylabel="Average Cost per Hop",
-            title="Average Cost per Hop (A*) vs Embedding Size",
-            plot_root=plot_root,
-            plot_type="astar_cost_per_hop",
-            filename="metric_astar_cost_per_hop.png",
-            y_min=0,
-        )
-
-        # ---------------------------------------------------------------------
-        # Per-example histograms from current evaluation_results.json
-        # ---------------------------------------------------------------------
-
-        plot_per_example_histograms(
-            per_example_df,
-            "nodes_visited",
-            get_plot_path(plot_root, "histograms", "hist_nodes_visited.png"),
-            log_x=True,
-        )
-
-        plot_per_example_histograms(
-            per_example_df,
-            "path_length",
-            get_plot_path(plot_root, "histograms", "hist_path_length.png"),
-            log_x=False,
-        )
-
-        plot_per_example_histograms(
-            per_example_df,
-            "time_sec",
-            get_plot_path(plot_root, "histograms", "hist_time_sec.png"),
-            log_x=True,
-        )
-
-        # ---------------------------------------------------------------------
-        # Confusion matrices from current evaluation_results.json
-        # ---------------------------------------------------------------------
-
-        plot_confusion_matrices_grid(
+        plot_normalized_confusion_matrices_all_models(
             per_example_df=per_example_df,
             output_path=get_plot_path(
                 plot_root,
-                "confusion_matrices",
-                "confusion_matrices_all_runs.png",
+                "confusion_matrix",
+                "confusion_matrices_all_models_normalized.png",
             ),
-            normalize=False,
-            best_dimension_only=False,
-        )
-
-        plot_confusion_matrices_grid(
-            per_example_df=per_example_df,
-            output_path=get_plot_path(
-                plot_root,
-                "confusion_matrices",
-                "confusion_matrices_all_runs_normalized.png",
-            ),
-            normalize=True,
-            best_dimension_only=False,
-        )
-
-        plot_confusion_matrices_grid(
-            per_example_df=per_example_df,
-            output_path=get_plot_path(
-                plot_root,
-                "confusion_matrices",
-                "confusion_matrices_best_dimension_per_model.png",
-            ),
-            normalize=False,
-            best_dimension_only=True,
-        )
-
-        plot_confusion_matrices_grid(
-            per_example_df=per_example_df,
-            output_path=get_plot_path(
-                plot_root,
-                "confusion_matrices",
-                "confusion_matrices_best_dimension_per_model_normalized.png",
-            ),
-            normalize=True,
-            best_dimension_only=True,
         )
 
     else:
         print(
             f"No evaluation results found at {eval_results_path}. "
-            "Skipping metric/histogram/confusion-matrix plots."
+            "Skipping metric/confusion-matrix plots."
         )
 
     # -------------------------------------------------------------------------
-    # P95 / visited-node analysis plots from the current split only
+    # P95 / visited-node analysis plots from visited_nodes_analysis.json
     #
-    # These plots are independent of evaluation_results.json.
+    # Created plots:
+    # - p95_analysis/p95_successful_only_bar.pdf
+    # - p95_analysis/p95_successful_only_vs_dimension.pdf
+    # - p95_analysis/visited_counts_all_grid.pdf
+    # - p95_analysis/individual_histograms/BFS_Baseline/baseline/histogram.pdf
+    # - p95_analysis/individual_histograms/RL_Baseline/baseline/histogram.pdf
+    # - p95_analysis/individual_histograms/<model>/dim_<dim>/histogram.pdf
     # -------------------------------------------------------------------------
 
     if visited_nodes_path.exists():
         visited_nodes_data = load_json(visited_nodes_path)
         p95_df = extract_p95_data(visited_nodes_data)
 
-        plot_p95_bar_chart(
+        plot_all_p95_analysis(
             p95_df=p95_df,
-            output_path=get_plot_path(
-                plot_root,
-                "p95_visited_nodes",
-                "p95_successful_only_bar.png",
-            ),
-            successful_only=True,
-        )
-
-        plot_p95_bar_chart(
-            p95_df=p95_df,
-            output_path=get_plot_path(
-                plot_root,
-                "p95_visited_nodes",
-                "p95_all_bar.png",
-            ),
-            successful_only=False,
-        )
-
-        plot_p95_vs_dimension(
-            p95_df=p95_df,
-            output_path=get_plot_path(
-                plot_root,
-                "p95_visited_nodes",
-                "p95_successful_only_vs_dimension.png",
-            ),
-            successful_only=True,
-        )
-
-        plot_visited_distributions_grid(
-            p95_df=p95_df,
-            output_path=get_plot_path(
-                plot_root,
-                "visited_node_distributions",
-                "distribution_successful_only_grid.png",
-            ),
-            successful_only=True,
-        )
-
-        plot_visited_distributions_grid(
-            p95_df=p95_df,
-            output_path=get_plot_path(
-                plot_root,
-                "visited_node_distributions",
-                "distribution_all_grid.png",
-            ),
-            successful_only=False,
+            plot_root=plot_root,
         )
 
     else:
