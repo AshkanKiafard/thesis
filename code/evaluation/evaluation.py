@@ -27,6 +27,7 @@ from core.utils import (
     load_rl_graph,
     traverse_graph,
 )
+from evaluation.select_best_model import select_best_astar_model, print_selection
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 
@@ -522,7 +523,8 @@ def parse_args():
         default=None,
         help=(
             "Explicit A* model path to evaluate on the test split. "
-            "Required when dataset_path is a test dataset."
+            "If either best-model argument is omitted, the test split uses "
+            "select_best_model.py."
         ),
     )
     parser.add_argument(
@@ -531,7 +533,8 @@ def parse_args():
         default=None,
         help=(
             "Explicit Matryoshka dimension for --best-model-path. "
-            "Required when dataset_path is a test dataset."
+            "If either best-model argument is omitted, the test split uses "
+            "select_best_model.py."
         ),
     )
 
@@ -563,20 +566,50 @@ if __name__ == "__main__":
     selected_test_dimension = None
 
     if current_split == "test":
-        if args.best_model_path is None or args.best_model_dim is None:
-            raise ValueError(
-                "Test evaluation requires --best-model-path and --best-model-dim."
-            )
-
-        selected_test_model_path = args.best_model_path
-        selected_test_dimension = args.best_model_dim
-
         print("\nTest split detected.")
         print("Ignoring full model queue for A*.")
-        print(
-            "Only evaluating explicitly provided model and dimension: "
-            f"{selected_test_model_path} | dim {selected_test_dimension}"
-        )
+
+        if args.best_model_path is not None and args.best_model_dim is not None:
+            selected_test_model_path = args.best_model_path
+            selected_test_dimension = args.best_model_dim
+
+            print(
+                "Only evaluating explicitly provided model and dimension: "
+                f"{selected_test_model_path} | dim {selected_test_dimension}"
+            )
+        else:
+            if args.best_model_path is not None or args.best_model_dim is not None:
+                print(
+                    "Not all best-model parameters were provided. "
+                    "Falling back to select_best_model.py for both values."
+                )
+
+            valid_dataset_name = dataset_name.replace("test", "valid")
+            valid_results_file = (
+                    Path("data/evaluation")
+                    / valid_dataset_name
+                    / run_suffix
+                    / "evaluation_results.json"
+            )
+
+            selection = select_best_astar_model(valid_results_file)
+            print_selection(selection)
+
+            selected_test_model = selection.get("best")
+
+            if selected_test_model is None:
+                raise ValueError(
+                    f"No selected A* model found in {valid_results_file}. "
+                    "Run validation evaluation first or check select_best_model.py."
+                )
+
+            selected_test_model_path = selected_test_model["model_path"]
+            selected_test_dimension = selected_test_model["dimension"]
+
+            print(
+                "Only evaluating selected model and dimension: "
+                f"{selected_test_model_path} | dim {selected_test_dimension}"
+            )
     else:
         fine_tuned_models = get_fine_tuned_models(run_suffix)
         model_queue = sort_model_queue(base_models + fine_tuned_models, run_suffix)
