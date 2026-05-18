@@ -840,6 +840,52 @@ def compute_baseline_ylim(baselines, metric_key, selected_names):
     return compute_values_ylim(values, pad_ratio=0.12)
 
 
+def get_baseline_value_extent(baselines, metric_key, selected_names):
+    values = [
+        float(baselines[baseline_name][metric_key])
+        for baseline_name in selected_names
+    ]
+
+    return min(values), max(values)
+
+
+def constrain_panel_y_ranges(panels):
+    """Prevent padded broken-axis panels from overlapping in source space."""
+    if len(panels) < 2:
+        return panels
+
+    constrained = [dict(panel) for panel in panels]
+    ordered_indices = sorted(
+        range(len(constrained)),
+        key=lambda index: constrained[index]["ylim"][0],
+    )
+
+    for lower_index, upper_index in zip(ordered_indices[:-1], ordered_indices[1:]):
+        lower_panel = constrained[lower_index]
+        upper_panel = constrained[upper_index]
+
+        lower_raw_max = lower_panel.get("raw_max")
+        upper_raw_min = upper_panel.get("raw_min")
+
+        if lower_raw_max is None or upper_raw_min is None:
+            continue
+
+        lower_raw_max = float(lower_raw_max)
+        upper_raw_min = float(upper_raw_min)
+
+        if not lower_raw_max < upper_raw_min:
+            continue
+
+        boundary = (lower_raw_max + upper_raw_min) / 2.0
+        lower_min, lower_max = lower_panel["ylim"]
+        upper_min, upper_max = upper_panel["ylim"]
+
+        lower_panel["ylim"] = (lower_min, min(lower_max, boundary))
+        upper_panel["ylim"] = (max(upper_min, boundary), upper_max)
+
+    return constrained
+
+
 def should_split_focus_values(values, max_bands):
     if max_bands <= 1 or len(values) < 12:
         return False
@@ -870,6 +916,8 @@ def build_focus_value_bands(values, max_bands=3):
     if not should_split_focus_values(values, max_bands):
         return [
             {
+                "raw_min": min(values),
+                "raw_max": max(values),
                 "ylim": compute_values_ylim(values, pad_ratio=0.18),
                 "height": 3.0,
             }
@@ -908,6 +956,8 @@ def build_focus_value_bands(values, max_bands=3):
     if not bands:
         return [
             {
+                "raw_min": min(values),
+                "raw_max": max(values),
                 "ylim": compute_values_ylim(values, pad_ratio=0.18),
                 "height": 3.0,
             }
@@ -1043,17 +1093,54 @@ def transform_piecewise_scalar(value, bands, gap_height):
     return float(transform_piecewise_y([value], bands, gap_height)[0])
 
 
+def get_piecewise_tick_count(band, max_ticks_per_band):
+    if max_ticks_per_band <= 1:
+        return 1
+
+    display_height = band["display_max"] - band["display_min"]
+
+    if display_height <= 0.6:
+        return 1
+    if display_height <= 1.6:
+        return min(2, max_ticks_per_band)
+
+    return max_ticks_per_band
+
+
+def get_piecewise_tick_fractions(band_index, band_count, tick_count):
+    has_lower_gap = band_index > 0
+    has_upper_gap = band_index < band_count - 1
+
+    lower_fraction = 0.0 if not has_lower_gap else 0.15
+    upper_fraction = 1.0 if not has_upper_gap else 0.85
+
+    if tick_count == 1:
+        return [(lower_fraction + upper_fraction) / 2.0]
+
+    return np.linspace(lower_fraction, upper_fraction, tick_count).tolist()
+
+
 def get_piecewise_ticks(bands, gap_height, max_ticks_per_band=4):
     tick_values = []
 
-    for band in bands:
+    for band_index, band in enumerate(bands):
         source_min = band["source_min"]
         source_max = band["source_max"]
+        tick_count = get_piecewise_tick_count(band, max_ticks_per_band)
+        fractions = get_piecewise_tick_fractions(
+            band_index,
+            len(bands),
+            tick_count,
+        )
 
-        values = np.linspace(source_min, source_max, max_ticks_per_band)
+        if source_max == source_min:
+            tick_values.append(float(source_min))
+            continue
 
-        for value in values:
-            tick_values.append(float(value))
+        for fraction in fractions:
+            tick_values.append(
+                float(source_min + (source_max - source_min) * fraction)
+            )
 
     unique_values = []
     seen_values = set()
@@ -1264,6 +1351,8 @@ def build_metric_panels(df, baselines, metric_key, max_focus_bands=3):
             {
                 "kind": "focus",
                 "baselines": baseline_assignments.get(0, []),
+                "raw_min": focus_bands[0].get("raw_min"),
+                "raw_max": focus_bands[0].get("raw_max"),
                 "ylim": focus_bands[0]["ylim"],
                 "height": focus_bands[0]["height"],
             }
@@ -1272,10 +1361,17 @@ def build_metric_panels(df, baselines, metric_key, max_focus_bands=3):
     panels = []
 
     if above_baselines:
+        raw_min, raw_max = get_baseline_value_extent(
+            baselines,
+            metric_key,
+            above_baselines,
+        )
         panels.append(
             {
                 "kind": "baseline",
                 "baselines": above_baselines,
+                "raw_min": raw_min,
+                "raw_max": raw_max,
                 "ylim": compute_baseline_ylim(
                     baselines,
                     metric_key,
@@ -1290,16 +1386,25 @@ def build_metric_panels(df, baselines, metric_key, max_focus_bands=3):
             {
                 "kind": "focus",
                 "baselines": baseline_assignments.get(index, []),
+                "raw_min": focus_band.get("raw_min"),
+                "raw_max": focus_band.get("raw_max"),
                 "ylim": focus_band["ylim"],
                 "height": focus_band["height"],
             }
         )
 
     if below_baselines:
+        raw_min, raw_max = get_baseline_value_extent(
+            baselines,
+            metric_key,
+            below_baselines,
+        )
         panels.append(
             {
                 "kind": "baseline",
                 "baselines": below_baselines,
+                "raw_min": raw_min,
+                "raw_max": raw_max,
                 "ylim": compute_baseline_ylim(
                     baselines,
                     metric_key,
@@ -1309,7 +1414,7 @@ def build_metric_panels(df, baselines, metric_key, max_focus_bands=3):
             }
         )
 
-    return panels, True
+    return constrain_panel_y_ranges(panels), True
 
 
 def plot_metric_vs_dimension_broken_axis(
