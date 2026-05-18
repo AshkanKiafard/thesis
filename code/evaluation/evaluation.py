@@ -580,7 +580,7 @@ if __name__ == "__main__":
         else:
             if args.best_model_path is not None or args.best_model_dim is not None:
                 print(
-                    "Not all best-model parameters were provided. "
+                    "Only one best-model parameter was provided. "
                     "Falling back to select_best_model.py for both values."
                 )
 
