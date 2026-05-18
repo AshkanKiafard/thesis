@@ -27,7 +27,6 @@ from core.utils import (
     load_rl_graph,
     traverse_graph,
 )
-from evaluation.select_best_model import select_best_astar_model, print_selection
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 
@@ -98,6 +97,10 @@ def build_output_paths(dataset_path: str, run_suffix: str):
     output_csv_file = output_dir / "evaluation_results.csv"
 
     return dataset_name, output_dir, str(output_json_file), str(output_csv_file)
+
+
+def get_model_name(model_path: str):
+    return Path(model_path).name
 
 
 def load_p95_configs(eval_dataset_name: str, run_suffix: str):
@@ -513,6 +516,24 @@ def parse_args():
         action="store_true",
         help="Do not persist newly preloaded ST embeddings to data/embeddings.",
     )
+    parser.add_argument(
+        "--best-model-path",
+        type=str,
+        default=None,
+        help=(
+            "Explicit A* model path to evaluate on the test split. "
+            "Required when dataset_path is a test dataset."
+        ),
+    )
+    parser.add_argument(
+        "--best-model-dim",
+        type=int,
+        default=None,
+        help=(
+            "Explicit Matryoshka dimension for --best-model-path. "
+            "Required when dataset_path is a test dataset."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -523,11 +544,7 @@ if __name__ == "__main__":
     dataset_path = args.dataset_path
     run_suffix = args.run_suffix
 
-    fine_tuned_models = get_fine_tuned_models(run_suffix)
-    model_queue = sort_model_queue(base_models + fine_tuned_models, run_suffix)
-
     print(f"Run suffix: {run_suffix}")
-    print("Model queue:", model_queue)
 
     dataset_name, output_dir, output_json_file, output_csv_file = build_output_paths(
         dataset_path,
@@ -541,31 +558,29 @@ if __name__ == "__main__":
     print(f"Current split: {current_split}")
     print(f"Output directory: {output_dir}")
 
-    selected_test_model = None
+    model_queue = []
+    selected_test_model_path = None
+    selected_test_dimension = None
 
     if current_split == "test":
-        valid_dataset_name = dataset_name.replace("test", "valid")
-        valid_results_file = (
-                Path("data/evaluation")
-                / valid_dataset_name
-                / run_suffix
-                / "evaluation_results.json"
-        )
-
-        selection = select_best_astar_model(valid_results_file)
-        print_selection(selection)
-
-        selected_test_model = selection.get("best")
-
-        if selected_test_model is None:
+        if args.best_model_path is None or args.best_model_dim is None:
             raise ValueError(
-                f"No validation-selected A* model found in {valid_results_file}. "
-                "Run validation evaluation first or check select_best_astar_model()."
+                "Test evaluation requires --best-model-path and --best-model-dim."
             )
+
+        selected_test_model_path = args.best_model_path
+        selected_test_dimension = args.best_model_dim
 
         print("\nTest split detected.")
         print("Ignoring full model queue for A*.")
-        print("Only evaluating validation-selected model and dimension.")
+        print(
+            "Only evaluating explicitly provided model and dimension: "
+            f"{selected_test_model_path} | dim {selected_test_dimension}"
+        )
+    else:
+        fine_tuned_models = get_fine_tuned_models(run_suffix)
+        model_queue = sort_model_queue(base_models + fine_tuned_models, run_suffix)
+        print("Model queue:", model_queue)
 
     p95_configs, config_source_dataset_name = load_p95_configs(
         dataset_name,
@@ -683,14 +698,12 @@ if __name__ == "__main__":
         print("Skipping RL_Baseline because it already exists.")
 
     if current_split == "test":
-        astar_model_queue = [selected_test_model["model_path"]]
-        selected_test_dimension = selected_test_model["dimension"]
+        astar_model_queue = [selected_test_model_path]
     else:
         astar_model_queue = model_queue
-        selected_test_dimension = None
 
     for model_path in astar_model_queue:
-        model_name = model_path.split("/")[-1]
+        model_name = get_model_name(model_path)
 
         print(f"\nEVALUATING: {model_path}")
 
