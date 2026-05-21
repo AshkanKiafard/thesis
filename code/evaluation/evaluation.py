@@ -104,30 +104,70 @@ def get_model_name(model_path: str):
     return Path(model_path).name
 
 
-def load_p95_configs(eval_dataset_name: str, run_suffix: str):
+def get_p95_analysis_file(dataset_name: str, run_suffix: str):
+    return (
+            Path("data/evaluation")
+            / dataset_name
+            / run_suffix
+            / "visited_nodes_analysis.json"
+    )
+
+
+def load_p95_configs(
+    eval_dataset_name: str,
+    run_suffix: str,
+    config_source_dataset_name: str = None,
+    fallback_config_source_dataset_name: str = None,
+):
     """
-    Load per-model traversal caps from the previous split's
-    visited_nodes_analysis.json.
+    Load per-model traversal caps from visited_nodes_analysis.json.
 
     We use p95_visited_successful_only.
 
     valid evaluation -> data/evaluation/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
     test evaluation  -> data/evaluation/<valid_dataset>/<run_suffix>/visited_nodes_analysis.json
+
+    --config-source-dataset forces a specific source.
+    --fallback-config-source-dataset is used only if the default source is missing.
     """
-    config_source_dataset_name = get_config_source_dataset_name(eval_dataset_name)
+    if config_source_dataset_name:
+        candidate_sources = [(config_source_dataset_name, "explicit")]
+    else:
+        default_source_dataset_name = get_config_source_dataset_name(eval_dataset_name)
+        candidate_sources = [(default_source_dataset_name, "default")]
 
-    analysis_file = (
-            Path("data/evaluation")
-            / config_source_dataset_name
-            / run_suffix
-            / "visited_nodes_analysis.json"
-    )
+        if (
+                fallback_config_source_dataset_name
+                and fallback_config_source_dataset_name != default_source_dataset_name
+        ):
+            candidate_sources.append((fallback_config_source_dataset_name, "fallback"))
 
-    if not analysis_file.exists():
+    missing_files = []
+    selected_source_dataset_name = None
+    analysis_file = None
+
+    for candidate_source_dataset_name, source_kind in candidate_sources:
+        candidate_file = get_p95_analysis_file(candidate_source_dataset_name, run_suffix)
+
+        if candidate_file.exists():
+            selected_source_dataset_name = candidate_source_dataset_name
+            analysis_file = candidate_file
+
+            if source_kind == "fallback":
+                print(
+                    "Default p95 config source missing. "
+                    f"Falling back to: {selected_source_dataset_name}"
+                )
+
+            break
+
+        missing_files.append(candidate_file)
+
+    if analysis_file is None:
+        missing_text = "\n".join(f"- {path}" for path in missing_files)
         raise FileNotFoundError(
-            f"Missing {analysis_file}. "
-            f"Run visited_nodes_analysis.py first on "
-            f"'{config_source_dataset_name}' with run suffix '{run_suffix}'."
+            f"Missing p95 config source for '{eval_dataset_name}' "
+            f"with run suffix '{run_suffix}'. Tried:\n{missing_text}"
         )
 
     print(f"Loading p95 configs from: {analysis_file}")
@@ -154,7 +194,7 @@ def load_p95_configs(eval_dataset_name: str, run_suffix: str):
     for key, value in p95_map.items():
         print(f"{key}: {value}")
 
-    return p95_map, config_source_dataset_name
+    return p95_map, selected_source_dataset_name
 
 
 def compute_embedding_path_cost(path, embeder):
@@ -499,6 +539,24 @@ def parse_args():
         help="Final-training run suffix, e.g. best_v2.",
     )
     parser.add_argument(
+        "--config-source-dataset",
+        type=str,
+        default=None,
+        help=(
+            "Force traversal caps from this dataset's visited_nodes_analysis.json, "
+            "e.g. msmarco_valid."
+        ),
+    )
+    parser.add_argument(
+        "--fallback-config-source-dataset",
+        type=str,
+        default=None,
+        help=(
+            "Use this dataset's traversal caps only if the default cap source "
+            "is missing, e.g. msmarco_valid for sem_test."
+        ),
+    )
+    parser.add_argument(
         "--skip-embedding-preload",
         action="store_true",
         help=(
@@ -618,6 +676,8 @@ if __name__ == "__main__":
     p95_configs, config_source_dataset_name = load_p95_configs(
         dataset_name,
         run_suffix,
+        config_source_dataset_name=args.config_source_dataset,
+        fallback_config_source_dataset_name=args.fallback_config_source_dataset,
     )
 
     print(f"Using traversal caps from: {config_source_dataset_name}/{run_suffix}")
