@@ -16,7 +16,7 @@ PLOT_OUTPUT_DIR = "data/plots"
 
 # Save vector plots for thesis.
 # "pdf" is best for LaTeX. Add "png" too if you want preview images.
-PLOT_FORMATS = ["pdf"]
+PLOT_FORMATS = ["pdf", "png"]
 PNG_DPI = 300
 
 BASE_MODEL_LABELS = {
