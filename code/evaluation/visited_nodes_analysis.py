@@ -25,7 +25,7 @@ from core.utils import (
 
 GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
 
-# Base models evaluated with A*
+# Base models evaluated with embedding-guided graph strategies.
 base_models = [
     "sentence-transformers/all-mpnet-base-v2",
     # "BAAI/bge-base-en-v1.5",
@@ -91,19 +91,26 @@ def save_result(result_entry, output_json_file):
 
     print(
         f"Saved visited-node results for "
-        f"'{result_entry['model']}' dim {result_entry.get('dimension')}"
+        f"'{result_entry['model']}' dim {result_entry.get('dimension')} "
+        f"strategy {result_entry.get('analysis', {}).get('strategy')}"
     )
 
 
-def already_done(existing_results, model, dimension=None):
+def already_done(existing_results, model, dimension=None, strategy=None):
     """
-    Check whether this model/dimension was already collected.
+    Check whether this model/dimension/strategy was already collected.
     """
-    return any(
-        entry.get("model") == model
-        and entry.get("dimension") == dimension
-        for entry in existing_results
-    )
+    for entry in existing_results:
+        if entry.get("model") != model or entry.get("dimension") != dimension:
+            continue
+
+        if strategy is None:
+            return True
+
+        if entry.get("analysis", {}).get("strategy") == strategy:
+            return True
+
+    return False
 
 
 def percentile(values, p):
@@ -368,12 +375,12 @@ if __name__ == "__main__":
         print("\n=== skipping RL Baseline ===")
 
     # -------------------------------------------------------------------------
-    # A* models
+    # Embedding-guided models
     # -------------------------------------------------------------------------
     for model_path in model_queue:
         model_name = model_path.split("/")[-1]
 
-        print(f"\nCOLLECTING A*: {model_path}")
+        print(f"\nCOLLECTING EMBEDDING STRATEGIES: {model_path}")
 
         try:
             distance_metric = get_model_distance_metric(model_path)
@@ -396,40 +403,46 @@ if __name__ == "__main__":
             for dim in matryoshka_dims:
                 existing_results = load_results_file(output_json_file)
 
-                if already_done(existing_results, model_name, dim):
-                    print(f"Skipping {model_name} dim {dim}")
-                    continue
-
-                print(f"\n--- Running A* dim {dim} ---")
-
                 main_embeder.set_matryoshka_dim(dim)
 
-                astar_result = run_visited_nodes_loop(
-                    data=data,
-                    graph=causal_graph,
-                    embeder=main_embeder,
-                    strategy=ts.astar_traverse,
-                    strategy_name="A*",
-                    description=(
-                        f"{model_name} | dim {dim} | "
-                        f"{dataset_name} | {run_suffix}"
-                    ),
-                    config=None,
-                )
+                for strategy_name, strategy in [
+                    ("A*", ts.astar_traverse),
+                    ("Dijkstra", ts.dijkstra_traverse),
+                ]:
+                    existing_results = load_results_file(output_json_file)
 
-                save_result(
-                    {
-                        "model": model_name,
-                        "model_path": model_path,
-                        "dimension": dim,
-                        "dataset": dataset_name,
-                        "split": split,
-                        "run_suffix": run_suffix,
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "analysis": astar_result,
-                    },
-                    output_json_file,
-                )
+                    if already_done(existing_results, model_name, dim, strategy_name):
+                        print(f"Skipping {strategy_name} {model_name} dim {dim}")
+                        continue
+
+                    print(f"\n--- Running {strategy_name} dim {dim} ---")
+
+                    strategy_result = run_visited_nodes_loop(
+                        data=data,
+                        graph=causal_graph,
+                        embeder=main_embeder,
+                        strategy=strategy,
+                        strategy_name=strategy_name,
+                        description=(
+                            f"{strategy_name} | {model_name} | dim {dim} | "
+                            f"{dataset_name} | {run_suffix}"
+                        ),
+                        config=None,
+                    )
+
+                    save_result(
+                        {
+                            "model": model_name,
+                            "model_path": model_path,
+                            "dimension": dim,
+                            "dataset": dataset_name,
+                            "split": split,
+                            "run_suffix": run_suffix,
+                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "analysis": strategy_result,
+                        },
+                        output_json_file,
+                    )
 
             del main_embeder
             gc.collect()

@@ -180,6 +180,7 @@ def load_p95_configs(
     for entry in analysis_results:
         model = entry.get("model")
         dimension = entry.get("dimension")
+        strategy = entry.get("analysis", {}).get("strategy")
 
         p95_value = entry.get("analysis", {}).get(
             "p95_visited_successful_only"
@@ -188,13 +189,27 @@ def load_p95_configs(
         if p95_value is None:
             continue
 
-        p95_map[(model, dimension)] = int(np.ceil(p95_value))
+        if strategy is None:
+            raise ValueError(
+                f"Missing strategy in visited-node entry for "
+                f"{model} dim {dimension}. Regenerate visited_nodes_analysis.json."
+            )
+
+        p95_map[(model, dimension, strategy)] = int(np.ceil(p95_value))
 
     print("\nLoaded p95 configs:")
     for key, value in p95_map.items():
         print(f"{key}: {value}")
 
     return p95_map, selected_source_dataset_name
+
+
+def get_p95_cap(p95_configs, model, dimension, strategy):
+    strategy_key = (model, dimension, strategy)
+    if strategy_key in p95_configs:
+        return p95_configs[strategy_key]
+
+    raise KeyError(f"Missing p95 config for {strategy_key}")
 
 
 def compute_embedding_path_cost(path, embeder):
@@ -256,13 +271,13 @@ def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=N
 
 def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
     """
-    Warm graph-node embeddings before timed A* evaluation.
+    Warm graph-node embeddings before timed A*/Dijkstra evaluation.
 
     STEmbedder keeps a persisted NumPy cache and a device tensor cache. This
     step encodes missing graph nodes, restores already persisted embeddings onto
     the active device, and optionally saves newly encoded nodes back to disk.
     That keeps timed traversal from doing first-use encoding or CPU-to-GPU cache
-    conversion inside the A* loop.
+    conversion inside the traversal loop.
     """
     nodes = list(graph.nodes)
     cached_before = sum(1 for node in nodes if node in embeder.cache)
@@ -319,16 +334,9 @@ def save_all_results_csv(all_results, output_csv_file):
     for entry in all_results:
         used_config = entry.get("used_config", {})
 
-        used_max_visits = (
-            used_config.get("bfs_max_visits")
-            if "bfs_max_visits" in used_config
-            else used_config.get("rl_max_visits")
-            if "rl_max_visits" in used_config
-            else used_config.get("astar_max_visits")
-        )
-
         for algorithm, strategy_result in entry.get("evaluation", {}).items():
             metrics = strategy_result["metrics"]
+            used_max_visits = get_used_max_visits(used_config, algorithm)
 
             row = {
                 "algorithm": algorithm,
@@ -350,6 +358,22 @@ def save_all_results_csv(all_results, output_csv_file):
         writer.writerows(rows)
 
     print(f"CSV overwritten: {output_csv_file}")
+
+
+def get_used_max_visits(used_config, algorithm):
+    if algorithm == "BFS":
+        return used_config.get("bfs_max_visits")
+
+    if algorithm == "RL":
+        return used_config.get("rl_max_visits")
+
+    if algorithm == "Dijkstra":
+        return used_config.get("dijkstra_max_visits")
+
+    if algorithm == "A*":
+        return used_config.get("astar_max_visits")
+
+    return None
 
 
 def load_results_file(output_json_file):
@@ -561,7 +585,7 @@ def parse_args():
         "--skip-embedding-preload",
         action="store_true",
         help=(
-            "Do not prepopulate ST graph-node embeddings before timed A* "
+            "Do not prepopulate ST graph-node embeddings before timed A*/Dijkstra "
             "evaluation."
         ),
     )
@@ -626,7 +650,7 @@ if __name__ == "__main__":
 
     if current_split == "test":
         print("\nTest split detected.")
-        print("Ignoring full model queue for A*.")
+        print("Ignoring full model queue for embedding-guided strategies.")
 
         if args.best_model_path is not None and args.best_model_dim is not None:
             selected_test_model_path = args.best_model_path
@@ -694,11 +718,13 @@ if __name__ == "__main__":
     existing_results = load_results_file(output_json_file)
 
     if not any(entry["model"] == "BFS_Baseline" for entry in existing_results):
-        if ("BFS_Baseline", None) not in p95_configs:
-            raise KeyError("Missing p95 config for BFS_Baseline.")
-
         bfs_config = {
-            "bfs_max_visits": p95_configs[("BFS_Baseline", None)]
+            "bfs_max_visits": get_p95_cap(
+                p95_configs,
+                "BFS_Baseline",
+                None,
+                "BFS",
+            )
         }
 
         run_warmup_traversal(
@@ -792,11 +818,11 @@ if __name__ == "__main__":
         print("Skipping RL_Baseline because it already exists.")
 
     if current_split == "test":
-        astar_model_queue = [selected_test_model_path]
+        semantic_model_queue = [selected_test_model_path]
     else:
-        astar_model_queue = model_queue
+        semantic_model_queue = model_queue
 
-    for model_path in astar_model_queue:
+    for model_path in semantic_model_queue:
         model_name = get_model_name(model_path)
 
         print(f"\nEVALUATING: {model_path}")
@@ -818,25 +844,45 @@ if __name__ == "__main__":
                 dims = get_matryoshka_dims(full_dim)
 
             existing_results = load_results_file(output_json_file)
-            pending_dims = []
+            pending_work = []
 
             for dim in dims:
-                already_evaluated = any(
-                    entry.get("model") == model_name
-                    and entry.get("dimension") == dim
+                completed_algorithms = {
+                    algorithm
                     for entry in existing_results
-                )
+                    if entry.get("model") == model_name
+                    and entry.get("dimension") == dim
+                    for algorithm in entry.get("evaluation", {}).keys()
+                }
 
-                if already_evaluated:
+                pending_strategies = {}
+                used_config = {}
+
+                if "A*" not in completed_algorithms:
+                    used_config["astar_max_visits"] = get_p95_cap(
+                        p95_configs,
+                        model_name,
+                        dim,
+                        "A*",
+                    )
+                    pending_strategies["A*"] = ts.astar_traverse
+
+                if "Dijkstra" not in completed_algorithms:
+                    used_config["dijkstra_max_visits"] = get_p95_cap(
+                        p95_configs,
+                        model_name,
+                        dim,
+                        "Dijkstra",
+                    )
+                    pending_strategies["Dijkstra"] = ts.dijkstra_traverse
+
+                if not pending_strategies:
                     print(f"Skipping {model_name} dim {dim}")
                     continue
 
-                if (model_name, dim) not in p95_configs:
-                    raise KeyError(f"Missing p95 config for {(model_name, dim)}")
+                pending_work.append((dim, pending_strategies, used_config))
 
-                pending_dims.append(dim)
-
-            if not pending_dims:
+            if not pending_work:
                 print(f"No pending dimensions for {model_name}.")
                 del main_embeder
                 gc.collect()
@@ -851,31 +897,28 @@ if __name__ == "__main__":
                     save_cache=not args.no_save_embedding_cache,
                 )
 
-            for dim in pending_dims:
+            for dim, pending_strategies, used_config in pending_work:
 
                 print(f"--- Dim: {dim} ---")
                 main_embeder.set_matryoshka_dim(dim)
 
-                astar_config = {
-                    "astar_max_visits": p95_configs[(model_name, dim)]
-                }
-
-                run_warmup_traversal(
-                    valid_data,
-                    causal_graph,
-                    main_embeder,
-                    ts.astar_traverse,
-                    "A*",
-                    config=astar_config,
-                )
+                for strategy_name, strategy in pending_strategies.items():
+                    run_warmup_traversal(
+                        valid_data,
+                        causal_graph,
+                        main_embeder,
+                        strategy,
+                        strategy_name,
+                        config=used_config,
+                    )
 
                 main_summary = run_evaluation_loop(
                     valid_data,
                     causal_graph,
                     main_embeder,
-                    {"A*": ts.astar_traverse},
+                    pending_strategies,
                     f"{model_path} | dim {dim} | {run_suffix}",
-                    config=astar_config,
+                    config=used_config,
                 )
 
                 save_result(
@@ -886,7 +929,7 @@ if __name__ == "__main__":
                         "split": current_split,
                         "run_suffix": run_suffix,
                         "config_source_dataset": config_source_dataset_name,
-                        "used_config": astar_config,
+                        "used_config": used_config,
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "evaluation": main_summary,
                     },
