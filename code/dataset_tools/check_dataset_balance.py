@@ -1,10 +1,15 @@
 import json
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.append(str(REPO_ROOT))
 
 from core.utils import load_causal_graph
 
-DATASET_DIR = Path("../data/datasets/filtered")
-GRAPH_PATH = Path("../data/graphs/causenet-precision.jsonl")
+DATASET_DIR = REPO_ROOT / "data" / "datasets" / "filtered"
+GRAPH_PATH = REPO_ROOT / "data" / "graphs" / "causenet-precision.jsonl"
 
 
 def load_dataset(file_path):

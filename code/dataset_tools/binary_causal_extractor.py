@@ -6,6 +6,13 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+INPUT_DIR = REPO_ROOT / "data" / "datasets" / "webis"
+OUTPUT_ALL_PATH = REPO_ROOT / "data" / "datasets" / "webis_binary_causal_all.json"
+OUTPUT_ANSWERED_PATH = (
+    REPO_ROOT / "data" / "datasets" / "filtered" / "webis_binary_causal_answered.json"
+)
+
 # General causal rules adapted from the notebook.
 PATTERN1 = re.compile(
     r"\Awhy|(?=\Aif)(?=.*why )|(?=\Awhen)(?=.*why )| and why | why is \w+ | is \w+ why ",
@@ -368,17 +375,13 @@ def build_answer_record(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> None:
-    input_dir = Path("../data/datasets/webis")
-    output_all_path = Path("../data/datasets/webis_binary_causal_all.json")
-    output_answered_path = Path("../data/datasets/filtered/webis_binary_causal_answered.json")
-
-    if not input_dir.exists():
-        raise FileNotFoundError(f"Input folder does not exist: {input_dir}")
+    if not INPUT_DIR.exists():
+        raise FileNotFoundError(f"Input folder does not exist: {INPUT_DIR}")
 
     all_results: List[Dict[str, Any]] = []
     answered_results: List[Dict[str, Any]] = []
 
-    for path in iter_supported_files(input_dir):
+    for path in iter_supported_files(INPUT_DIR):
         if "msmarco" in path.name.lower():
             print(f"[SKIP] MS MARCO file: {path}")
             continue
@@ -417,16 +420,16 @@ def main() -> None:
             if record["binary_answer"] is not None and record["cause"] is not None and record["effect"] is not None:
                 answered_results.append(build_answer_record(record))
 
-    output_all_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_all_path, "w", encoding="utf-8") as f:
+    OUTPUT_ALL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(OUTPUT_ALL_PATH, "w", encoding="utf-8") as f:
         json.dump(all_results, f, ensure_ascii=False, indent=2)
 
-    output_answered_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_answered_path, "w", encoding="utf-8") as f:
+    OUTPUT_ANSWERED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(OUTPUT_ANSWERED_PATH, "w", encoding="utf-8") as f:
         json.dump(answered_results, f, ensure_ascii=False, indent=2)
 
-    print(f"Saved {len(all_results)} records to {output_all_path}")
-    print(f"Saved {len(answered_results)} answered records to {output_answered_path}")
+    print(f"Saved {len(all_results)} records to {OUTPUT_ALL_PATH}")
+    print(f"Saved {len(answered_results)} answered records to {OUTPUT_ANSWERED_PATH}")
 
 
 if __name__ == "__main__":
