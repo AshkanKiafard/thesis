@@ -61,10 +61,10 @@ def detect_split(dataset_name: str):
 
 def get_config_source_dataset_name(dataset_name: str):
     """
-    Use traversal caps from the previous split.
+    Use traversal caps from the train split.
 
     valid evaluation -> train p95
-    test evaluation  -> valid p95
+    test evaluation  -> train p95
     """
     split = detect_split(dataset_name)
 
@@ -72,10 +72,10 @@ def get_config_source_dataset_name(dataset_name: str):
         return dataset_name.replace("valid", "train")
 
     if split == "test":
-        return dataset_name.replace("test", "valid")
+        return dataset_name.replace("test", "train")
 
     raise ValueError(
-        f"No previous split available for dataset '{dataset_name}'. "
+        f"No train split cap source available for dataset '{dataset_name}'. "
         f"Run evaluation only on valid/test with p95 configs."
     )
 
@@ -125,7 +125,7 @@ def load_p95_configs(
     We use p95_visited_successful_only.
 
     valid evaluation -> data/evaluation/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
-    test evaluation  -> data/evaluation/<valid_dataset>/<run_suffix>/visited_nodes_analysis.json
+    test evaluation  -> data/evaluation/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
 
     --config-source-dataset forces a specific source.
     --fallback-config-source-dataset is used only if the default source is missing.
@@ -569,7 +569,7 @@ def parse_args():
         default=None,
         help=(
             "Force traversal caps from this dataset's visited_nodes_analysis.json, "
-            "e.g. msmarco_valid."
+            "e.g. msmarco_train."
         ),
     )
     parser.add_argument(
@@ -578,7 +578,7 @@ def parse_args():
         default=None,
         help=(
             "Use this dataset's traversal caps only if the default cap source "
-            "is missing, e.g. msmarco_valid for sem_test."
+            "is missing, e.g. msmarco_train for sem_test."
         ),
     )
     parser.add_argument(
