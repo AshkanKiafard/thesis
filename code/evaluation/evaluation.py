@@ -256,12 +256,13 @@ def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=N
 
 def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
     """
-    Populate the ST embedding cache before timed A* evaluation.
+    Warm graph-node embeddings before timed A* evaluation.
 
-    This is a fallback for cases where graph nodes were not pre-embedded before
-    evaluation. It keeps measured evaluation data from being influenced by
-    first-time SentenceTransformer.encode() calls inside the timed traversal
-    loop.
+    STEmbedder keeps a persisted NumPy cache and a device tensor cache. This
+    step encodes missing graph nodes, restores already persisted embeddings onto
+    the active device, and optionally saves newly encoded nodes back to disk.
+    That keeps timed traversal from doing first-use encoding or CPU-to-GPU cache
+    conversion inside the A* loop.
     """
     nodes = list(graph.nodes)
     cached_before = sum(1 for node in nodes if node in embeder.cache)

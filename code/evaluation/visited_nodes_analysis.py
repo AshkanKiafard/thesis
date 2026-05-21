@@ -383,6 +383,8 @@ if __name__ == "__main__":
                 model_path=model_path,
                 distance_metric=distance_metric,
             )
+            print("Preloading graph embeddings on the active device...")
+            main_embeder.preload(causal_graph.nodes, batch_size=64, save=True)
 
             # Collect one uncapped distribution per Matryoshka dimension.
             model_dim = main_embeder.get_model_dim()

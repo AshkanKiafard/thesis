@@ -197,6 +197,15 @@ class LitAStar(pl.LightningModule):
         # traverse_graph also expects a distance function on the model side.
         return self.loss_fn.distance(emb_a.unsqueeze(0), emb_b.unsqueeze(0)).item()
 
+    def get_distances(self, emb_a, embeddings):
+        if not embeddings:
+            return []
+
+        matrix = torch.stack(list(embeddings))
+        left = emb_a.unsqueeze(0).expand_as(matrix)
+
+        return self.loss_fn.distance(left, matrix).detach().cpu().tolist()
+
     def training_step(self, batch, batch_idx):
         loss = self.loss_fn([
             batch["start_nodes"],

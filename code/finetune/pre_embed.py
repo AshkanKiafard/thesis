@@ -116,8 +116,10 @@ if __name__ == "__main__":
             for i in range(0, len(uncached_nodes), batch_size):
                 batch = uncached_nodes[i:i + batch_size]
 
-                # Embed the current batch one node at a time through the wrapper.
-                batch_embeddings = [embeder.embed(node) for node in batch]
+                # Preload on GPU for efficient model inference, then persist
+                # the CPU NumPy representation used by the embedding cache.
+                embeder.preload(batch, batch_size=batch_size, save=False)
+                batch_embeddings = [embeder.embed_numpy(node) for node in batch]
 
                 for node, emb in zip(batch, batch_embeddings):
                     embeddings[node] = emb

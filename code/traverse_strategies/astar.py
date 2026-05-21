@@ -54,19 +54,24 @@ def astar_traverse(
             return [], visited_count
 
         current_node_embed = embeder.embed(current_node)
+        successors = [
+            successor
+            for successor in graph.successors(current_node)
+            if successor not in visited
+        ]
+        successor_embeds = [embeder.embed(successor) for successor in successors]
+        edge_costs = embeder.get_distances(current_node_embed, successor_embeds)
+        heuristic_costs = embeder.get_distances(end_node_embed, successor_embeds)
 
-        for successor in graph.successors(current_node):
-            if successor in visited:
-                continue
-
-            successor_embed = embeder.embed(successor)
-
+        for successor, edge_cost, heuristic in zip(
+            successors,
+            edge_costs,
+            heuristic_costs,
+        ):
             # Edge cost is the embedding distance between current node and successor.
-            edge_cost = embeder.get_distance(current_node_embed, successor_embed)
             tentative_g = g_score + edge_cost
 
             # Heuristic is the embedding distance from successor to goal.
-            heuristic = embeder.get_distance(successor_embed, end_node_embed)
             tentative_f = tentative_g + heuristic
 
             heapq.heappush(

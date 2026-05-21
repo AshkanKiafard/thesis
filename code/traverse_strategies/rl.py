@@ -66,22 +66,20 @@ def _edge_sentence(graph: Any, current_node: str, neighbor: str) -> str:
     return f"{current_node} can cause {neighbor}"
 
 
+def _to_device_tensor(embedding: Any) -> torch.Tensor:
+    if isinstance(embedding, torch.Tensor):
+        return embedding.to(device=DEVICE, dtype=torch.float32)
+
+    return torch.as_tensor(embedding, device=DEVICE, dtype=torch.float32)
+
+
 def _build_observation(question_text: str, current_node: str, embeder: Any) -> torch.Tensor:
     # Original EnvironmentTorch:
     # current_question_emb = question.embedding
     # current_node_emb = graph.entity_embeddings[node]
     # observation = [question_embedding, current_node_embedding]
-    question_emb = torch.tensor(
-        embeder.embed_question(question_text),
-        device=DEVICE,
-        dtype=torch.float32,
-    )
-
-    current_emb = torch.tensor(
-        embeder.embed_entity(current_node),
-        device=DEVICE,
-        dtype=torch.float32,
-    )
+    question_emb = _to_device_tensor(embeder.embed_question(question_text))
+    current_emb = _to_device_tensor(embeder.embed_entity(current_node))
 
     if question_emb.numel() != 300 or current_emb.numel() != 300:
         raise ValueError(
@@ -110,16 +108,8 @@ def _build_action_tensor(
     action_vectors = []
     path_labels = []
 
-    stop_relation_emb = torch.tensor(
-        embeder.embed_relation("stop"),
-        device=DEVICE,
-        dtype=torch.float32,
-    )
-    stop_entity_emb = torch.tensor(
-        embeder.embed_entity("stop stop action"),
-        device=DEVICE,
-        dtype=torch.float32,
-    )
+    stop_relation_emb = _to_device_tensor(embeder.embed_relation("stop"))
+    stop_entity_emb = _to_device_tensor(embeder.embed_entity("stop stop action"))
 
     action_vectors.append(torch.cat([stop_relation_emb, stop_entity_emb], dim=0))
     path_labels.append(current_node)
@@ -129,16 +119,8 @@ def _build_action_tensor(
     for neighbor in neighbors[: max_actions - 1]:
         relation_text = _edge_sentence(graph, current_node, neighbor)
 
-        relation_emb = torch.tensor(
-            embeder.embed_relation(relation_text),
-            device=DEVICE,
-            dtype=torch.float32,
-        )
-        neighbor_emb = torch.tensor(
-            embeder.embed_entity(neighbor),
-            device=DEVICE,
-            dtype=torch.float32,
-        )
+        relation_emb = _to_device_tensor(embeder.embed_relation(relation_text))
+        neighbor_emb = _to_device_tensor(embeder.embed_entity(neighbor))
 
         action_vectors.append(torch.cat([relation_emb, neighbor_emb], dim=0))
         path_labels.append(neighbor)

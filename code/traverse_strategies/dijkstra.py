@@ -50,15 +50,16 @@ def dijkstra_traverse(
             return [], visited_count
 
         current_node_embed = embeder.embed(current_node)
+        successors = [
+            successor
+            for successor in graph.successors(current_node)
+            if successor not in visited
+        ]
+        successor_embeds = [embeder.embed(successor) for successor in successors]
+        edge_costs = embeder.get_distances(current_node_embed, successor_embeds)
 
-        for successor in graph.successors(current_node):
-            if successor in visited:
-                continue
-
-            successor_embed = embeder.embed(successor)
-
+        for successor, edge_cost in zip(successors, edge_costs):
             # Edge weights are defined by embedding distance between connected nodes.
-            edge_cost = embeder.get_distance(current_node_embed, successor_embed)
             new_distance = distance + edge_cost
 
             # Relax edge if this route is better than the best known one.
