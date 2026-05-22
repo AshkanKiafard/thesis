@@ -4,7 +4,7 @@ from core.utils import load_causal_graph, load_rl_graph, traverse_graph
 from evaluation.visited_nodes_analysis import GRAPH_PATH
 
 if __name__ == "__main__":
-    GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+    GRAPH_PATH = "data/graphs/Lexical_Cause_Effect_Graph.txt"
 
     st_embeder = STEmbedder(
         "sentence-transformers/all-mpnet-base-v2", DistanceMetric.COSINE

@@ -11,6 +11,10 @@ import networkx as nx
 from core.constants import ActivationFunc, DistanceMetric, LIGHTNING_DIR
 from core.embeddings import STEmbedder
 
+DEFAULT_LEXICAL_CEG_MIN_COUNT = 1000
+DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE = 0.10
+DEFAULT_LEXICAL_CEG_SCORE_MODE = "any"
+
 
 @dataclass
 class RLGraph:
@@ -46,6 +50,38 @@ def _open_graph_file(file_path):
         return bz2.open(path, mode="rt", encoding="utf-8")
 
     return open(path, encoding="utf-8")
+
+
+def _detect_graph_format(file_path, graph_format="auto"):
+    graph_format = graph_format.lower()
+
+    if graph_format != "auto":
+        if graph_format not in {"causenet", "lexical_ceg"}:
+            raise ValueError(
+                "graph_format must be one of: auto, causenet, lexical_ceg"
+            )
+        return graph_format
+
+    file_name = Path(file_path).name.lower()
+
+    if file_name.endswith(".jsonl") or file_name.endswith(".jsonl.bz2"):
+        return "causenet"
+
+    if file_name.endswith(".txt"):
+        return "lexical_ceg"
+
+    raise ValueError(
+        f"Could not infer graph format from '{file_path}'. "
+        "Pass graph_format='causenet' or graph_format='lexical_ceg'."
+    )
+
+
+def _normalize_causenet_concept(value):
+    return value.replace("_", " ").strip()
+
+
+def _normalize_lexical_ceg_concept(value):
+    return value.replace("_", " ").strip().lower()
 
 
 def _build_source(connection, cause, effect):
@@ -116,9 +152,153 @@ def _build_causenet_source(d, cause, effect):
         return f"{cause} can cause {effect}"
 
 
-def load_causal_graph(file_path, remove_self_loops=True, use_inverse=False):
-    # Loads the causal graph from a JSONL file (one JSON object per line).
-    # This graph is used for BFS and A*.
+def _iter_causenet_edges(file_path, remove_self_loops=True):
+    with _open_graph_file(file_path) as f:
+        for d in map(json.loads, f):
+            cause = _normalize_causenet_concept(
+                d["causal_relation"]["cause"]["concept"]
+            )
+            effect = _normalize_causenet_concept(
+                d["causal_relation"]["effect"]["concept"]
+            )
+
+            if remove_self_loops and cause == effect:
+                continue
+
+            yield (
+                cause,
+                effect,
+                {
+                    "support": d.get("support", 0),
+                    "sentence": _build_causenet_source(d, cause, effect),
+                    "graph_source": "causenet",
+                },
+            )
+
+
+def _passes_lexical_ceg_filter(
+    count,
+    necessity_score,
+    sufficiency_score,
+    min_count,
+    min_causality_score,
+    score_mode,
+):
+    if count < min_count:
+        return False
+
+    score_mode = score_mode.lower()
+
+    if score_mode == "any":
+        return max(necessity_score, sufficiency_score) >= min_causality_score
+
+    if score_mode == "both":
+        return (
+            necessity_score >= min_causality_score
+            and sufficiency_score >= min_causality_score
+        )
+
+    if score_mode in {"mean", "average"}:
+        return (
+            (necessity_score + sufficiency_score) / 2
+        ) >= min_causality_score
+
+    raise ValueError("score_mode must be one of: any, both, mean")
+
+
+def _iter_lexical_ceg_edges(
+    file_path,
+    remove_self_loops=True,
+    min_count=DEFAULT_LEXICAL_CEG_MIN_COUNT,
+    min_causality_score=DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE,
+    score_mode=DEFAULT_LEXICAL_CEG_SCORE_MODE,
+):
+    # CEG format:
+    # cause->effect<TAB>count<TAB>necessity_score<TAB>sufficiency_score
+    with _open_graph_file(file_path) as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+
+            if len(parts) < 4 or "->" not in parts[0]:
+                continue
+
+            try:
+                count = int(parts[1])
+                necessity_score = float(parts[2])
+                sufficiency_score = float(parts[3])
+            except ValueError:
+                continue
+
+            if not _passes_lexical_ceg_filter(
+                count=count,
+                necessity_score=necessity_score,
+                sufficiency_score=sufficiency_score,
+                min_count=min_count,
+                min_causality_score=min_causality_score,
+                score_mode=score_mode,
+            ):
+                continue
+
+            cause, effect = parts[0].split("->", 1)
+            cause = _normalize_lexical_ceg_concept(cause)
+            effect = _normalize_lexical_ceg_concept(effect)
+
+            if not cause or not effect:
+                continue
+
+            if remove_self_loops and cause == effect:
+                continue
+
+            yield (
+                cause,
+                effect,
+                {
+                    "support": count,
+                    "sentence": f"{cause} can cause {effect}",
+                    "graph_source": "lexical_ceg",
+                    "count": count,
+                    "necessity_score": necessity_score,
+                    "sufficiency_score": sufficiency_score,
+                    "causality_score": max(necessity_score, sufficiency_score),
+                },
+            )
+
+
+def _iter_graph_edges(
+    file_path,
+    remove_self_loops=True,
+    graph_format="auto",
+    min_ceg_count=DEFAULT_LEXICAL_CEG_MIN_COUNT,
+    min_ceg_causality_score=DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE,
+    ceg_score_mode=DEFAULT_LEXICAL_CEG_SCORE_MODE,
+):
+    graph_format = _detect_graph_format(file_path, graph_format)
+
+    if graph_format == "causenet":
+        return _iter_causenet_edges(
+            file_path=file_path,
+            remove_self_loops=remove_self_loops,
+        )
+
+    return _iter_lexical_ceg_edges(
+        file_path=file_path,
+        remove_self_loops=remove_self_loops,
+        min_count=min_ceg_count,
+        min_causality_score=min_ceg_causality_score,
+        score_mode=ceg_score_mode,
+    )
+
+
+def load_causal_graph(
+    file_path,
+    remove_self_loops=True,
+    use_inverse=False,
+    graph_format="auto",
+    min_ceg_count=DEFAULT_LEXICAL_CEG_MIN_COUNT,
+    min_ceg_causality_score=DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE,
+    ceg_score_mode=DEFAULT_LEXICAL_CEG_SCORE_MODE,
+):
+    # Loads CauseNet JSONL or lexical CEG TXT for BFS, A*, and Dijkstra.
     #
     # It intentionally uses nx.DiGraph:
     # - normal graph traversal behavior
@@ -127,37 +307,37 @@ def load_causal_graph(file_path, remove_self_loops=True, use_inverse=False):
 
     graph = nx.DiGraph()
 
-    with _open_graph_file(file_path) as f:
-        for d in map(json.loads, f):
-            c = d["causal_relation"]["cause"]["concept"].replace("_", " ")
-            e = d["causal_relation"]["effect"]["concept"].replace("_", " ")
+    for cause, effect, edge_attrs in _iter_graph_edges(
+        file_path=file_path,
+        remove_self_loops=remove_self_loops,
+        graph_format=graph_format,
+        min_ceg_count=min_ceg_count,
+        min_ceg_causality_score=min_ceg_causality_score,
+        ceg_score_mode=ceg_score_mode,
+    ):
+        graph.add_edge(cause, effect, **edge_attrs)
 
-            if remove_self_loops and c == e:
-                continue
-
-            sentence = _build_causenet_source(d, c, e)
-
+        if use_inverse:
             graph.add_edge(
-                c,
-                e,
-                support=d.get("support", 0),
-                sentence=sentence,
+                effect,
+                cause,
+                **edge_attrs,
+                inverse=True,
             )
-
-            if use_inverse:
-                graph.add_edge(
-                    e,
-                    c,
-                    support=d.get("support", 0),
-                    sentence=sentence,
-                    inverse=True,
-                )
 
     return graph
 
 
-def load_rl_graph(file_path, remove_self_loops=True, use_inverse=False):
-    # Loads the causal graph in a format closer to the original RL repo.
+def load_rl_graph(
+    file_path,
+    remove_self_loops=True,
+    use_inverse=False,
+    graph_format="auto",
+    min_ceg_count=DEFAULT_LEXICAL_CEG_MIN_COUNT,
+    min_ceg_causality_score=DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE,
+    ceg_score_mode=DEFAULT_LEXICAL_CEG_SCORE_MODE,
+):
+    # Loads CauseNet JSONL or lexical CEG TXT in the RL baseline format.
     #
     # Original causal-qa-rl behavior:
     # - graph is a defaultdict(list)
@@ -173,29 +353,29 @@ def load_rl_graph(file_path, remove_self_loops=True, use_inverse=False):
     edge_sources = {}
     nodes = set()
 
-    with _open_graph_file(file_path) as f:
-        for d in map(json.loads, f):
-            c = d["causal_relation"]["cause"]["concept"].replace("_", " ")
-            e = d["causal_relation"]["effect"]["concept"].replace("_", " ")
+    for cause, effect, edge_attrs in _iter_graph_edges(
+        file_path=file_path,
+        remove_self_loops=remove_self_loops,
+        graph_format=graph_format,
+        min_ceg_count=min_ceg_count,
+        min_ceg_causality_score=min_ceg_causality_score,
+        ceg_score_mode=ceg_score_mode,
+    ):
+        sentence = edge_attrs["sentence"]
 
-            if remove_self_loops and c == e:
-                continue
+        nodes.add(cause)
+        nodes.add(effect)
 
-            sentence = _build_causenet_source(d, c, e)
+        # Preserve duplicate actions and insertion order.
+        adjacency[cause].append(effect)
 
-            nodes.add(c)
-            nodes.add(e)
+        # Match original graph_sources behavior:
+        # if duplicate (cause, effect) exists, the last source wins.
+        edge_sources[(cause, effect)] = sentence
 
-            # Preserve duplicate actions and insertion order.
-            adjacency[c].append(e)
-
-            # Match original graph_sources behavior:
-            # if duplicate (c, e) exists, the last source wins.
-            edge_sources[(c, e)] = sentence
-
-            if use_inverse:
-                adjacency[e].append(c)
-                edge_sources[(e, c)] = sentence
+        if use_inverse:
+            adjacency[effect].append(cause)
+            edge_sources[(effect, cause)] = sentence
 
     # Make sure every node has an adjacency list.
     for node in nodes:
@@ -210,6 +390,10 @@ def load_rl_graph(file_path, remove_self_loops=True, use_inverse=False):
         edge_sources=edge_sources,
         nodes=nodes,
     )
+
+
+def load_graph(*args, **kwargs):
+    return load_causal_graph(*args, **kwargs)
 
 
 def traverse_graph(

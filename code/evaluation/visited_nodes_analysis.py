@@ -23,7 +23,8 @@ from core.utils import (
 # Global paths
 # -------------------------------------------------------------------------
 
-GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+GRAPH_PATH = "data/graphs/Lexical_Cause_Effect_Graph.txt"
+EVALUATION_OUTPUT_ROOT = Path("data/evaluation/tmp")
 
 # Base models evaluated with embedding-guided graph strategies.
 base_models = [
@@ -45,7 +46,7 @@ def build_output_paths(dataset_path: str, run_suffix: str):
     Example:
     data/datasets/msmarco_valid_filtered.json + best_v2
     ->
-    data/evaluation/msmarco_valid/best_v2/visited_nodes_analysis.json
+    data/evaluation/tmp/msmarco_valid/best_v2/visited_nodes_analysis.json
     """
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
@@ -60,7 +61,7 @@ def build_output_paths(dataset_path: str, run_suffix: str):
     else:
         split = "unknown"
 
-    output_dir = Path("data/evaluation") / dataset_name / run_suffix
+    output_dir = EVALUATION_OUTPUT_ROOT / dataset_name / run_suffix
     output_json_file = output_dir / "visited_nodes_analysis.json"
 
     return dataset_name, split, output_dir, str(output_json_file)

@@ -29,7 +29,12 @@ from core.utils import (
 )
 from evaluation.select_best_model import select_best_astar_model, print_selection
 
-GRAPH_PATH = "data/graphs/causenet-precision.jsonl"
+GRAPH_PATH = "data/graphs/Lexical_Cause_Effect_Graph.txt"
+EVALUATION_OUTPUT_ROOT = Path("data/evaluation/tmp")
+P95_LOOKUP_ROOTS = [
+    EVALUATION_OUTPUT_ROOT,
+    Path("data/evaluation"),
+]
 
 base_models = [
     "sentence-transformers/all-mpnet-base-v2",
@@ -87,13 +92,13 @@ def build_output_paths(dataset_path: str, run_suffix: str):
     Example:
     data/datasets/msmarco_valid_filtered.json + best_v2
     ->
-    data/evaluation/msmarco_valid/best_v2/evaluation_results.json
-    data/evaluation/msmarco_valid/best_v2/evaluation_results.csv
+    data/evaluation/tmp/msmarco_valid/best_v2/evaluation_results.json
+    data/evaluation/tmp/msmarco_valid/best_v2/evaluation_results.csv
     """
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
 
-    output_dir = Path("data/evaluation") / dataset_name / run_suffix
+    output_dir = EVALUATION_OUTPUT_ROOT / dataset_name / run_suffix
     output_json_file = output_dir / "evaluation_results.json"
     output_csv_file = output_dir / "evaluation_results.csv"
 
@@ -104,13 +109,24 @@ def get_model_name(model_path: str):
     return Path(model_path).name
 
 
-def get_p95_analysis_file(dataset_name: str, run_suffix: str):
-    return (
-            Path("data/evaluation")
-            / dataset_name
-            / run_suffix
-            / "visited_nodes_analysis.json"
-    )
+def get_p95_analysis_files(dataset_name: str, run_suffix: str):
+    return [
+        root / dataset_name / run_suffix / "visited_nodes_analysis.json"
+        for root in P95_LOOKUP_ROOTS
+    ]
+
+
+def get_evaluation_results_file(dataset_name: str, run_suffix: str):
+    candidates = [
+        root / dataset_name / run_suffix / "evaluation_results.json"
+        for root in P95_LOOKUP_ROOTS
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    return candidates[0]
 
 
 def load_p95_configs(
@@ -142,26 +158,38 @@ def load_p95_configs(
         ):
             candidate_sources.append((fallback_config_source_dataset_name, "fallback"))
 
+        if "msmarco_train" not in {
+            candidate_source for candidate_source, _ in candidate_sources
+        }:
+            candidate_sources.append(("msmarco_train", "fallback"))
+
     missing_files = []
     selected_source_dataset_name = None
     analysis_file = None
 
     for candidate_source_dataset_name, source_kind in candidate_sources:
-        candidate_file = get_p95_analysis_file(candidate_source_dataset_name, run_suffix)
+        candidate_files = get_p95_analysis_files(
+            candidate_source_dataset_name,
+            run_suffix,
+        )
 
-        if candidate_file.exists():
-            selected_source_dataset_name = candidate_source_dataset_name
-            analysis_file = candidate_file
+        for candidate_file in candidate_files:
+            if candidate_file.exists():
+                selected_source_dataset_name = candidate_source_dataset_name
+                analysis_file = candidate_file
 
-            if source_kind == "fallback":
-                print(
-                    "Default p95 config source missing. "
-                    f"Falling back to: {selected_source_dataset_name}"
-                )
+                if source_kind == "fallback":
+                    print(
+                        "Default p95 config source missing. "
+                        f"Falling back to: {selected_source_dataset_name}"
+                    )
 
+                break
+
+        if analysis_file is not None:
             break
 
-        missing_files.append(candidate_file)
+        missing_files.extend(candidate_files)
 
     if analysis_file is None:
         missing_text = "\n".join(f"- {path}" for path in missing_files)
@@ -668,11 +696,9 @@ if __name__ == "__main__":
                 )
 
             valid_dataset_name = dataset_name.replace("test", "valid")
-            valid_results_file = (
-                    Path("data/evaluation")
-                    / valid_dataset_name
-                    / run_suffix
-                    / "evaluation_results.json"
+            valid_results_file = get_evaluation_results_file(
+                valid_dataset_name,
+                run_suffix,
             )
 
             selection = select_best_astar_model(valid_results_file)
