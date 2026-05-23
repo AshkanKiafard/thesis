@@ -14,10 +14,29 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "code" / "data"
 
 
+def _resolve_device(device=None):
+    if device is None or device == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+
+    device = str(device)
+
+    if device.startswith("cuda") and not torch.cuda.is_available():
+        raise ValueError(f"Requested device '{device}', but CUDA is not available.")
+
+    if device == "cpu" or device.startswith("cuda"):
+        return device
+
+    raise ValueError("device must be one of: auto, cpu, cuda, cuda:<index>")
+
+
 class STEmbedder:
-    def __init__(self, model_path: str, distance_metric: DistanceMetric):
-        # Use GPU if available, otherwise fall back to CPU.
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+    def __init__(
+        self,
+        model_path: str,
+        distance_metric: DistanceMetric,
+        device=None,
+    ):
+        self.device = _resolve_device(device)
 
         # Store only the last path component as a readable model name.
         self.model_name = os.path.basename(model_path.rstrip('/'))
@@ -31,6 +50,8 @@ class STEmbedder:
         # the active torch device for traversal distance computations.
         self.cache = {}
         self.tensor_cache = {}
+        self.indexed_text_to_idx = {}
+        self.embedding_table = None
 
         # Store embedding caches inside the mounted project directory.
         # This avoids writing to ../data, which resolves outside /app inside the Slurm container.
@@ -79,6 +100,10 @@ class STEmbedder:
     def embed(self, text: str) -> torch.Tensor:
         if text in self.tensor_cache:
             return self.tensor_cache[text]
+
+        index = self.indexed_text_to_idx.get(text)
+        if self.embedding_table is not None and index is not None:
+            return self.embedding_table.weight[index].flatten()
 
         if text in self.cache:
             tensor = self._as_tensor(self.cache[text])
@@ -145,6 +170,79 @@ class STEmbedder:
 
         return len(missing_texts)
 
+    def prepare_embedding_index(
+        self,
+        texts,
+        batch_size: int = 64,
+        save: bool = True,
+        discard_tensor_cache: bool = False,
+    ) -> int:
+        """
+        Preload texts and expose them through one torch embedding table.
+
+        This is the traversal fast path: successors can be fetched by integer
+        index instead of repeatedly collecting tensors and stacking them.
+        """
+        unique_texts = list(dict.fromkeys(texts))
+
+        if not unique_texts:
+            self.indexed_text_to_idx = {}
+            self.embedding_table = None
+            return 0
+
+        added = self.preload(unique_texts, batch_size=batch_size, save=save)
+
+        matrix = torch.stack([
+            self.embed(text)
+            for text in unique_texts
+        ])
+
+        self.embedding_table = torch.nn.Embedding.from_pretrained(
+            matrix,
+            freeze=True,
+        ).to(self.device)
+        self.embedding_table.eval()
+        self.indexed_text_to_idx = {
+            text: index
+            for index, text in enumerate(unique_texts)
+        }
+
+        if discard_tensor_cache:
+            for text in unique_texts:
+                self.tensor_cache.pop(text, None)
+
+        return added
+
+    def has_embedding_index(self) -> bool:
+        return self.embedding_table is not None
+
+    def embed_many(self, texts) -> torch.Tensor:
+        texts = list(texts)
+
+        if not texts:
+            dim = self.get_model_dim()
+            return torch.empty((0, dim), device=self.device, dtype=torch.float32)
+
+        if self.embedding_table is not None:
+            try:
+                indices = [self.indexed_text_to_idx[text] for text in texts]
+            except KeyError:
+                pass
+            else:
+                index_tensor = torch.as_tensor(
+                    indices,
+                    device=self.device,
+                    dtype=torch.long,
+                )
+
+                with torch.no_grad():
+                    return self.embedding_table.weight.index_select(0, index_tensor)
+
+        return torch.stack([
+            self.embed(text)
+            for text in texts
+        ])
+
     def save_cache(self):
         serializable_cache = {
             text: self._as_numpy(embedding)
@@ -175,11 +273,27 @@ class STEmbedder:
         return float(torch.linalg.vector_norm(e1 - e2).item())
 
     def get_distances(self, embed1, embeddings):
-        if not embeddings:
-            return []
-
         e1 = self._as_tensor(embed1)
-        matrix = torch.stack([self._as_tensor(embedding) for embedding in embeddings])
+        if isinstance(embeddings, torch.Tensor):
+            if embeddings.numel() == 0:
+                return []
+
+            matrix = embeddings.to(device=self.device, dtype=torch.float32)
+
+            if matrix.dim() == 1:
+                matrix = matrix.unsqueeze(0)
+            else:
+                matrix = matrix.reshape(matrix.shape[0], -1)
+        else:
+            embeddings = list(embeddings)
+
+            if not embeddings:
+                return []
+
+            matrix = torch.stack([
+                self._as_tensor(embedding)
+                for embedding in embeddings
+            ])
 
         if self.matryoshka_dim is not None and self.matryoshka_dim < e1.numel():
             e1 = e1[:self.matryoshka_dim]
@@ -206,9 +320,10 @@ class GloveEmbeder:
         self,
         glove_file_path: str,
         distance_metric: DistanceMetric = DistanceMetric.COSINE,
+        device=None,
     ):
         self.distance_metric = distance_metric
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = _resolve_device(device)
         self.word_to_idx = {}
         self.embedding_matrix = None
         self.default_dim = 300

@@ -354,11 +354,22 @@ def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
         batch_size=batch_size,
         save=save_cache,
     )
+    avg_out_degree = graph.number_of_edges() / max(graph.number_of_nodes(), 1)
+
+    # The indexed table is only worth its extra device memory on dense graphs.
+    if avg_out_degree >= 128:
+        embeder.prepare_embedding_index(
+            nodes,
+            batch_size=batch_size,
+            save=False,
+        )
     elapsed = time.time() - start_time
 
     print(
         f"Embedding preload complete: {added} added, "
         f"{cached_before + added}/{len(nodes)} graph nodes cached, "
+        f"{len(embeder.indexed_text_to_idx)} indexed, "
+        f"avg out-degree {avg_out_degree:.1f}, "
         f"{elapsed:.1f}s"
     )
 
@@ -413,6 +424,7 @@ def save_all_results_csv(all_results, output_csv_file):
         "split",
         "run_suffix",
         "config_source_dataset",
+        "embedding_device",
         "used_max_visits",
         "timestamp",
         "accuracy",
@@ -448,6 +460,7 @@ def save_all_results_csv(all_results, output_csv_file):
                 "split": entry.get("split", ""),
                 "run_suffix": entry.get("run_suffix", ""),
                 "config_source_dataset": entry.get("config_source_dataset", ""),
+                "embedding_device": entry.get("embedding_device", ""),
                 "used_max_visits": used_max_visits,
                 "timestamp": entry.get("timestamp"),
                 **metrics,
@@ -477,6 +490,13 @@ def get_used_max_visits(used_config, algorithm):
         return used_config.get("astar_max_visits")
 
     return None
+
+
+def get_embedding_index_config(graph_name):
+    if graph_name == "causalbank":
+        return {"embedding_index_min_successors": 128}
+
+    return {}
 
 
 def load_results_file(output_json_file):
@@ -743,6 +763,16 @@ def parse_args():
         help="Batch size used when preloading ST graph-node embeddings.",
     )
     parser.add_argument(
+        "--embedding-device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help=(
+            "Torch device for ST/GloVe embedding tensors and ST model encoding. "
+            "Use cpu to benchmark traversal distance computation without GPU "
+            "synchronization overhead. Default: auto."
+        ),
+    )
+    parser.add_argument(
         "--no-save-embedding-cache",
         action="store_true",
         help="Do not persist newly preloaded ST embeddings to data/embeddings.",
@@ -791,6 +821,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--force-model-results",
+        action="store_true",
+        help=(
+            "Rerun A*/Dijkstra model evaluations even if entries already exist. "
+            "Existing entries for the same model and dimension are replaced."
+        ),
+    )
+    parser.add_argument(
         "--best-model-path",
         type=str,
         default=None,
@@ -826,6 +864,7 @@ if __name__ == "__main__":
     print(f"Run suffix: {run_suffix}")
     print(f"Graph: {graph_label} ({graph_name})")
     print(f"Graph path: {graph_path}")
+    print(f"Embedding device: {args.embedding_device}")
 
     dataset_name, output_dir, output_json_file, output_csv_file = build_output_paths(
         dataset_path,
@@ -1034,6 +1073,7 @@ if __name__ == "__main__":
         rl_embeder = GloveEmbeder(
             GLOVE_300D_PATH,
             DistanceMetric.COSINE,
+            device=args.embedding_device,
         )
 
         rl_config = {
@@ -1075,6 +1115,7 @@ if __name__ == "__main__":
                 "split": current_split,
                 "run_suffix": run_suffix,
                 "config_source_dataset": config_source_dataset_name,
+                "embedding_device": args.embedding_device,
                 "used_config": rl_config,
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "evaluation": rl_summary,
@@ -1123,6 +1164,7 @@ if __name__ == "__main__":
             main_embeder = STEmbedder(
                 model_path=model_path,
                 distance_metric=distance_metric,
+                device=args.embedding_device,
             )
 
             full_dim = main_embeder.get_model_dim()
@@ -1136,13 +1178,16 @@ if __name__ == "__main__":
             pending_work = []
 
             for dim in dims:
-                completed_algorithms = {
-                    algorithm
-                    for entry in existing_results
-                    if entry.get("model") == model_name
-                    and entry.get("dimension") == dim
-                    for algorithm in entry.get("evaluation", {}).keys()
-                }
+                if args.force_model_results:
+                    completed_algorithms = set()
+                else:
+                    completed_algorithms = {
+                        algorithm
+                        for entry in existing_results
+                        if entry.get("model") == model_name
+                        and entry.get("dimension") == dim
+                        for algorithm in entry.get("evaluation", {}).keys()
+                    }
 
                 pending_strategies = {}
                 used_config = {}
@@ -1169,6 +1214,7 @@ if __name__ == "__main__":
                     print(f"Skipping {model_name} dim {dim}")
                     continue
 
+                used_config.update(get_embedding_index_config(graph_name))
                 pending_work.append((dim, pending_strategies, used_config))
 
             if not pending_work:
@@ -1218,12 +1264,23 @@ if __name__ == "__main__":
                         "split": current_split,
                         "run_suffix": run_suffix,
                         "config_source_dataset": config_source_dataset_name,
+                        "embedding_device": args.embedding_device,
                         "used_config": used_config,
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "evaluation": main_summary,
                     },
                     output_json_file,
                     output_csv_file,
+                    replace_existing=(
+                        (
+                            lambda entry, model_name=model_name, dim=dim: (
+                                entry.get("model") == model_name
+                                and entry.get("dimension") == dim
+                            )
+                        )
+                        if args.force_model_results
+                        else None
+                    ),
                 )
 
             del main_embeder

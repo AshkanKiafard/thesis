@@ -17,6 +17,26 @@ def _reconstruct_path(path_links, path_index):
     return path
 
 
+def _embed_many(embeder, nodes, config):
+    # Small successor batches are usually faster through the regular tensor cache.
+    min_successors = config.get("embedding_index_min_successors", 128)
+    has_embedding_index = getattr(embeder, "has_embedding_index", None)
+    can_use_index = (
+        has_embedding_index()
+        if callable(has_embedding_index)
+        else True
+    )
+
+    embed_many = getattr(embeder, "embed_many", None)
+    if len(nodes) >= min_successors and can_use_index and callable(embed_many):
+        return embed_many(nodes)
+
+    return [
+        embeder.embed(node)
+        for node in nodes
+    ]
+
+
 def astar_traverse(
     graph: nx.DiGraph,
     start_node: str,
@@ -38,6 +58,7 @@ def astar_traverse(
     # h = heuristic estimate from current node to end node
     path_links = [(start_node, None)]
     open_set = [(0, 0, start_node, 0)]
+    best_g = {start_node: 0.0}
 
     # Local closed set.
     # Faster than writing "visited" metadata into the NetworkX graph.
@@ -46,6 +67,7 @@ def astar_traverse(
 
     # Embed the target node once so we do not recompute it for every expansion.
     end_node_embed = embeder.embed(end_node)
+    adjacency = graph._succ
 
     while open_set:
         f_score, g_score, current_node, path_index = heapq.heappop(open_set)
@@ -68,10 +90,14 @@ def astar_traverse(
         current_node_embed = embeder.embed(current_node)
         successors = [
             successor
-            for successor in graph.successors(current_node)
+            for successor in adjacency.get(current_node, ())
             if successor not in visited
         ]
-        successor_embeds = [embeder.embed(successor) for successor in successors]
+
+        if not successors:
+            continue
+
+        successor_embeds = _embed_many(embeder, successors, config)
         edge_costs = embeder.get_distances(current_node_embed, successor_embeds)
         heuristic_costs = embeder.get_distances(end_node_embed, successor_embeds)
 
@@ -82,6 +108,11 @@ def astar_traverse(
         ):
             # Edge cost is the embedding distance between current node and successor.
             tentative_g = g_score + edge_cost
+
+            if tentative_g >= best_g.get(successor, float("inf")):
+                continue
+
+            best_g[successor] = tentative_g
 
             # Heuristic is the embedding distance from successor to goal.
             tentative_f = tentative_g + heuristic

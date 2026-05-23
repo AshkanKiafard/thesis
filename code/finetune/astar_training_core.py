@@ -158,6 +158,8 @@ class LitAStar(pl.LightningModule):
         # val_cache stores node -> embedding for the current validation epoch.
         # result_cache stores (start, end) -> visited nodes, so repeated pairs are cheap.
         self.val_cache = {}
+        self.val_text_to_idx = {}
+        self.val_embedding_table = None
         self.result_cache = {}
 
     def on_validation_epoch_start(self):
@@ -182,26 +184,82 @@ class LitAStar(pl.LightningModule):
                 device=self.device
             )
 
+        self.val_embedding_table = nn.Embedding.from_pretrained(
+            embeddings,
+            freeze=True,
+        )
+        self.val_embedding_table.eval()
+        self.val_text_to_idx = {
+            node: index
+            for index, node in enumerate(all_nodes)
+        }
         self.val_cache = dict(zip(all_nodes, embeddings))
 
     def on_validation_epoch_end(self):
         # Free memory explicitly after each validation epoch.
         self.val_cache.clear()
+        self.val_text_to_idx.clear()
+        self.val_embedding_table = None
         self.result_cache.clear()
 
     def embed(self, text: str):
         # traverse_graph expects the model object to expose an embed() method.
-        return self.val_cache[text]
+        if text in self.val_cache:
+            return self.val_cache[text]
+
+        index = self.val_text_to_idx.get(text)
+        if self.val_embedding_table is not None and index is not None:
+            return self.val_embedding_table.weight[index]
+
+        raise KeyError(text)
+
+    def embed_many(self, texts):
+        texts = list(texts)
+
+        if not texts:
+            dim = self.embedding_model.get_sentence_embedding_dimension()
+            return torch.empty((0, dim), device=self.device)
+
+        if self.val_embedding_table is not None:
+            index_tensor = torch.as_tensor(
+                [self.val_text_to_idx[text] for text in texts],
+                device=self.device,
+                dtype=torch.long,
+            )
+
+            with torch.no_grad():
+                return self.val_embedding_table.weight.index_select(0, index_tensor)
+
+        return torch.stack([
+            self.val_cache[text]
+            for text in texts
+        ])
+
+    def has_embedding_index(self):
+        return self.val_embedding_table is not None
 
     def get_distance(self, emb_a, emb_b):
         # traverse_graph also expects a distance function on the model side.
         return self.loss_fn.distance(emb_a.unsqueeze(0), emb_b.unsqueeze(0)).item()
 
     def get_distances(self, emb_a, embeddings):
-        if not embeddings:
-            return []
+        if isinstance(embeddings, torch.Tensor):
+            if embeddings.numel() == 0:
+                return []
 
-        matrix = torch.stack(list(embeddings))
+            matrix = embeddings
+
+            if matrix.dim() == 1:
+                matrix = matrix.unsqueeze(0)
+            else:
+                matrix = matrix.reshape(matrix.shape[0], -1)
+        else:
+            embeddings = list(embeddings)
+
+            if not embeddings:
+                return []
+
+            matrix = torch.stack(list(embeddings))
         left = emb_a.unsqueeze(0).expand_as(matrix)
 
         return self.loss_fn.distance(left, matrix).detach().cpu().tolist()

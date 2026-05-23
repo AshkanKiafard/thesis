@@ -290,6 +290,13 @@ def preload_rl_embeddings(embeder, graph, data=None, batch_size=4096):
     )
 
 
+def get_embedding_index_config(graph_name):
+    if graph_name == "causalbank":
+        return {"embedding_index_min_successors": 128}
+
+    return {}
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Collect uncapped visited-node distributions."
@@ -310,6 +317,16 @@ def parse_args():
         default=DEFAULT_GRAPH_NAME,
         help="Graph to analyze with. Defaults to CauseNet.",
     )
+    parser.add_argument(
+        "--embedding-device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help=(
+            "Torch device for ST/GloVe embedding tensors and ST model encoding. "
+            "Use cpu to benchmark traversal distance computation without GPU "
+            "synchronization overhead. Default: auto."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -327,6 +344,7 @@ if __name__ == "__main__":
     print(f"Run suffix: {run_suffix}")
     print(f"Graph: {graph_label} ({graph_name})")
     print(f"Graph path: {graph_path}")
+    print(f"Embedding device: {args.embedding_device}")
     print("Model queue:", model_queue)
 
     # RL still needs these parameters
@@ -408,6 +426,7 @@ if __name__ == "__main__":
             rl_embeder = GloveEmbeder(
                 GLOVE_300D_PATH,
                 DistanceMetric.COSINE,
+                device=args.embedding_device,
             )
 
             preload_rl_embeddings(
@@ -433,6 +452,7 @@ if __name__ == "__main__":
                     "dataset": dataset_name,
                     "split": split,
                     "run_suffix": run_suffix,
+                    "embedding_device": args.embedding_device,
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "analysis": rl_result,
                 },
@@ -462,9 +482,23 @@ if __name__ == "__main__":
             main_embeder = STEmbedder(
                 model_path=model_path,
                 distance_metric=distance_metric,
+                device=args.embedding_device,
             )
             print("Preloading graph embeddings on the active device...")
             main_embeder.preload(causal_graph.nodes, batch_size=64, save=True)
+
+            avg_out_degree = (
+                causal_graph.number_of_edges()
+                / max(causal_graph.number_of_nodes(), 1)
+            )
+
+            # The indexed table is only worth its extra device memory on dense graphs.
+            if avg_out_degree >= 128:
+                main_embeder.prepare_embedding_index(
+                    causal_graph.nodes,
+                    batch_size=64,
+                    save=False,
+                )
 
             # Collect one uncapped distribution per Matryoshka dimension.
             model_dim = main_embeder.get_model_dim()
@@ -472,6 +506,8 @@ if __name__ == "__main__":
 
             print(f"Model dim: {model_dim}")
             print(f"Matryoshka dims: {matryoshka_dims}")
+
+            semantic_config = get_embedding_index_config(graph_name)
 
             for dim in matryoshka_dims:
                 existing_results = load_results_file(output_json_file)
@@ -500,7 +536,7 @@ if __name__ == "__main__":
                             f"{strategy_name} | {model_name} | dim {dim} | "
                             f"{dataset_name} | {run_suffix}"
                         ),
-                        config=None,
+                        config=semantic_config,
                     )
 
                     save_result(
@@ -511,6 +547,8 @@ if __name__ == "__main__":
                             "dataset": dataset_name,
                             "split": split,
                             "run_suffix": run_suffix,
+                            "embedding_device": args.embedding_device,
+                            "used_config": semantic_config,
                             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                             "analysis": strategy_result,
                         },
