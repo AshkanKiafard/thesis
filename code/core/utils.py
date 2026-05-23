@@ -285,10 +285,6 @@ def load_graph_nodes(
     return nodes
 
 
-def load_graph(*args, **kwargs):
-    return load_causal_graph(*args, **kwargs)
-
-
 def load_rl_graph(
     file_path,
     remove_self_loops=True,
