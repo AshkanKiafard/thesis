@@ -108,6 +108,7 @@ def parse_args():
     )
     parser.add_argument(
         "dataset",
+        nargs="?",
         help=(
             "Dataset name or dataset path, e.g. "
             "msmarco_valid or data/datasets/filtered/msmarco_valid_filtered.json"
@@ -115,16 +116,37 @@ def parse_args():
     )
     parser.add_argument(
         "--run-suffix",
-        default="best_v2",
-        help="Run suffix used in evaluation and plot paths, e.g. best_v2.",
+        default=None,
+        help=(
+            "Run suffix used in evaluation and plot paths, e.g. best_v2. "
+            "Defaults to best_v2 for single-dataset mode. In --all mode, "
+            "omitting this includes every run suffix."
+        ),
     )
     parser.add_argument(
         "--graph",
         choices=graph_choices(),
-        default=DEFAULT_GRAPH_NAME,
-        help="Graph results to visualize. Defaults to CauseNet.",
+        default=None,
+        help=(
+            "Graph results to visualize. Defaults to CauseNet for "
+            "single-dataset mode. In --all mode, omitting this includes "
+            "every graph."
+        ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help=(
+            "Generate plots for every result directory under data/evaluation. "
+            "Can be filtered with --graph and/or --run-suffix."
+        ),
+    )
+    args = parser.parse_args()
+
+    if not args.all and not args.dataset:
+        parser.error("dataset is required unless --all is set")
+
+    return args
 
 
 def dataset_name_from_arg(dataset_arg: str):
@@ -159,6 +181,62 @@ def build_input_paths(dataset_name: str, run_suffix: str, graph_name: str):
 
 def build_plot_output_dir(dataset_name: str, run_suffix: str, graph_name: str):
     return PLOT_OUTPUT_DIR / graph_name / dataset_name / run_suffix
+
+
+def discover_result_sets(graph_name=None, run_suffix=None):
+    result_sets = []
+
+    if not EVALUATION_INPUT_ROOT.exists():
+        return result_sets
+
+    graph_dirs = []
+
+    if graph_name is None:
+        graph_dirs = [
+            path
+            for path in EVALUATION_INPUT_ROOT.iterdir()
+            if path.is_dir()
+        ]
+    else:
+        graph_dirs = [EVALUATION_INPUT_ROOT / graph_name]
+
+    for graph_dir in sorted(graph_dirs):
+        if not graph_dir.is_dir():
+            continue
+
+        for dataset_dir in sorted(path for path in graph_dir.iterdir() if path.is_dir()):
+            run_dirs = []
+
+            if run_suffix is None:
+                run_dirs = [
+                    path
+                    for path in dataset_dir.iterdir()
+                    if path.is_dir()
+                ]
+            else:
+                run_dirs = [dataset_dir / run_suffix]
+
+            for run_dir in sorted(run_dirs):
+                if not run_dir.is_dir():
+                    continue
+
+                eval_results_path = run_dir / "evaluation_results.json"
+                visited_nodes_path = run_dir / "visited_nodes_analysis.json"
+
+                if not eval_results_path.exists() and not visited_nodes_path.exists():
+                    continue
+
+                result_sets.append(
+                    {
+                        "graph": graph_dir.name,
+                        "dataset": dataset_dir.name,
+                        "run_suffix": run_dir.name,
+                        "eval_results_path": eval_results_path,
+                        "visited_nodes_path": visited_nodes_path,
+                    }
+                )
+
+    return result_sets
 
 
 def ensure_directory(path):
@@ -2425,31 +2503,20 @@ def plot_all_p95_analysis(p95_df, plot_root):
     )
 
 
-# -------------------------------------------------------------------------
-# Main
-# -------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    args = parse_args()
-    dataset_name = dataset_name_from_arg(args.dataset)
+def plot_result_set(dataset_name, run_suffix, graph_name, eval_results_path, visited_nodes_path):
     current_split = detect_split(dataset_name)
-
-    eval_results_path, visited_nodes_path = build_input_paths(
-        dataset_name,
-        args.run_suffix,
-        args.graph,
-    )
     plot_root = build_plot_output_dir(
         dataset_name,
-        args.run_suffix,
-        args.graph,
+        run_suffix,
+        graph_name,
     )
 
     ensure_directory(plot_root)
 
     print(f"Dataset: {dataset_name}")
     print(f"Split: {current_split}")
-    print(f"Graph: {args.graph}")
+    print(f"Graph: {graph_name}")
+    print(f"Run suffix: {run_suffix}")
     print(f"Evaluation results: {eval_results_path}")
     print(f"Visited nodes analysis: {visited_nodes_path}")
     print(f"Plot output dir: {plot_root}")
@@ -2531,3 +2598,57 @@ if __name__ == "__main__":
         )
 
     print("\nAll available plots created.")
+
+
+# -------------------------------------------------------------------------
+# Main
+# -------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    args = parse_args()
+
+    if args.all:
+        result_sets = discover_result_sets(
+            graph_name=args.graph,
+            run_suffix=args.run_suffix,
+        )
+
+        if not result_sets:
+            print("No evaluation result directories found.")
+            raise SystemExit(0)
+
+        print(f"Found {len(result_sets)} result directories.")
+
+        for index, result_set in enumerate(result_sets, start=1):
+            print(
+                "\n"
+                f"[{index}/{len(result_sets)}] "
+                f"{result_set['graph']}/{result_set['dataset']}/"
+                f"{result_set['run_suffix']}"
+            )
+            plot_result_set(
+                dataset_name=result_set["dataset"],
+                run_suffix=result_set["run_suffix"],
+                graph_name=result_set["graph"],
+                eval_results_path=result_set["eval_results_path"],
+                visited_nodes_path=result_set["visited_nodes_path"],
+            )
+
+        print("\nAll result directories processed.")
+    else:
+        dataset_name = dataset_name_from_arg(args.dataset)
+        graph_name = args.graph or DEFAULT_GRAPH_NAME
+        run_suffix = args.run_suffix or "best_v2"
+        eval_results_path, visited_nodes_path = build_input_paths(
+            dataset_name,
+            run_suffix,
+            graph_name,
+        )
+
+        plot_result_set(
+            dataset_name=dataset_name,
+            run_suffix=run_suffix,
+            graph_name=graph_name,
+            eval_results_path=eval_results_path,
+            visited_nodes_path=visited_nodes_path,
+        )

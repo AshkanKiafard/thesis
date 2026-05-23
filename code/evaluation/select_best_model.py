@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 
-DEFAULT_MIN_F1 = 0.90
+DEFAULT_MIN_F1 = 0.8
 DEFAULT_VARIANT_FILTER = "finetuned"
 
 
