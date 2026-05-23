@@ -135,6 +135,7 @@ def load_p95_configs(
     run_suffix: str,
     graph_name: str,
     config_source_dataset_name: str = None,
+    config_source_graph_name: str = None,
     fallback_config_source_dataset_name: str = None,
     fallback_config_source_graph_name: str = DEFAULT_GRAPH_NAME,
 ):
@@ -147,11 +148,15 @@ def load_p95_configs(
     fallback source -> data/evaluation/<fallback_graph>/<fallback_dataset>/<run_suffix>/visited_nodes_analysis.json
 
     --config-source-dataset forces a specific source.
+    --config-source-graph selects the graph namespace for that explicit source.
     --fallback-config-source-dataset and --fallback-config-source-graph are used
     only if the default source is missing.
     """
     if config_source_dataset_name:
-        candidate_sources = [(config_source_dataset_name, graph_name, "explicit")]
+        explicit_graph_name = config_source_graph_name or graph_name
+        candidate_sources = [
+            (config_source_dataset_name, explicit_graph_name, "explicit")
+        ]
     else:
         default_source_dataset_name = get_config_source_dataset_name(eval_dataset_name)
         candidate_sources = [(default_source_dataset_name, graph_name, "default")]
@@ -634,6 +639,15 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--config-source-graph",
+        choices=graph_choices(),
+        default=None,
+        help=(
+            "Graph namespace for --config-source-dataset. Defaults to the "
+            "evaluated graph if omitted."
+        ),
+    )
+    parser.add_argument(
         "--fallback-config-source-dataset",
         type=str,
         default=None,
@@ -782,6 +796,7 @@ if __name__ == "__main__":
         run_suffix,
         graph_name,
         config_source_dataset_name=args.config_source_dataset,
+        config_source_graph_name=args.config_source_graph,
         fallback_config_source_dataset_name=args.fallback_config_source_dataset,
         fallback_config_source_graph_name=args.fallback_config_source_graph,
     )
