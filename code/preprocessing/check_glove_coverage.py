@@ -1,8 +1,9 @@
 import argparse
+import csv
 import json
 from pathlib import Path
 
-from filter_causalbank_graph import FILTERED_CAUSALBANK_GRAPH_PATH
+from core.graph_config import get_graph_label, get_graph_path, graph_choices
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_GLOVE_PATH = (
@@ -10,6 +11,7 @@ DEFAULT_GLOVE_PATH = (
 )
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "data" / "reports" / "coverage"
 DEFAULT_DATASET_DIR = REPO_ROOT / "data" / "datasets" / "filtered"
+DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank")
 
 # These are the datasets where the graph-membership report should mirror evaluation.
 # For every row we check whether cause and effect both exist in the graph. If not,
@@ -40,8 +42,14 @@ DATASET_FILE_ALIASES = {
         "sem_test.json",
     ),
 }
-CAUSENET_GRAPH_PATH = REPO_ROOT / "data" / "graphs" / "causenet-precision.jsonl"
-CAUSALBANK_GRAPH_PATH = FILTERED_CAUSALBANK_GRAPH_PATH
+
+def resolve_repo_path(path):
+    path = Path(path)
+
+    if path.is_absolute():
+        return path
+
+    return REPO_ROOT / path
 
 
 def normalize_causenet_concept(value):
@@ -86,7 +94,7 @@ def iter_causalbank_nodes(file_path, progress_every=1_000_000):
 
 
 def load_nodes(graph_name, graph_path):
-    if graph_name == "causenet":
+    if graph_name in {"causenet", "causenet_full"}:
         return set(iter_causenet_nodes(graph_path))
 
     if graph_name == "causalbank":
@@ -464,14 +472,19 @@ def write_lines(path, values):
 
 
 def write_partial_nodes(path, rows):
-    with open(path, "w", encoding="utf-8", newline="\n") as file:
-        file.write("node\tknown_tokens\tmissing_tokens\n")
+    fieldnames = ["node", "known_tokens", "missing_tokens"]
+
+    with open(path, "w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
 
         for row in rows:
-            file.write(
-                f"{row['node']}\t"
-                f"{' '.join(row['known_tokens'])}\t"
-                f"{' '.join(row['missing_tokens'])}\n"
+            writer.writerow(
+                {
+                    "node": row["node"],
+                    "known_tokens": " ".join(row["known_tokens"]),
+                    "missing_tokens": " ".join(row["missing_tokens"]),
+                }
             )
 
 
@@ -487,7 +500,7 @@ def write_graph_report(output_dir, graph_name, coverage):
         coverage["no_token_nodes"],
     )
     write_partial_nodes(
-        output_dir / f"{graph_name}_partial_entity_nodes.tsv",
+        output_dir / f"{graph_name}_partial_entity_nodes.csv",
         coverage["partial_token_nodes"],
     )
     write_lines(
@@ -497,39 +510,57 @@ def write_graph_report(output_dir, graph_name, coverage):
 
 
 def write_missing_dataset_examples(path, rows):
-    with open(path, "w", encoding="utf-8", newline="\n") as file:
-        file.write(
-            "dataset\tfamily\tid\tanswer\tcause\tcause_missing\t"
-            "cause_missing_tokens\teffect\teffect_missing\teffect_missing_tokens\n"
-        )
+    fieldnames = [
+        "dataset",
+        "family",
+        "id",
+        "answer",
+        "cause",
+        "cause_missing",
+        "cause_missing_tokens",
+        "effect",
+        "effect_missing",
+        "effect_missing_tokens",
+    ]
+
+    with open(path, "w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
 
         for row in rows:
-            file.write(
-                f"{row['dataset']}\t"
-                f"{row['family']}\t"
-                f"{row['id']}\t"
-                f"{row['answer']}\t"
-                f"{row['cause']}\t"
-                f"{row['cause_missing']}\t"
-                f"{' '.join(row['cause_missing_tokens'])}\t"
-                f"{row['effect']}\t"
-                f"{row['effect_missing']}\t"
-                f"{' '.join(row['effect_missing_tokens'])}\n"
+            writer.writerow(
+                {
+                    **row,
+                    "cause_missing_tokens": " ".join(row["cause_missing_tokens"]),
+                    "effect_missing_tokens": " ".join(row["effect_missing_tokens"]),
+                }
             )
 
 
 def write_missing_dataset_nodes(path, rows):
-    with open(path, "w", encoding="utf-8", newline="\n") as file:
-        file.write("dataset\tfamily\tnode\troles\texample_ids\tmissing_tokens\n")
+    fieldnames = [
+        "dataset",
+        "family",
+        "node",
+        "roles",
+        "example_ids",
+        "missing_tokens",
+    ]
+
+    with open(path, "w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
 
         for row in rows:
-            file.write(
-                f"{row['dataset']}\t"
-                f"{row['family']}\t"
-                f"{row['node']}\t"
-                f"{' '.join(row['roles'])}\t"
-                f"{' '.join(row['example_ids'])}\t"
-                f"{' '.join(row['missing_tokens'])}\n"
+            writer.writerow(
+                {
+                    "dataset": row["dataset"],
+                    "family": row["family"],
+                    "node": row["node"],
+                    "roles": " ".join(row["roles"]),
+                    "example_ids": " ".join(row["example_ids"]),
+                    "missing_tokens": " ".join(row["missing_tokens"]),
+                }
             )
 
 
@@ -900,7 +931,7 @@ def print_graph_membership_summary(graph_label, dataset_name, summary):
 
 
 def write_eval_example_rows(path, rows, include_skip_reason):
-    columns = [
+    fieldnames = [
         "graph",
         "dataset",
         "family",
@@ -914,27 +945,37 @@ def write_eval_example_rows(path, rows, include_skip_reason):
     ]
 
     if include_skip_reason:
-        columns.append("skip_reason")
+        fieldnames.append("skip_reason")
 
-    with open(path, "w", encoding="utf-8", newline="\n") as file:
-        file.write("\t".join(columns) + "\n")
-
-        for row in rows:
-            file.write("\t".join(str(row.get(column, "")) for column in columns) + "\n")
+    with open(path, "w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(
+            {
+                column: row.get(column, "")
+                for column in fieldnames
+            }
+            for row in rows
+        )
 
 
 def write_eval_missing_node_rows(path, rows):
-    with open(path, "w", encoding="utf-8", newline="\n") as file:
-        file.write("graph\tdataset\tfamily\tnode\troles\texample_ids\n")
+    fieldnames = ["graph", "dataset", "family", "node", "roles", "example_ids"]
+
+    with open(path, "w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
 
         for row in rows:
-            file.write(
-                f"{row['graph']}\t"
-                f"{row['dataset']}\t"
-                f"{row['family']}\t"
-                f"{row['node']}\t"
-                f"{' '.join(row['roles'])}\t"
-                f"{' '.join(row['example_ids'])}\n"
+            writer.writerow(
+                {
+                    "graph": row["graph"],
+                    "dataset": row["dataset"],
+                    "family": row["family"],
+                    "node": row["node"],
+                    "roles": " ".join(row["roles"]),
+                    "example_ids": " ".join(row["example_ids"]),
+                }
             )
 
 
@@ -951,17 +992,17 @@ def write_graph_membership_reports(output_dir, graph_name, dataset_graph_results
         all_missing_nodes.extend(result["missing_nodes"])
 
     write_eval_example_rows(
-        output_dir / f"{graph_name}_eval_usable_examples.tsv",
+        output_dir / f"{graph_name}_eval_usable_examples.csv",
         all_kept_examples,
         include_skip_reason=False,
     )
     write_eval_example_rows(
-        output_dir / f"{graph_name}_eval_skipped_examples.tsv",
+        output_dir / f"{graph_name}_eval_skipped_examples.csv",
         all_skipped_examples,
         include_skip_reason=True,
     )
     write_eval_missing_node_rows(
-        output_dir / f"{graph_name}_eval_missing_cause_effect_nodes.tsv",
+        output_dir / f"{graph_name}_eval_missing_cause_effect_nodes.csv",
         all_missing_nodes,
     )
 
@@ -969,9 +1010,16 @@ def write_graph_membership_reports(output_dir, graph_name, dataset_graph_results
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Check CauseNet and filtered CausalBank node coverage in "
-            "glove.6B.300d embeddings."
+            "Check configured graph and dataset node coverage in glove.6B.300d "
+            "embeddings."
         )
+    )
+    parser.add_argument(
+        "--graphs",
+        nargs="+",
+        choices=graph_choices(),
+        default=list(DEFAULT_GRAPHS),
+        help="Graphs to check.",
     )
     parser.add_argument(
         "--glove-path",
@@ -982,14 +1030,20 @@ def parse_args():
     parser.add_argument(
         "--causenet-graph",
         type=Path,
-        default=CAUSENET_GRAPH_PATH,
-        help="Path to CauseNet JSONL graph.",
+        default=get_graph_path("causenet"),
+        help="Path override for CauseNet precision JSONL graph.",
+    )
+    parser.add_argument(
+        "--causenet-full-graph",
+        type=Path,
+        default=get_graph_path("causenet_full"),
+        help="Path override for CauseNet full JSONL graph.",
     )
     parser.add_argument(
         "--causalbank-graph",
         type=Path,
-        default=CAUSALBANK_GRAPH_PATH,
-        help="Path to filtered CausalBank graph.",
+        default=get_graph_path("causalbank"),
+        help="Path override for filtered CausalBank graph.",
     )
     parser.add_argument(
         "--output-dir",
@@ -1041,8 +1095,21 @@ def parse_args():
 
 def main():
     args = parse_args()
+    graph_path_overrides = {
+        "causenet": args.causenet_graph,
+        "causenet_full": args.causenet_full_graph,
+        "causalbank": args.causalbank_graph,
+    }
+    graph_paths = {
+        graph_name: resolve_repo_path(graph_path_overrides[graph_name])
+        for graph_name in args.graphs
+    }
 
-    for path in (args.glove_path, args.causenet_graph, args.causalbank_graph):
+    args.glove_path = resolve_repo_path(args.glove_path)
+    args.dataset_dir = resolve_repo_path(args.dataset_dir)
+    args.output_dir = resolve_repo_path(args.output_dir)
+
+    for path in (args.glove_path, *graph_paths.values()):
         if not path.exists():
             raise FileNotFoundError(path)
 
@@ -1055,20 +1122,16 @@ def main():
     glove_vocab = load_glove_vocab(args.glove_path)
     print(f"Loaded {len(glove_vocab):,} GloVe tokens.")
 
-    graph_paths = {
-        "causenet": args.causenet_graph,
-        "causalbank": args.causalbank_graph,
-    }
-    graph_labels = {
-        "causenet": "CauseNet",
-        "causalbank": "CausalBank filtered",
-    }
-
     full_summary = {
         "inputs": {
             "glove_path": str(args.glove_path),
-            "causenet_graph": str(args.causenet_graph),
-            "causalbank_graph": str(args.causalbank_graph),
+            "graphs": {
+                graph_name: {
+                    "label": get_graph_label(graph_name),
+                    "path": str(graph_path),
+                }
+                for graph_name, graph_path in graph_paths.items()
+            },
             "dataset_dir": str(args.dataset_dir),
             "lowercase_glove_lookup": args.lowercase,
             "eval_datasets": args.eval_datasets,
@@ -1084,7 +1147,7 @@ def main():
     graph_nodes_by_name = {}
 
     for graph_name, graph_path in graph_paths.items():
-        graph_label = graph_labels[graph_name]
+        graph_label = get_graph_label(graph_name)
         print(f"\nLoading {graph_label} nodes from: {graph_path}")
         nodes = load_nodes(graph_name, graph_path)
         graph_nodes_by_name[graph_name] = nodes
@@ -1131,11 +1194,11 @@ def main():
         if not args.no_write:
             args.output_dir.mkdir(parents=True, exist_ok=True)
             write_missing_dataset_examples(
-                args.output_dir / "glove_dataset_missing_endpoint_examples.tsv",
+                args.output_dir / "glove_dataset_missing_endpoint_examples.csv",
                 all_missing_examples,
             )
             write_missing_dataset_nodes(
-                args.output_dir / "glove_dataset_missing_entity_nodes.tsv",
+                args.output_dir / "glove_dataset_missing_entity_nodes.csv",
                 all_missing_nodes,
             )
 
@@ -1156,7 +1219,7 @@ def main():
         )
 
         for graph_name, graph_nodes in graph_nodes_by_name.items():
-            graph_label = graph_labels[graph_name]
+            graph_label = get_graph_label(graph_name)
             dataset_graph_results = {}
             full_summary["evaluation_graph_membership"][graph_name] = {
                 "datasets": {},

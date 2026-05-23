@@ -247,7 +247,7 @@ def print_summary(graph_name, dataset_name, summary):
     )
 
 
-def write_summary_tsv(path, summaries):
+def write_summary_csv(path, summaries):
     fieldnames = [
         "graph",
         "dataset",
@@ -282,14 +282,14 @@ def write_summary_tsv(path, summaries):
     ]
 
     with open(path, "w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter="\t")
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
 
         for row in summaries:
             writer.writerow(row)
 
 
-def write_per_example_tsv(path, rows):
+def write_per_example_csv(path, rows):
     fieldnames = [
         "graph",
         "dataset",
@@ -309,7 +309,7 @@ def write_per_example_tsv(path, rows):
     ]
 
     with open(path, "w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames, delimiter="\t")
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -454,18 +454,18 @@ def main():
             print_summary(graph_name, dataset_name, summary)
 
     summary_json_path = args.output_dir / "bfs_path_lengths_summary.json"
-    summary_tsv_path = args.output_dir / "bfs_path_lengths_summary.tsv"
-    per_example_tsv_path = args.output_dir / "bfs_path_lengths_per_example.tsv"
+    summary_csv_path = args.output_dir / "bfs_path_lengths_summary.csv"
+    per_example_csv_path = args.output_dir / "bfs_path_lengths_per_example.csv"
 
     with open(summary_json_path, "w", encoding="utf-8", newline="\n") as file:
         json.dump(report, file, indent=2)
 
-    write_summary_tsv(summary_tsv_path, summary_rows)
-    write_per_example_tsv(per_example_tsv_path, per_example_rows)
+    write_summary_csv(summary_csv_path, summary_rows)
+    write_per_example_csv(per_example_csv_path, per_example_rows)
 
     print(f"\nWrote summary JSON: {summary_json_path}")
-    print(f"Wrote summary TSV:  {summary_tsv_path}")
-    print(f"Wrote examples TSV: {per_example_tsv_path}")
+    print(f"Wrote summary CSV:  {summary_csv_path}")
+    print(f"Wrote examples CSV: {per_example_csv_path}")
 
 
 if __name__ == "__main__":
