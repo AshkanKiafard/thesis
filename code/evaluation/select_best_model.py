@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 
-DEFAULT_MIN_F1 = 0.80
+DEFAULT_MIN_F1 = 0.90
 DEFAULT_VARIANT_FILTER = "finetuned"
 
 
@@ -352,7 +352,7 @@ def parse_args():
     parser.add_argument(
         "evaluation_results_path",
         nargs="?",
-        default="data/evaluation/msmarco_valid/best_v2/evaluation_results.json",
+        default="data/evaluation/causenet/msmarco_valid/best_v2/evaluation_results.json",
         help="Path to validation evaluation_results.json.",
     )
     parser.add_argument(

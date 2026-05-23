@@ -5,6 +5,8 @@ from pathlib import Path
 
 import numpy as np
 
+from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_NAME = "msmarco_test"
@@ -31,7 +33,7 @@ def load_json(path):
         return json.load(file)
 
 
-def resolve_evaluation_results_path(dataset_name_or_path, run_suffix):
+def resolve_evaluation_results_path(dataset_name_or_path, run_suffix, graph_name):
     requested_path = Path(dataset_name_or_path)
 
     if requested_path.suffix == ".json":
@@ -49,6 +51,7 @@ def resolve_evaluation_results_path(dataset_name_or_path, run_suffix):
             REPO_ROOT
             / "data"
             / "evaluation"
+            / graph_name
             / dataset_name_or_path
             / run_suffix
             / "evaluation_results.json"
@@ -503,6 +506,12 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--graph",
+        choices=graph_choices(),
+        default=DEFAULT_GRAPH_NAME,
+        help="Graph results to test. Defaults to CauseNet.",
+    )
+    parser.add_argument(
         "--reference-model-contains",
         action="append",
         default=None,
@@ -599,6 +608,7 @@ if __name__ == "__main__":
     evaluation_results_path = resolve_evaluation_results_path(
         args.dataset_name,
         args.run_suffix,
+        args.graph,
     )
     evaluation_data = load_json(evaluation_results_path)
     runs = flatten_runs(evaluation_data)

@@ -11,10 +11,6 @@ import networkx as nx
 from core.constants import ActivationFunc, DistanceMetric, LIGHTNING_DIR
 from core.embeddings import STEmbedder
 
-DEFAULT_LEXICAL_CEG_MIN_COUNT = 1000
-DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE = 0.10
-DEFAULT_LEXICAL_CEG_SCORE_MODE = "any"
-
 
 @dataclass
 class RLGraph:
@@ -57,9 +53,7 @@ def _detect_graph_format(file_path, graph_format="auto"):
 
     if graph_format != "auto":
         if graph_format not in {"causenet", "lexical_ceg"}:
-            raise ValueError(
-                "graph_format must be one of: auto, causenet, lexical_ceg"
-            )
+            raise ValueError("graph_format must be one of: auto, causenet, lexical_ceg")
         return graph_format
 
     file_name = Path(file_path).name.lower()
@@ -176,42 +170,9 @@ def _iter_causenet_edges(file_path, remove_self_loops=True):
             )
 
 
-def _passes_lexical_ceg_filter(
-    count,
-    necessity_score,
-    sufficiency_score,
-    min_count,
-    min_causality_score,
-    score_mode,
-):
-    if count < min_count:
-        return False
-
-    score_mode = score_mode.lower()
-
-    if score_mode == "any":
-        return max(necessity_score, sufficiency_score) >= min_causality_score
-
-    if score_mode == "both":
-        return (
-            necessity_score >= min_causality_score
-            and sufficiency_score >= min_causality_score
-        )
-
-    if score_mode in {"mean", "average"}:
-        return (
-            (necessity_score + sufficiency_score) / 2
-        ) >= min_causality_score
-
-    raise ValueError("score_mode must be one of: any, both, mean")
-
-
 def _iter_lexical_ceg_edges(
     file_path,
     remove_self_loops=True,
-    min_count=DEFAULT_LEXICAL_CEG_MIN_COUNT,
-    min_causality_score=DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE,
-    score_mode=DEFAULT_LEXICAL_CEG_SCORE_MODE,
 ):
     # CEG format:
     # cause->effect<TAB>count<TAB>necessity_score<TAB>sufficiency_score
@@ -227,16 +188,6 @@ def _iter_lexical_ceg_edges(
                 necessity_score = float(parts[2])
                 sufficiency_score = float(parts[3])
             except ValueError:
-                continue
-
-            if not _passes_lexical_ceg_filter(
-                count=count,
-                necessity_score=necessity_score,
-                sufficiency_score=sufficiency_score,
-                min_count=min_count,
-                min_causality_score=min_causality_score,
-                score_mode=score_mode,
-            ):
                 continue
 
             cause, effect = parts[0].split("->", 1)
@@ -268,9 +219,6 @@ def _iter_graph_edges(
     file_path,
     remove_self_loops=True,
     graph_format="auto",
-    min_ceg_count=DEFAULT_LEXICAL_CEG_MIN_COUNT,
-    min_ceg_causality_score=DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE,
-    ceg_score_mode=DEFAULT_LEXICAL_CEG_SCORE_MODE,
 ):
     graph_format = _detect_graph_format(file_path, graph_format)
 
@@ -283,9 +231,6 @@ def _iter_graph_edges(
     return _iter_lexical_ceg_edges(
         file_path=file_path,
         remove_self_loops=remove_self_loops,
-        min_count=min_ceg_count,
-        min_causality_score=min_ceg_causality_score,
-        score_mode=ceg_score_mode,
     )
 
 
@@ -294,9 +239,6 @@ def load_causal_graph(
     remove_self_loops=True,
     use_inverse=False,
     graph_format="auto",
-    min_ceg_count=DEFAULT_LEXICAL_CEG_MIN_COUNT,
-    min_ceg_causality_score=DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE,
-    ceg_score_mode=DEFAULT_LEXICAL_CEG_SCORE_MODE,
 ):
     # Loads CauseNet JSONL or lexical CEG TXT for BFS, A*, and Dijkstra.
     #
@@ -311,9 +253,6 @@ def load_causal_graph(
         file_path=file_path,
         remove_self_loops=remove_self_loops,
         graph_format=graph_format,
-        min_ceg_count=min_ceg_count,
-        min_ceg_causality_score=min_ceg_causality_score,
-        ceg_score_mode=ceg_score_mode,
     ):
         graph.add_edge(cause, effect, **edge_attrs)
 
@@ -328,14 +267,33 @@ def load_causal_graph(
     return graph
 
 
+def load_graph_nodes(
+    file_path,
+    remove_self_loops=True,
+    graph_format="auto",
+):
+    nodes = set()
+
+    for cause, effect, _ in _iter_graph_edges(
+        file_path=file_path,
+        remove_self_loops=remove_self_loops,
+        graph_format=graph_format,
+    ):
+        nodes.add(cause)
+        nodes.add(effect)
+
+    return nodes
+
+
+def load_graph(*args, **kwargs):
+    return load_causal_graph(*args, **kwargs)
+
+
 def load_rl_graph(
     file_path,
     remove_self_loops=True,
     use_inverse=False,
     graph_format="auto",
-    min_ceg_count=DEFAULT_LEXICAL_CEG_MIN_COUNT,
-    min_ceg_causality_score=DEFAULT_LEXICAL_CEG_MIN_CAUSALITY_SCORE,
-    ceg_score_mode=DEFAULT_LEXICAL_CEG_SCORE_MODE,
 ):
     # Loads CauseNet JSONL or lexical CEG TXT in the RL baseline format.
     #
@@ -357,9 +315,6 @@ def load_rl_graph(
         file_path=file_path,
         remove_self_loops=remove_self_loops,
         graph_format=graph_format,
-        min_ceg_count=min_ceg_count,
-        min_ceg_causality_score=min_ceg_causality_score,
-        ceg_score_mode=ceg_score_mode,
     ):
         sentence = edge_attrs["sentence"]
 
@@ -392,17 +347,13 @@ def load_rl_graph(
     )
 
 
-def load_graph(*args, **kwargs):
-    return load_causal_graph(*args, **kwargs)
-
-
 def traverse_graph(
-        graph: nx.DiGraph,
-        start_node: str,
-        end_node: str,
-        embeder: STEmbedder,
-        strategy_fn: Callable,
-        config: dict = None
+    graph: nx.DiGraph,
+    start_node: str,
+    end_node: str,
+    embeder: STEmbedder,
+    strategy_fn: Callable,
+    config: dict = None,
 ):
     # Generic wrapper for running a traversal/search strategy.
     #
@@ -434,15 +385,15 @@ def get_concept(question: dict, concept_type: int) -> str:
     # The dataset stores token spans, so we reconstruct the phrase here.
 
     # Get start/end indices of the concept span
-    start = question['query'][concept_type][0]
-    end = question['query'][concept_type][1] + 1
+    start = question["query"][concept_type][0]
+    end = question["query"][concept_type][1] + 1
 
     # Extract tokens from POS-tagged question representation
     # Each entry looks like: (word, POS_tag)
-    concept = [t[0] for t in question['question:POS'][start:end]]
+    concept = [t[0] for t in question["question:POS"][start:end]]
 
     # Join tokens into a readable string
-    concept = ' '.join(concept)
+    concept = " ".join(concept)
 
     return concept
 
@@ -540,8 +491,8 @@ def get_fine_tuned_models(run_suffix: str):
         os.path.join(LIGHTNING_DIR, name).replace("\\", "/")
         for name in os.listdir(LIGHTNING_DIR)
         if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
-           and name != "old"
-           and name.endswith(expected_suffix)
+        and name != "old"
+        and name.endswith(expected_suffix)
     ]
 
 
@@ -563,19 +514,12 @@ def sort_model_queue(model_queue, run_suffix):
         model_name = model_path.split("/")[-1]
 
         normalized_name = (
-            model_name
-            .replace(
+            model_name.replace(
                 f"_relu_cosine_nonorm_matryoshka_{run_suffix}_finetuned", ""
             )
-            .replace(
-                f"_relu_euclid_nonorm_matryoshka_{run_suffix}_finetuned", ""
-            )
-            .replace(
-                f"_gelu_cosine_nonorm_matryoshka_{run_suffix}_finetuned", ""
-            )
-            .replace(
-                f"_gelu_euclid_nonorm_matryoshka_{run_suffix}_finetuned", ""
-            )
+            .replace(f"_relu_euclid_nonorm_matryoshka_{run_suffix}_finetuned", "")
+            .replace(f"_gelu_cosine_nonorm_matryoshka_{run_suffix}_finetuned", "")
+            .replace(f"_gelu_euclid_nonorm_matryoshka_{run_suffix}_finetuned", "")
         )
 
         is_finetuned = "finetuned" in model_name

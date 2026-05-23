@@ -8,11 +8,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
+
 # -------------------------------------------------------------------------
 # Paths / global config
 # -------------------------------------------------------------------------
 
-PLOT_OUTPUT_DIR = "data/plots"
+PLOT_OUTPUT_DIR = Path("data/plots")
+EVALUATION_INPUT_ROOT = Path("data/evaluation")
 
 # Save vector plots for thesis.
 # "pdf" is best for LaTeX. Add "png" too if you want preview images.
@@ -115,6 +118,12 @@ def parse_args():
         default="best_v2",
         help="Run suffix used in evaluation and plot paths, e.g. best_v2.",
     )
+    parser.add_argument(
+        "--graph",
+        choices=graph_choices(),
+        default=DEFAULT_GRAPH_NAME,
+        help="Graph results to visualize. Defaults to CauseNet.",
+    )
     return parser.parse_args()
 
 
@@ -140,16 +149,16 @@ def detect_split(dataset_name: str):
     return "unknown"
 
 
-def build_input_paths(dataset_name: str, run_suffix: str):
-    eval_dir = Path("data/evaluation") / dataset_name / run_suffix
+def build_input_paths(dataset_name: str, run_suffix: str, graph_name: str):
+    eval_dir = EVALUATION_INPUT_ROOT / graph_name / dataset_name / run_suffix
     eval_results_path = eval_dir / "evaluation_results.json"
     visited_nodes_path = eval_dir / "visited_nodes_analysis.json"
 
     return eval_results_path, visited_nodes_path
 
 
-def build_plot_output_dir(dataset_name: str, run_suffix: str):
-    return Path(PLOT_OUTPUT_DIR) / dataset_name / run_suffix
+def build_plot_output_dir(dataset_name: str, run_suffix: str, graph_name: str):
+    return PLOT_OUTPUT_DIR / graph_name / dataset_name / run_suffix
 
 
 def ensure_directory(path):
@@ -2368,16 +2377,19 @@ if __name__ == "__main__":
     eval_results_path, visited_nodes_path = build_input_paths(
         dataset_name,
         args.run_suffix,
+        args.graph,
     )
     plot_root = build_plot_output_dir(
         dataset_name,
         args.run_suffix,
+        args.graph,
     )
 
     ensure_directory(plot_root)
 
     print(f"Dataset: {dataset_name}")
     print(f"Split: {current_split}")
+    print(f"Graph: {args.graph}")
     print(f"Evaluation results: {eval_results_path}")
     print(f"Visited nodes analysis: {visited_nodes_path}")
     print(f"Plot output dir: {plot_root}")

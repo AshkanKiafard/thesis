@@ -1,0 +1,209 @@
+import argparse
+import gc
+import sys
+from pathlib import Path
+
+# code/core/pre_embed.py -> code root is one level above this file.
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = CODE_ROOT / "data"
+
+# Make code/ importable when this script is executed directly.
+if str(CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CODE_ROOT))
+
+from core.graph_config import get_graph_label, get_graph_path
+
+
+BASE_MODELS = [
+    "sentence-transformers/all-mpnet-base-v2",
+    # "BAAI/bge-base-en-v1.5",
+    # "ibm-granite/granite-embedding-small-english-r2",
+    "BAAI/bge-large-en-v1.5",
+    "ibm-granite/granite-embedding-english-r2",
+    "mixedbread-ai/mxbai-embed-large-v1",
+    "Qwen/Qwen3-Embedding-0.6B",
+    # "Qwen/Qwen3-Embedding-4B",
+]
+
+# Manual Qwen fine-tuned example:
+# python -m core.pre_embed data/models/lightning/Qwen3-Embedding-0.6B_relu_euclid_nonorm_matryoshka_best_v2_finetuned
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Precompute graph-node embeddings for base and fine-tuned models."
+    )
+    parser.add_argument(
+        "model",
+        nargs="?",
+        default=None,
+        help=(
+            "Optional single Hugging Face model name or fine-tuned model path. "
+            "When set, the normal base+fine-tuned queue is ignored."
+        ),
+    )
+    parser.add_argument(
+        "--run-suffix",
+        type=str,
+        default="best_v2",
+        help="Only include fine-tuned models with this suffix, e.g. best_v2.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=64,
+        help="Embedding batch size.",
+    )
+    parser.add_argument(
+        "--model",
+        "--model-path",
+        dest="model_path",
+        default=None,
+        help=(
+            "Optional single Hugging Face model name or fine-tuned model path. "
+            "Alias for the positional model argument."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    if args.model is not None and args.model_path is not None:
+        parser.error("Pass either positional model or --model/--model-path, not both.")
+
+    args.single_model = args.model_path or args.model
+
+    return args
+
+
+def load_embedding_cache(save_path):
+    import numpy as np
+
+    try:
+        embeddings = np.load(save_path, allow_pickle=True).item()
+        print(f"Loaded {len(embeddings)} existing embeddings from {save_path}")
+        return embeddings
+    except FileNotFoundError:
+        print("No existing cache found. Starting fresh.")
+        return {}
+
+
+def pre_embed_model(model_path, graph_nodes, embeddings_dir, batch_size):
+    import numpy as np
+    import torch
+
+    from core.embeddings import STEmbedder
+    from core.utils import get_model_distance_metric
+
+    print(f"\n{'=' * 50}")
+    print(f"PROCESSING MODEL: {model_path}")
+    print(f"{'=' * 50}")
+
+    raw_name = Path(model_path).name
+    save_path = embeddings_dir / f"{raw_name}_embeddings.npy"
+
+    embeddings = load_embedding_cache(save_path)
+
+    uncached_nodes = [node for node in graph_nodes if node not in embeddings]
+    print(f"Found {len(uncached_nodes)} nodes that need embedding.")
+
+    if not uncached_nodes:
+        print("All nodes already cached. Skipping computation.")
+        return
+
+    print("Loading model...")
+
+    distance_metric = get_model_distance_metric(model_path)
+    print(f"Distance metric: {distance_metric}")
+
+    embeder = STEmbedder(
+        model_path=model_path,
+        distance_metric=distance_metric,
+    )
+
+    total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
+
+    for start in range(0, len(uncached_nodes), batch_size):
+        batch = uncached_nodes[start : start + batch_size]
+
+        # Preload on GPU for efficient model inference, then persist the CPU
+        # NumPy representation used by the embedding cache.
+        embeder.preload(batch, batch_size=batch_size, save=False)
+        batch_embeddings = [embeder.embed_numpy(node) for node in batch]
+
+        for node, emb in zip(batch, batch_embeddings):
+            embeddings[node] = emb
+
+        batch_index = start // batch_size
+        if batch_index % 10 == 0:
+            print(
+                f"Processed batch {batch_index + 1}/{total_batches} "
+                f"(Total: {start + len(batch)}/{len(uncached_nodes)})"
+            )
+
+    print(f"Saving embeddings to {save_path}...")
+    np.save(save_path, embeddings)
+    print("Save complete.")
+
+    print("Cleaning up memory ...")
+    del embeder
+    del embeddings
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+def main():
+    args = parse_args()
+
+    from core.utils import get_fine_tuned_models, load_graph_nodes
+
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be greater than 0")
+
+    embeddings_dir = DATA_DIR / "embeddings"
+    embeddings_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Run suffix: {args.run_suffix}")
+
+    graph_nodes = set()
+    for graph_name in ("causenet", "causalbank"):
+        graph_path = get_graph_path(graph_name)
+        if not graph_path.is_absolute():
+            graph_path = CODE_ROOT / graph_path
+
+        print(f"Loading {get_graph_label(graph_name)} nodes from: {graph_path}")
+        current_nodes = load_graph_nodes(graph_path, remove_self_loops=True)
+        graph_nodes.update(current_nodes)
+        print(f"Loaded {len(current_nodes)} {graph_name} nodes.")
+
+    graph_nodes = sorted(graph_nodes)
+    print(f"Combined graph nodes: {len(graph_nodes)}")
+
+    if args.single_model is not None:
+        model_queue = [args.single_model]
+        print("Single model provided. Ignoring base+fine-tuned model queue.")
+    else:
+        fine_tuned_models = get_fine_tuned_models(args.run_suffix)
+        print(
+            f"Found {len(fine_tuned_models)} fine-tuned models for suffix "
+            f"'{args.run_suffix}'."
+        )
+
+        model_queue = BASE_MODELS + fine_tuned_models
+
+    print("Model queue:")
+    for model_path in model_queue:
+        print(f"  {model_path}")
+
+    for model_path in model_queue:
+        pre_embed_model(
+            model_path=model_path,
+            graph_nodes=graph_nodes,
+            embeddings_dir=embeddings_dir,
+            batch_size=args.batch_size,
+        )
+
+    print("\nAll models processed.")
+
+
+if __name__ == "__main__":
+    main()

@@ -18,6 +18,12 @@ from sklearn.metrics import (
 
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
+from core.graph_config import (
+    DEFAULT_GRAPH_NAME,
+    get_graph_label,
+    get_graph_path,
+    graph_choices,
+)
 from core.utils import (
     get_fine_tuned_models,
     get_model_distance_metric,
@@ -29,12 +35,7 @@ from core.utils import (
 )
 from evaluation.select_best_model import select_best_astar_model, print_selection
 
-GRAPH_PATH = "data/graphs/Lexical_Cause_Effect_Graph.txt"
-EVALUATION_OUTPUT_ROOT = Path("data/evaluation/tmp")
-P95_LOOKUP_ROOTS = [
-    EVALUATION_OUTPUT_ROOT,
-    Path("data/evaluation"),
-]
+EVALUATION_OUTPUT_ROOT = Path("data/evaluation")
 
 base_models = [
     "sentence-transformers/all-mpnet-base-v2",
@@ -85,20 +86,20 @@ def get_config_source_dataset_name(dataset_name: str):
     )
 
 
-def build_output_paths(dataset_path: str, run_suffix: str):
+def build_output_paths(dataset_path: str, run_suffix: str, graph_name: str):
     """
     Build evaluation output paths from dataset name and run suffix.
 
     Example:
     data/datasets/msmarco_valid_filtered.json + best_v2
     ->
-    data/evaluation/tmp/msmarco_valid/best_v2/evaluation_results.json
-    data/evaluation/tmp/msmarco_valid/best_v2/evaluation_results.csv
+    data/evaluation/causenet/msmarco_valid/best_v2/evaluation_results.json
+    data/evaluation/causenet/msmarco_valid/best_v2/evaluation_results.csv
     """
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
 
-    output_dir = EVALUATION_OUTPUT_ROOT / dataset_name / run_suffix
+    output_dir = EVALUATION_OUTPUT_ROOT / graph_name / dataset_name / run_suffix
     output_json_file = output_dir / "evaluation_results.json"
     output_csv_file = output_dir / "evaluation_results.csv"
 
@@ -109,29 +110,30 @@ def get_model_name(model_path: str):
     return Path(model_path).name
 
 
-def get_p95_analysis_files(dataset_name: str, run_suffix: str):
-    return [
-        root / dataset_name / run_suffix / "visited_nodes_analysis.json"
-        for root in P95_LOOKUP_ROOTS
-    ]
+def get_p95_analysis_file(dataset_name: str, run_suffix: str, graph_name: str):
+    return (
+        EVALUATION_OUTPUT_ROOT
+        / graph_name
+        / dataset_name
+        / run_suffix
+        / "visited_nodes_analysis.json"
+    )
 
 
-def get_evaluation_results_file(dataset_name: str, run_suffix: str):
-    candidates = [
-        root / dataset_name / run_suffix / "evaluation_results.json"
-        for root in P95_LOOKUP_ROOTS
-    ]
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    return candidates[0]
+def get_evaluation_results_file(dataset_name: str, run_suffix: str, graph_name: str):
+    return (
+        EVALUATION_OUTPUT_ROOT
+        / graph_name
+        / dataset_name
+        / run_suffix
+        / "evaluation_results.json"
+    )
 
 
 def load_p95_configs(
     eval_dataset_name: str,
     run_suffix: str,
+    graph_name: str,
     config_source_dataset_name: str = None,
     fallback_config_source_dataset_name: str = None,
 ):
@@ -140,8 +142,8 @@ def load_p95_configs(
 
     We use p95_visited_successful_only.
 
-    valid evaluation -> data/evaluation/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
-    test evaluation  -> data/evaluation/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
+    valid evaluation -> data/evaluation/<graph>/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
+    test evaluation  -> data/evaluation/<graph>/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
 
     --config-source-dataset forces a specific source.
     --fallback-config-source-dataset is used only if the default source is missing.
@@ -168,28 +170,28 @@ def load_p95_configs(
     analysis_file = None
 
     for candidate_source_dataset_name, source_kind in candidate_sources:
-        candidate_files = get_p95_analysis_files(
+        candidate_file = get_p95_analysis_file(
             candidate_source_dataset_name,
             run_suffix,
+            graph_name,
         )
 
-        for candidate_file in candidate_files:
-            if candidate_file.exists():
-                selected_source_dataset_name = candidate_source_dataset_name
-                analysis_file = candidate_file
+        if candidate_file.exists():
+            selected_source_dataset_name = candidate_source_dataset_name
+            analysis_file = candidate_file
 
-                if source_kind == "fallback":
-                    print(
-                        "Default p95 config source missing. "
-                        f"Falling back to: {selected_source_dataset_name}"
-                    )
+            if source_kind == "fallback":
+                print(
+                    "Default p95 config source missing. "
+                    f"Falling back to: {selected_source_dataset_name}"
+                )
 
-                break
+            break
 
         if analysis_file is not None:
             break
 
-        missing_files.extend(candidate_files)
+        missing_files.append(candidate_file)
 
     if analysis_file is None:
         missing_text = "\n".join(f"- {path}" for path in missing_files)
@@ -592,6 +594,12 @@ def parse_args():
         help="Final-training run suffix, e.g. best_v2.",
     )
     parser.add_argument(
+        "--graph",
+        choices=graph_choices(),
+        default=DEFAULT_GRAPH_NAME,
+        help="Graph to evaluate with. Defaults to CauseNet.",
+    )
+    parser.add_argument(
         "--config-source-dataset",
         type=str,
         default=None,
@@ -657,12 +665,18 @@ if __name__ == "__main__":
 
     dataset_path = args.dataset_path
     run_suffix = args.run_suffix
+    graph_name = args.graph
+    graph_label = get_graph_label(graph_name)
+    graph_path = get_graph_path(graph_name)
 
     print(f"Run suffix: {run_suffix}")
+    print(f"Graph: {graph_label} ({graph_name})")
+    print(f"Graph path: {graph_path}")
 
     dataset_name, output_dir, output_json_file, output_csv_file = build_output_paths(
         dataset_path,
         run_suffix,
+        graph_name,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -699,6 +713,7 @@ if __name__ == "__main__":
             valid_results_file = get_evaluation_results_file(
                 valid_dataset_name,
                 run_suffix,
+                graph_name,
             )
 
             selection = select_best_astar_model(valid_results_file)
@@ -727,6 +742,7 @@ if __name__ == "__main__":
     p95_configs, config_source_dataset_name = load_p95_configs(
         dataset_name,
         run_suffix,
+        graph_name,
         config_source_dataset_name=args.config_source_dataset,
         fallback_config_source_dataset_name=args.fallback_config_source_dataset,
     )
@@ -738,8 +754,14 @@ if __name__ == "__main__":
         valid_data = json.load(file)
 
     print("Loading graphs...")
-    causal_graph = load_causal_graph(GRAPH_PATH, use_inverse=False)
-    rl_graph = load_rl_graph(GRAPH_PATH, use_inverse=False)
+    causal_graph = load_causal_graph(
+        graph_path,
+        use_inverse=False,
+    )
+    rl_graph = load_rl_graph(
+        graph_path,
+        use_inverse=False,
+    )
 
     existing_results = load_results_file(output_json_file)
 

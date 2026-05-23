@@ -10,6 +10,12 @@ import torch
 
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
+from core.graph_config import (
+    DEFAULT_GRAPH_NAME,
+    get_graph_label,
+    get_graph_path,
+    graph_choices,
+)
 from core.utils import (
     traverse_graph,
     get_fine_tuned_models,
@@ -23,8 +29,7 @@ from core.utils import (
 # Global paths
 # -------------------------------------------------------------------------
 
-GRAPH_PATH = "data/graphs/Lexical_Cause_Effect_Graph.txt"
-EVALUATION_OUTPUT_ROOT = Path("data/evaluation/tmp")
+EVALUATION_OUTPUT_ROOT = Path("data/evaluation")
 
 # Base models evaluated with embedding-guided graph strategies.
 base_models = [
@@ -39,14 +44,14 @@ base_models = [
 ]
 
 
-def build_output_paths(dataset_path: str, run_suffix: str):
+def build_output_paths(dataset_path: str, run_suffix: str, graph_name: str):
     """
     Build output path from dataset name and run suffix.
 
     Example:
     data/datasets/msmarco_valid_filtered.json + best_v2
     ->
-    data/evaluation/tmp/msmarco_valid/best_v2/visited_nodes_analysis.json
+    data/evaluation/causenet/msmarco_valid/best_v2/visited_nodes_analysis.json
     """
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
@@ -61,7 +66,7 @@ def build_output_paths(dataset_path: str, run_suffix: str):
     else:
         split = "unknown"
 
-    output_dir = EVALUATION_OUTPUT_ROOT / dataset_name / run_suffix
+    output_dir = EVALUATION_OUTPUT_ROOT / graph_name / dataset_name / run_suffix
     output_json_file = output_dir / "visited_nodes_analysis.json"
 
     return dataset_name, split, output_dir, str(output_json_file)
@@ -256,6 +261,12 @@ def parse_args():
         required=True,
         help="Final-training run suffix, e.g. best_v2.",
     )
+    parser.add_argument(
+        "--graph",
+        choices=graph_choices(),
+        default=DEFAULT_GRAPH_NAME,
+        help="Graph to analyze with. Defaults to CauseNet.",
+    )
     return parser.parse_args()
 
 
@@ -263,11 +274,16 @@ if __name__ == "__main__":
     args = parse_args()
     dataset_path = args.dataset_path
     run_suffix = args.run_suffix
+    graph_name = args.graph
+    graph_label = get_graph_label(graph_name)
+    graph_path = get_graph_path(graph_name)
 
     fine_tuned_models = get_fine_tuned_models(run_suffix)
     model_queue = base_models + fine_tuned_models
 
     print(f"Run suffix: {run_suffix}")
+    print(f"Graph: {graph_label} ({graph_name})")
+    print(f"Graph path: {graph_path}")
     print("Model queue:", model_queue)
 
     # RL still needs these parameters
@@ -282,6 +298,7 @@ if __name__ == "__main__":
     dataset_name, split, output_dir, output_json_file = build_output_paths(
         dataset_path,
         run_suffix,
+        graph_name,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -294,8 +311,14 @@ if __name__ == "__main__":
         data = json.load(file)
 
     print("Loading graphs...")
-    causal_graph = load_causal_graph(GRAPH_PATH, use_inverse=False)
-    rl_graph = load_rl_graph(GRAPH_PATH, use_inverse=False)
+    causal_graph = load_causal_graph(
+        graph_path,
+        use_inverse=False,
+    )
+    rl_graph = load_rl_graph(
+        graph_path,
+        use_inverse=False,
+    )
 
     existing_results = load_results_file(output_json_file)
 

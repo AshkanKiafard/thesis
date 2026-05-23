@@ -5,7 +5,7 @@ import gradio as gr
 
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, DistanceMetric, GloveEmbeder
-from core.utils import load_graph, traverse_graph
+from core.utils import load_causal_graph, traverse_graph
 
 # ==========================================
 # 1. WEBIS TEMPLATE CONFIGURATION
@@ -79,7 +79,7 @@ webis_footer_html = """
 # ==========================================
 
 # Load causal graph once at startup (shared across all requests).
-causal_graph = load_graph("data/graphs/causenet-precision.jsonl")
+causal_graph = load_causal_graph("data/graphs/causenet-precision.jsonl")
 
 
 def infer(model, cause, effect):

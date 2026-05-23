@@ -1,10 +1,10 @@
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
+from core.graph_config import get_graph_path
 from core.utils import load_causal_graph, load_rl_graph, traverse_graph
-from evaluation.visited_nodes_analysis import GRAPH_PATH
 
 if __name__ == "__main__":
-    GRAPH_PATH = "data/graphs/Lexical_Cause_Effect_Graph.txt"
+    graph_path = get_graph_path("causenet")
 
     st_embeder = STEmbedder(
         "sentence-transformers/all-mpnet-base-v2", DistanceMetric.COSINE
@@ -15,8 +15,14 @@ if __name__ == "__main__":
     print("Embeders initialized.")
 
     print("Loading graphs...")
-    causal_graph = load_causal_graph(GRAPH_PATH, use_inverse=False)
-    rl_graph = load_rl_graph(GRAPH_PATH, use_inverse=False)
+    causal_graph = load_causal_graph(
+        graph_path,
+        use_inverse=False,
+    )
+    rl_graph = load_rl_graph(
+        graph_path,
+        use_inverse=False,
+    )
 
     cause = "wine"
     effect = "migraines"
