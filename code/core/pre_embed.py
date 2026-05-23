@@ -28,9 +28,6 @@ BASE_MODELS = [
     # "Qwen/Qwen3-Embedding-4B",
 ]
 
-# Manual Qwen fine-tuned example:
-# python -m core.pre_embed data/models/lightning/Qwen3-Embedding-0.6B_relu_euclid_nonorm_matryoshka_best_v2_finetuned
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
