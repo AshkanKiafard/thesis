@@ -6,6 +6,17 @@ import networkx as nx
 from core.embeddings import STEmbedder
 
 
+def _reconstruct_path(path_links, path_index):
+    path = []
+
+    while path_index is not None:
+        node, path_index = path_links[path_index]
+        path.append(node)
+
+    path.reverse()
+    return path
+
+
 def astar_traverse(
     graph: nx.DiGraph,
     start_node: str,
@@ -20,12 +31,13 @@ def astar_traverse(
     max_visits = config.get("astar_max_visits", -1)
 
     # Priority queue entries are:
-    # (f_score, g_score, current_node, path_so_far)
+    # (f_score, g_score, current_node, path_link_index)
     #
     # f = g + h
     # g = current path cost from start to current node
     # h = heuristic estimate from current node to end node
-    open_set = [(0, 0, start_node, [start_node])]
+    path_links = [(start_node, None)]
+    open_set = [(0, 0, start_node, 0)]
 
     # Local closed set.
     # Faster than writing "visited" metadata into the NetworkX graph.
@@ -36,11 +48,11 @@ def astar_traverse(
     end_node_embed = embeder.embed(end_node)
 
     while open_set:
-        f_score, g_score, current_node, path = heapq.heappop(open_set)
+        f_score, g_score, current_node, path_index = heapq.heappop(open_set)
 
         # Goal reached -> return the path and the number of expanded nodes.
         if current_node == end_node:
-            return path, visited_count
+            return _reconstruct_path(path_links, path_index), visited_count
 
         # Skip nodes that were already finalized.
         if current_node in visited:
@@ -74,9 +86,12 @@ def astar_traverse(
             # Heuristic is the embedding distance from successor to goal.
             tentative_f = tentative_g + heuristic
 
+            path_links.append((successor, path_index))
+            successor_path_index = len(path_links) - 1
+
             heapq.heappush(
                 open_set,
-                (tentative_f, tentative_g, successor, path + [successor])
+                (tentative_f, tentative_g, successor, successor_path_index)
             )
 
     # No path found.

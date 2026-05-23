@@ -1,5 +1,6 @@
-from typing import List, Tuple, Any, Dict, Optional
 from dataclasses import dataclass
+from itertools import islice
+from typing import Iterable, List, Tuple, Any, Dict, Optional
 
 import torch
 import torch.nn.functional as F
@@ -93,7 +94,7 @@ def _build_observation(question_text: str, current_node: str, embeder: Any) -> t
 def _build_action_tensor(
     graph: Any,
     current_node: str,
-    neighbors: List[str],
+    neighbors: Iterable[str],
     embeder: Any,
     max_actions: int,
 ) -> Tuple[torch.Tensor, List[str]]:
@@ -116,7 +117,7 @@ def _build_action_tensor(
 
     # Original max_actions behavior: neighbors are truncated after the stop action
     # exists in the adjacency list. Here we reserve one slot for stop.
-    for neighbor in neighbors[: max_actions - 1]:
+    for neighbor in islice(neighbors, max_actions - 1):
         relation_text = _edge_sentence(graph, current_node, neighbor)
 
         relation_emb = _to_device_tensor(embeder.embed_relation(relation_text))
@@ -214,7 +215,7 @@ def rl_traverse(
 
             obs = _build_observation(question_text, current_node, embeder)
 
-            neighbors = list(graph.successors(current_node))
+            neighbors = graph.successors(current_node)
 
             action_tensor, action_path_labels = _build_action_tensor(
                 graph=graph,

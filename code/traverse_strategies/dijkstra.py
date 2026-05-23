@@ -6,6 +6,18 @@ import networkx as nx
 from core.embeddings import STEmbedder
 
 
+def _reconstruct_path(parents, end_node):
+    path = []
+    current_node = end_node
+
+    while current_node is not None:
+        path.append(current_node)
+        current_node = parents[current_node]
+
+    path.reverse()
+    return path
+
+
 def dijkstra_traverse(
     graph: nx.DiGraph,
     start_node: str,
@@ -20,8 +32,8 @@ def dijkstra_traverse(
     max_visits = config.get("dijkstra_max_visits", -1)
 
     # Priority queue entries are:
-    # (current_distance, current_node, path_so_far)
-    open_set = [(0, start_node, [start_node])]
+    # (current_distance, current_node)
+    open_set = [(0, start_node)]
 
     # Local closed set.
     # Faster than writing "visited" metadata into the NetworkX graph.
@@ -30,13 +42,14 @@ def dijkstra_traverse(
 
     # Best known distance from the start node to each node.
     distances = {start_node: 0}
+    parents = {start_node: None}
 
     while open_set:
-        distance, current_node, path = heapq.heappop(open_set)
+        distance, current_node = heapq.heappop(open_set)
 
         # Target reached -> return path and number of expanded nodes.
         if current_node == end_node:
-            return path, visited_count
+            return _reconstruct_path(parents, end_node), visited_count
 
         # Skip nodes that were already finalized.
         if current_node in visited:
@@ -65,7 +78,8 @@ def dijkstra_traverse(
             # Relax edge if this route is better than the best known one.
             if successor not in distances or new_distance < distances[successor]:
                 distances[successor] = new_distance
-                heapq.heappush(open_set, (new_distance, successor, path + [successor]))
+                parents[successor] = current_node
+                heapq.heappush(open_set, (new_distance, successor))
 
     # No path found.
     return [], visited_count
