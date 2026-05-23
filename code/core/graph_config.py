@@ -7,6 +7,10 @@ GRAPH_CONFIGS = {
         "label": "CauseNet",
         "path": Path("data/graphs/causenet-precision.jsonl"),
     },
+    "causenet_full": {
+        "label": "CauseNet full",
+        "path": Path("data/graphs/causenet-full.jsonl"),
+    },
     "causalbank": {
         "label": "CausalBank",
         "path": Path("data/graphs/Lexical_Cause_Effect_Graph.filtered.txt"),

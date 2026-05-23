@@ -55,6 +55,12 @@ def parse_args():
         help="Embedding batch size.",
     )
     parser.add_argument(
+        "--embedding-device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help="Torch device for model encoding. Default: auto.",
+    )
+    parser.add_argument(
         "--model",
         "--model-path",
         dest="model_path",
@@ -137,7 +143,7 @@ def load_embedding_cache(save_path):
         return {}
 
 
-def pre_embed_model(model_path, graph_nodes, embeddings_dir, batch_size):
+def pre_embed_model(model_path, graph_nodes, embeddings_dir, batch_size, embedding_device):
     import numpy as np
     import torch
 
@@ -168,6 +174,7 @@ def pre_embed_model(model_path, graph_nodes, embeddings_dir, batch_size):
     embeder = STEmbedder(
         model_path=model_path,
         distance_metric=distance_metric,
+        device=embedding_device,
     )
 
     total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
@@ -211,6 +218,7 @@ def main():
     embeddings_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Run suffix: {args.run_suffix}")
+    print(f"Embedding device: {args.embedding_device}")
 
     graph_nodes = set()
     for graph_name in ("causenet", "causalbank"):
@@ -248,6 +256,7 @@ def main():
             graph_nodes=graph_nodes,
             embeddings_dir=embeddings_dir,
             batch_size=args.batch_size,
+            embedding_device=args.embedding_device,
         )
 
     print("\nAll models processed.")
