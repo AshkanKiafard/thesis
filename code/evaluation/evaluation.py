@@ -136,54 +136,79 @@ def load_p95_configs(
     graph_name: str,
     config_source_dataset_name: str = None,
     fallback_config_source_dataset_name: str = None,
+    fallback_config_source_graph_name: str = DEFAULT_GRAPH_NAME,
 ):
     """
     Load per-model traversal caps from visited_nodes_analysis.json.
 
     We use p95_visited_successful_only.
 
-    valid evaluation -> data/evaluation/<graph>/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
-    test evaluation  -> data/evaluation/<graph>/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
+    default source -> data/evaluation/<graph>/<train_dataset>/<run_suffix>/visited_nodes_analysis.json
+    fallback source -> data/evaluation/<fallback_graph>/<fallback_dataset>/<run_suffix>/visited_nodes_analysis.json
 
     --config-source-dataset forces a specific source.
-    --fallback-config-source-dataset is used only if the default source is missing.
+    --fallback-config-source-dataset and --fallback-config-source-graph are used
+    only if the default source is missing.
     """
     if config_source_dataset_name:
-        candidate_sources = [(config_source_dataset_name, "explicit")]
+        candidate_sources = [(config_source_dataset_name, graph_name, "explicit")]
     else:
         default_source_dataset_name = get_config_source_dataset_name(eval_dataset_name)
-        candidate_sources = [(default_source_dataset_name, "default")]
+        candidate_sources = [(default_source_dataset_name, graph_name, "default")]
+
+        seen_sources = {(default_source_dataset_name, graph_name)}
 
         if (
                 fallback_config_source_dataset_name
-                and fallback_config_source_dataset_name != default_source_dataset_name
+                and (
+                    fallback_config_source_dataset_name,
+                    fallback_config_source_graph_name,
+                )
+                not in seen_sources
         ):
-            candidate_sources.append((fallback_config_source_dataset_name, "fallback"))
+            candidate_sources.append(
+                (
+                    fallback_config_source_dataset_name,
+                    fallback_config_source_graph_name,
+                    "fallback",
+                )
+            )
+            seen_sources.add(
+                (
+                    fallback_config_source_dataset_name,
+                    fallback_config_source_graph_name,
+                )
+            )
 
-        if "msmarco_train" not in {
-            candidate_source for candidate_source, _ in candidate_sources
-        }:
-            candidate_sources.append(("msmarco_train", "fallback"))
+        if ("msmarco_train", fallback_config_source_graph_name) not in seen_sources:
+            candidate_sources.append(
+                ("msmarco_train", fallback_config_source_graph_name, "fallback")
+            )
 
     missing_files = []
     selected_source_dataset_name = None
+    selected_source_graph_name = None
     analysis_file = None
 
-    for candidate_source_dataset_name, source_kind in candidate_sources:
+    for candidate_source_dataset_name, candidate_source_graph_name, source_kind in (
+        candidate_sources
+    ):
         candidate_file = get_p95_analysis_file(
             candidate_source_dataset_name,
             run_suffix,
-            graph_name,
+            candidate_source_graph_name,
         )
 
         if candidate_file.exists():
             selected_source_dataset_name = candidate_source_dataset_name
+            selected_source_graph_name = candidate_source_graph_name
             analysis_file = candidate_file
 
             if source_kind == "fallback":
                 print(
                     "Default p95 config source missing. "
-                    f"Falling back to: {selected_source_dataset_name}"
+                    f"Falling back to: "
+                    f"{selected_source_graph_name}/{selected_source_dataset_name}"
                 )
 
             break
@@ -231,7 +256,7 @@ def load_p95_configs(
     for key, value in p95_map.items():
         print(f"{key}: {value}")
 
-    return p95_map, selected_source_dataset_name
+    return p95_map, selected_source_dataset_name, selected_source_graph_name
 
 
 def get_p95_cap(p95_configs, model, dimension, strategy):
@@ -618,6 +643,15 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--fallback-config-source-graph",
+        choices=graph_choices(),
+        default=DEFAULT_GRAPH_NAME,
+        help=(
+            "Graph namespace for fallback traversal caps. Defaults to CauseNet, "
+            "so CausalBank test runs can reuse CauseNet msmarco_train p95 caps."
+        ),
+    )
+    parser.add_argument(
         "--skip-embedding-preload",
         action="store_true",
         help=(
@@ -739,15 +773,23 @@ if __name__ == "__main__":
         model_queue = sort_model_queue(base_models + fine_tuned_models, run_suffix)
         print("Model queue:", model_queue)
 
-    p95_configs, config_source_dataset_name = load_p95_configs(
+    (
+        p95_configs,
+        config_source_dataset_name,
+        config_source_graph_name,
+    ) = load_p95_configs(
         dataset_name,
         run_suffix,
         graph_name,
         config_source_dataset_name=args.config_source_dataset,
         fallback_config_source_dataset_name=args.fallback_config_source_dataset,
+        fallback_config_source_graph_name=args.fallback_config_source_graph,
     )
 
-    print(f"Using traversal caps from: {config_source_dataset_name}/{run_suffix}")
+    print(
+        "Using traversal caps from: "
+        f"{config_source_graph_name}/{config_source_dataset_name}/{run_suffix}"
+    )
 
     print("Loading dataset...")
     with open(dataset_path, encoding="utf-8") as file:
