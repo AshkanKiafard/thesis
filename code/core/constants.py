@@ -12,3 +12,4 @@ class DistanceMetric(Enum):
 
 
 LIGHTNING_DIR = "data/models/lightning"
+GLOVE_300D_PATH = "data/embeddings/glove.6B/glove.6B.300d.txt"

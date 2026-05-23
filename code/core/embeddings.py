@@ -202,7 +202,11 @@ class STEmbedder:
 
 
 class GloveEmbeder:
-    def __init__(self, glove_file_path: str, distance_metric: DistanceMetric = DistanceMetric.COSINE):
+    def __init__(
+        self,
+        glove_file_path: str,
+        distance_metric: DistanceMetric = DistanceMetric.COSINE,
+    ):
         self.distance_metric = distance_metric
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.word_to_idx = {}
@@ -274,6 +278,57 @@ class GloveEmbeder:
 
         index_tensor = torch.tensor(indices, device=self.device, dtype=torch.long)
         return self.embedding_matrix.index_select(0, index_tensor).mean(dim=0)
+
+    def preload_entities(
+        self,
+        texts,
+        batch_size: int = 4096,
+    ) -> int:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than 0")
+
+        unique_texts = list(dict.fromkeys(texts))
+
+        missing_texts = [
+            text for text in unique_texts
+            if text not in self.entity_cache
+        ]
+
+        for start in range(0, len(missing_texts), batch_size):
+            batch = missing_texts[start:start + batch_size]
+
+            for text in batch:
+                self.entity_cache[text] = self._mean_embedding(text.split(" "))
+
+        return len(missing_texts)
+
+    def preload_questions(self, texts) -> int:
+        unique_texts = list(dict.fromkeys(texts))
+        missing_texts = [
+            text for text in unique_texts
+            if text not in self.question_cache
+        ]
+
+        for text in missing_texts:
+            self.question_cache[text] = self._mean_embedding(
+                self._remove_stop_words(text)
+            )
+
+        return len(missing_texts)
+
+    def preload_relations(self, texts) -> int:
+        unique_texts = list(dict.fromkeys(texts))
+        missing_texts = [
+            text for text in unique_texts
+            if text not in self.relation_cache
+        ]
+
+        for text in missing_texts:
+            self.relation_cache[text] = self._mean_embedding(
+                self._remove_stop_words(text)
+            )
+
+        return len(missing_texts)
 
     def embed_entity(self, text: str) -> torch.Tensor:
         # Original entity embedding:

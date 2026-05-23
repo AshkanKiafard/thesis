@@ -1019,6 +1019,166 @@ def assign_baselines_to_focus_bands(baselines, metric_key, baseline_names, focus
     return assignments
 
 
+def is_meaningful_axis_gap(lower_value, upper_value, gap, local_range, global_range):
+    if gap <= 0 or local_range <= 0 or global_range <= 0:
+        return False
+
+    # Bounded ratio metrics such as F1/accuracy should usually stay on one axis.
+    if 0 <= lower_value and upper_value <= 1:
+        return False
+
+    if gap / global_range < 0.04:
+        return False
+
+    if gap / local_range < 0.12:
+        return False
+
+    return True
+
+
+def find_best_axis_split(values, global_range):
+    if len(values) < 2:
+        return None
+
+    local_range = values[-1] - values[0]
+    best_split = None
+
+    for index in range(len(values) - 1):
+        lower_value = values[index]
+        upper_value = values[index + 1]
+        gap = upper_value - lower_value
+
+        if not is_meaningful_axis_gap(
+            lower_value=lower_value,
+            upper_value=upper_value,
+            gap=gap,
+            local_range=local_range,
+            global_range=global_range,
+        ):
+            continue
+
+        score = gap / global_range
+
+        if best_split is None or score > best_split["score"]:
+            best_split = {
+                "index": index,
+                "score": score,
+            }
+
+    return best_split
+
+
+def split_values_into_axis_clusters(values, max_bands):
+    values = sorted(
+        float(value)
+        for value in values
+        if value is not None and not pd.isna(value)
+    )
+
+    if not values:
+        return []
+
+    if max_bands <= 1 or len(values) < 2:
+        return [values]
+
+    global_range = values[-1] - values[0]
+
+    if global_range <= 0:
+        return [values]
+
+    clusters = [values]
+
+    while len(clusters) < max_bands:
+        best_cluster = None
+
+        for cluster_index, cluster_values in enumerate(clusters):
+            split = find_best_axis_split(cluster_values, global_range)
+
+            if split is None:
+                continue
+
+            if best_cluster is None or split["score"] > best_cluster["score"]:
+                best_cluster = {
+                    "cluster_index": cluster_index,
+                    "split_index": split["index"],
+                    "score": split["score"],
+                }
+
+        if best_cluster is None:
+            break
+
+        cluster_index = best_cluster["cluster_index"]
+        split_index = best_cluster["split_index"]
+        cluster_values = clusters[cluster_index]
+        lower_cluster = cluster_values[: split_index + 1]
+        upper_cluster = cluster_values[split_index + 1 :]
+
+        if not lower_cluster or not upper_cluster:
+            break
+
+        clusters = (
+            clusters[:cluster_index]
+            + [lower_cluster, upper_cluster]
+            + clusters[cluster_index + 1 :]
+        )
+
+    return clusters
+
+
+def values_in_cluster(values, raw_min, raw_max):
+    epsilon = max(abs(raw_min), abs(raw_max), 1.0) * 1e-9
+
+    return [
+        float(value)
+        for value in values
+        if raw_min - epsilon <= float(value) <= raw_max + epsilon
+    ]
+
+
+def build_clustered_metric_panels(df, baselines, metric_key, max_bands=3):
+    model_values = get_model_metric_values(df, metric_key)
+    baseline_names = get_valid_baseline_names(baselines, metric_key)
+    baseline_values = {
+        baseline_name: float(baselines[baseline_name][metric_key])
+        for baseline_name in baseline_names
+    }
+    all_values = model_values + list(baseline_values.values())
+
+    clusters = split_values_into_axis_clusters(all_values, max_bands=max_bands)
+
+    if not clusters:
+        return [], False
+
+    panels = []
+
+    for cluster_values in clusters:
+        raw_min = min(cluster_values)
+        raw_max = max(cluster_values)
+        cluster_model_values = values_in_cluster(model_values, raw_min, raw_max)
+        cluster_baselines = [
+            baseline_name
+            for baseline_name, value in baseline_values.items()
+            if values_in_cluster([value], raw_min, raw_max)
+        ]
+        contains_model = bool(cluster_model_values)
+
+        panels.append(
+            {
+                "kind": "focus" if contains_model else "baseline",
+                "baselines": cluster_baselines,
+                "raw_min": raw_min,
+                "raw_max": raw_max,
+                "ylim": compute_values_ylim(
+                    cluster_values,
+                    pad_ratio=0.18 if contains_model else 0.12,
+                ),
+                "height": 3.0 if contains_model else 0.42,
+            }
+        )
+
+    return constrain_panel_y_ranges(panels), len(panels) > 1
+
+
 def build_piecewise_axis(panels, gap_height=0.07):
     bands = []
 
@@ -1318,112 +1478,12 @@ def plot_metric_vs_dimension(
 
 
 def build_metric_panels(df, baselines, metric_key, max_focus_bands=3):
-    focus_min, focus_max = compute_model_focus_ylim(
+    return build_clustered_metric_panels(
         df=df,
-        metric_key=metric_key,
-    )
-
-    if focus_min is None or focus_max is None:
-        return [], False
-
-    below_baselines, inside_baselines, above_baselines = split_baselines_by_ylim(
         baselines=baselines,
         metric_key=metric_key,
-        y_min=focus_min,
-        y_max=focus_max,
-    )
-
-    is_broken = bool(below_baselines or above_baselines)
-    model_values = get_model_metric_values(df, metric_key)
-    inside_baseline_values = [
-        float(baselines[baseline_name][metric_key])
-        for baseline_name in inside_baselines
-    ]
-    focus_bands = build_focus_value_bands(
-        model_values + inside_baseline_values,
         max_bands=max_focus_bands,
     )
-
-    if not focus_bands:
-        return [], False
-
-    baseline_assignments = assign_baselines_to_focus_bands(
-        baselines=baselines,
-        metric_key=metric_key,
-        baseline_names=inside_baselines,
-        focus_bands=focus_bands,
-    )
-    is_broken = is_broken or len(focus_bands) > 1
-
-    if not is_broken:
-        return [
-            {
-                "kind": "focus",
-                "baselines": baseline_assignments.get(0, []),
-                "raw_min": focus_bands[0].get("raw_min"),
-                "raw_max": focus_bands[0].get("raw_max"),
-                "ylim": focus_bands[0]["ylim"],
-                "height": focus_bands[0]["height"],
-            }
-        ], False
-
-    panels = []
-
-    if above_baselines:
-        raw_min, raw_max = get_baseline_value_extent(
-            baselines,
-            metric_key,
-            above_baselines,
-        )
-        panels.append(
-            {
-                "kind": "baseline",
-                "baselines": above_baselines,
-                "raw_min": raw_min,
-                "raw_max": raw_max,
-                "ylim": compute_baseline_ylim(
-                    baselines,
-                    metric_key,
-                    above_baselines,
-                ),
-                "height": 0.42,
-            }
-        )
-
-    for index, focus_band in reversed(list(enumerate(focus_bands))):
-        panels.append(
-            {
-                "kind": "focus",
-                "baselines": baseline_assignments.get(index, []),
-                "raw_min": focus_band.get("raw_min"),
-                "raw_max": focus_band.get("raw_max"),
-                "ylim": focus_band["ylim"],
-                "height": focus_band["height"],
-            }
-        )
-
-    if below_baselines:
-        raw_min, raw_max = get_baseline_value_extent(
-            baselines,
-            metric_key,
-            below_baselines,
-        )
-        panels.append(
-            {
-                "kind": "baseline",
-                "baselines": below_baselines,
-                "raw_min": raw_min,
-                "raw_max": raw_max,
-                "ylim": compute_baseline_ylim(
-                    baselines,
-                    metric_key,
-                    below_baselines,
-                ),
-                "height": 0.42,
-            }
-        )
-
-    return constrain_panel_y_ranges(panels), True
 
 
 def plot_metric_vs_dimension_broken_axis(

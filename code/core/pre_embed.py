@@ -1,5 +1,7 @@
 import argparse
+import bz2
 import gc
+import json
 import sys
 from pathlib import Path
 
@@ -12,6 +14,7 @@ if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
 from core.graph_config import get_graph_label, get_graph_path
+from core.utils import get_fine_tuned_models
 
 
 BASE_MODELS = [
@@ -73,6 +76,56 @@ def parse_args():
     args.single_model = args.model_path or args.model
 
     return args
+
+
+def open_graph_file(file_path):
+    file_path = Path(file_path)
+
+    if str(file_path).endswith(".bz2"):
+        return bz2.open(file_path, mode="rt", encoding="utf-8")
+
+    return open(file_path, encoding="utf-8")
+
+
+def load_graph_nodes_for_pre_embed(graph_name, graph_path):
+    nodes = set()
+    file_name = Path(graph_path).name.lower()
+
+    with open_graph_file(graph_path) as file:
+        if file_name.endswith(".jsonl") or file_name.endswith(".jsonl.bz2"):
+            for line in file:
+                if not line.strip():
+                    continue
+
+                item = json.loads(line)
+                relation = item["causal_relation"]
+                cause = relation["cause"]["concept"].replace("_", " ").strip()
+                effect = relation["effect"]["concept"].replace("_", " ").strip()
+
+                if cause and effect and cause != effect:
+                    nodes.add(cause)
+                    nodes.add(effect)
+
+            return nodes
+
+        if file_name.endswith(".txt"):
+            for line in file:
+                parts = line.rstrip("\n").split("\t")
+
+                if not parts or "->" not in parts[0]:
+                    continue
+
+                cause, effect = parts[0].split("->", 1)
+                cause = cause.replace("_", " ").strip().lower()
+                effect = effect.replace("_", " ").strip().lower()
+
+                if cause and effect and cause != effect:
+                    nodes.add(cause)
+                    nodes.add(effect)
+
+            return nodes
+
+    raise ValueError(f"Could not infer graph format for {graph_name}: {graph_path}")
 
 
 def load_embedding_cache(save_path):
@@ -154,8 +207,6 @@ def pre_embed_model(model_path, graph_nodes, embeddings_dir, batch_size):
 def main():
     args = parse_args()
 
-    from core.utils import get_fine_tuned_models, load_graph_nodes
-
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be greater than 0")
 
@@ -171,7 +222,7 @@ def main():
             graph_path = CODE_ROOT / graph_path
 
         print(f"Loading {get_graph_label(graph_name)} nodes from: {graph_path}")
-        current_nodes = load_graph_nodes(graph_path, remove_self_loops=True)
+        current_nodes = load_graph_nodes_for_pre_embed(graph_name, graph_path)
         graph_nodes.update(current_nodes)
         print(f"Loaded {len(current_nodes)} {graph_name} nodes.")
 

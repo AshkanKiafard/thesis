@@ -239,6 +239,8 @@ def load_causal_graph(
     remove_self_loops=True,
     use_inverse=False,
     graph_format="auto",
+    progress_every=None,
+    progress_label="causal graph",
 ):
     # Loads CauseNet JSONL or lexical CEG TXT for BFS, A*, and Dijkstra.
     #
@@ -249,11 +251,17 @@ def load_causal_graph(
 
     graph = nx.DiGraph()
 
-    for cause, effect, edge_attrs in _iter_graph_edges(
-        file_path=file_path,
-        remove_self_loops=remove_self_loops,
-        graph_format=graph_format,
+    for edge_index, (cause, effect, edge_attrs) in enumerate(
+        _iter_graph_edges(
+            file_path=file_path,
+            remove_self_loops=remove_self_loops,
+            graph_format=graph_format,
+        ),
+        start=1,
     ):
+        if progress_every and edge_index % progress_every == 0:
+            print(f"Loaded {edge_index:,} edges into {progress_label}...", flush=True)
+
         graph.add_edge(cause, effect, **edge_attrs)
 
         if use_inverse:
@@ -290,6 +298,8 @@ def load_rl_graph(
     remove_self_loops=True,
     use_inverse=False,
     graph_format="auto",
+    progress_every=None,
+    progress_label="RL graph",
 ):
     # Loads CauseNet JSONL or lexical CEG TXT in the RL baseline format.
     #
@@ -307,11 +317,17 @@ def load_rl_graph(
     edge_sources = {}
     nodes = set()
 
-    for cause, effect, edge_attrs in _iter_graph_edges(
-        file_path=file_path,
-        remove_self_loops=remove_self_loops,
-        graph_format=graph_format,
+    for edge_index, (cause, effect, edge_attrs) in enumerate(
+        _iter_graph_edges(
+            file_path=file_path,
+            remove_self_loops=remove_self_loops,
+            graph_format=graph_format,
+        ),
+        start=1,
     ):
+        if progress_every and edge_index % progress_every == 0:
+            print(f"Loaded {edge_index:,} edges into {progress_label}...", flush=True)
+
         sentence = edge_attrs["sentence"]
 
         nodes.add(cause)

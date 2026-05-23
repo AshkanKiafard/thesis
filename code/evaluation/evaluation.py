@@ -17,6 +17,7 @@ from sklearn.metrics import (
 )
 
 import traverse_strategies as ts
+from core.constants import GLOVE_300D_PATH
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.graph_config import (
     DEFAULT_GRAPH_NAME,
@@ -362,6 +363,48 @@ def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
     )
 
 
+def preload_rl_embeddings(embeder, graph, data=None, batch_size=4096):
+    nodes = list(graph.nodes)
+    entity_texts = nodes + ["stop stop action"]
+
+    print(
+        "Preloading RL GloVe entity embeddings "
+        f"({len(entity_texts):,} entities)..."
+    )
+    start_time = time.time()
+    added_entities = embeder.preload_entities(
+        entity_texts,
+        batch_size=batch_size,
+    )
+
+    question_texts = []
+    if data is not None:
+        graph_nodes = set(graph.nodes)
+
+        for item in data:
+            cause = item["cause"]
+            effect = item["effect"]
+
+            if cause not in graph_nodes or effect not in graph_nodes:
+                continue
+
+            question_texts.append(
+                item.get("question", f"can {cause} cause {effect}?")
+            )
+
+    added_questions = embeder.preload_questions(question_texts)
+    added_relations = embeder.preload_relations(["stop"])
+    elapsed = time.time() - start_time
+
+    print(
+        "RL GloVe preload complete: "
+        f"{added_entities:,} entities added, "
+        f"{added_questions:,} questions added, "
+        f"{added_relations:,} relations added, "
+        f"{elapsed:.1f}s"
+    )
+
+
 def save_all_results_csv(all_results, output_csv_file):
     fieldnames = [
         "algorithm",
@@ -444,8 +487,28 @@ def load_results_file(output_json_file):
     return []
 
 
-def save_result(result_entry, output_json_file, output_csv_file):
+def save_result(
+    result_entry,
+    output_json_file,
+    output_csv_file,
+    replace_existing=None,
+):
     current_results = load_results_file(output_json_file)
+
+    if replace_existing is not None:
+        original_count = len(current_results)
+        current_results = [
+            entry for entry in current_results
+            if not replace_existing(entry)
+        ]
+        removed_count = original_count - len(current_results)
+
+        if removed_count:
+            print(
+                f"Removed {removed_count} existing result(s) before saving "
+                f"'{result_entry['model']}'."
+            )
+
     current_results.append(result_entry)
 
     with open(output_json_file, "w", encoding="utf-8") as file:
@@ -685,6 +748,49 @@ def parse_args():
         help="Do not persist newly preloaded ST embeddings to data/embeddings.",
     )
     parser.add_argument(
+        "--skip-bfs-baseline",
+        action="store_true",
+        help="Skip BFS_Baseline even if it is missing from the output file.",
+    )
+    parser.add_argument(
+        "--skip-rl-baseline",
+        action="store_true",
+        help="Skip RL_Baseline and avoid loading the separate RL graph.",
+    )
+    parser.add_argument(
+        "--force-baselines",
+        action="store_true",
+        help=(
+            "Rerun BFS_Baseline and RL_Baseline even if they already exist. "
+            "Existing baseline entries are replaced; model entries are kept."
+        ),
+    )
+    parser.add_argument(
+        "--force-bfs-baseline",
+        action="store_true",
+        help=(
+            "Rerun BFS_Baseline even if it already exists. Existing BFS_Baseline "
+            "entries are replaced."
+        ),
+    )
+    parser.add_argument(
+        "--force-rl-baseline",
+        action="store_true",
+        help=(
+            "Rerun RL_Baseline even if it already exists. Existing RL_Baseline "
+            "entries are replaced."
+        ),
+    )
+    parser.add_argument(
+        "--baselines-only",
+        action="store_true",
+        help=(
+            "Run only baseline handling, then exit before A*/Dijkstra model "
+            "evaluation. Combine with --force-baselines to refresh baselines "
+            "without touching model rows."
+        ),
+    )
+    parser.add_argument(
         "--best-model-path",
         type=str,
         default=None,
@@ -738,7 +844,10 @@ if __name__ == "__main__":
     selected_test_model_path = None
     selected_test_dimension = None
 
-    if current_split == "test":
+    if args.baselines_only:
+        print("\nBaselines-only mode enabled.")
+        print("Skipping embedding-guided model selection and model queue.")
+    elif current_split == "test":
         print("\nTest split detected.")
         print("Ignoring full model queue for embedding-guided strategies.")
 
@@ -810,19 +919,47 @@ if __name__ == "__main__":
     with open(dataset_path, encoding="utf-8") as file:
         valid_data = json.load(file)
 
-    print("Loading graphs...")
+    force_bfs_baseline = args.force_baselines or args.force_bfs_baseline
+    force_rl_baseline = args.force_baselines or args.force_rl_baseline
+
+    existing_results = load_results_file(output_json_file)
+    has_bfs_baseline = any(
+        entry["model"] == "BFS_Baseline" for entry in existing_results
+    )
+    has_rl_baseline = any(
+        entry["model"] == "RL_Baseline" for entry in existing_results
+    )
+    should_run_bfs_baseline = (
+        not args.skip_bfs_baseline
+        and (force_bfs_baseline or not has_bfs_baseline)
+    )
+    should_run_rl_baseline = (
+        not args.skip_rl_baseline
+        and (force_rl_baseline or not has_rl_baseline)
+    )
+
+    if force_bfs_baseline and has_bfs_baseline and should_run_bfs_baseline:
+        print("Force rerun enabled for BFS_Baseline.")
+
+    if force_rl_baseline and has_rl_baseline and should_run_rl_baseline:
+        print("Force rerun enabled for RL_Baseline.")
+
+    print(f"Loading causal graph from: {graph_path}")
+    graph_load_start = time.time()
     causal_graph = load_causal_graph(
         graph_path,
         use_inverse=False,
+        progress_every=1_000_000,
+        progress_label=f"{graph_name} NetworkX graph",
     )
-    rl_graph = load_rl_graph(
-        graph_path,
-        use_inverse=False,
+    print(
+        "Loaded causal graph: "
+        f"{causal_graph.number_of_nodes():,} nodes, "
+        f"{causal_graph.number_of_edges():,} edges "
+        f"in {time.time() - graph_load_start:.1f}s"
     )
 
-    existing_results = load_results_file(output_json_file)
-
-    if not any(entry["model"] == "BFS_Baseline" for entry in existing_results):
+    if should_run_bfs_baseline:
         bfs_config = {
             "bfs_max_visits": get_p95_cap(
                 p95_configs,
@@ -863,15 +1000,39 @@ if __name__ == "__main__":
             },
             output_json_file,
             output_csv_file,
+            replace_existing=(
+                (lambda entry: entry.get("model") == "BFS_Baseline")
+                if force_bfs_baseline
+                else None
+            ),
         )
     else:
-        print("Skipping BFS_Baseline because it already exists.")
+        if args.skip_bfs_baseline:
+            print("Skipping BFS_Baseline because --skip-bfs-baseline was set.")
+        elif has_bfs_baseline:
+            print("Skipping BFS_Baseline because it already exists.")
+        else:
+            print("Skipping BFS_Baseline.")
 
     existing_results = load_results_file(output_json_file)
 
-    if not any(entry["model"] == "RL_Baseline" for entry in existing_results):
+    if should_run_rl_baseline:
+        print(f"Loading RL graph from: {graph_path}")
+        graph_load_start = time.time()
+        rl_graph = load_rl_graph(
+            graph_path,
+            use_inverse=False,
+            progress_every=1_000_000,
+            progress_label=f"{graph_name} RL graph",
+        )
+        print(
+            "Loaded RL graph: "
+            f"{len(rl_graph.nodes):,} nodes in "
+            f"{time.time() - graph_load_start:.1f}s"
+        )
+
         rl_embeder = GloveEmbeder(
-            "data/embeddings/glove.6B/glove.6B.300d.txt",
+            GLOVE_300D_PATH,
             DistanceMetric.COSINE,
         )
 
@@ -882,6 +1043,12 @@ if __name__ == "__main__":
             "rl_max_actions": 5000,
             "rl_max_visits": -1,
         }
+
+        preload_rl_embeddings(
+            rl_embeder,
+            rl_graph,
+            data=valid_data,
+        )
 
         run_warmup_traversal(
             valid_data,
@@ -914,13 +1081,30 @@ if __name__ == "__main__":
             },
             output_json_file,
             output_csv_file,
+            replace_existing=(
+                (lambda entry: entry.get("model") == "RL_Baseline")
+                if force_rl_baseline
+                else None
+            ),
         )
 
         del rl_embeder
         del rl_graph
         gc.collect()
     else:
-        print("Skipping RL_Baseline because it already exists.")
+        if args.skip_rl_baseline:
+            print("Skipping RL_Baseline because --skip-rl-baseline was set.")
+        elif has_rl_baseline:
+            print("Skipping RL_Baseline because it already exists.")
+        else:
+            print("Skipping RL_Baseline.")
+
+    if args.baselines_only:
+        print(
+            "\nBaseline handling complete. "
+            "Skipping A*/Dijkstra model evaluation because --baselines-only was set."
+        )
+        raise SystemExit(0)
 
     if current_split == "test":
         semantic_model_queue = [selected_test_model_path]

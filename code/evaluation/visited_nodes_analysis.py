@@ -9,6 +9,7 @@ import numpy as np
 import torch
 
 import traverse_strategies as ts
+from core.constants import GLOVE_300D_PATH
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.graph_config import (
     DEFAULT_GRAPH_NAME,
@@ -247,6 +248,48 @@ def run_visited_nodes_loop(
     return summary
 
 
+def preload_rl_embeddings(embeder, graph, data=None, batch_size=4096):
+    nodes = list(graph.nodes)
+    entity_texts = nodes + ["stop stop action"]
+
+    print(
+        "Preloading RL GloVe entity embeddings "
+        f"({len(entity_texts):,} entities)..."
+    )
+    start_time = time.time()
+    added_entities = embeder.preload_entities(
+        entity_texts,
+        batch_size=batch_size,
+    )
+
+    question_texts = []
+    if data is not None:
+        graph_nodes = set(graph.nodes)
+
+        for item in data:
+            cause = item["cause"]
+            effect = item["effect"]
+
+            if cause not in graph_nodes or effect not in graph_nodes:
+                continue
+
+            question_texts.append(
+                item.get("question", f"can {cause} cause {effect}?")
+            )
+
+    added_questions = embeder.preload_questions(question_texts)
+    added_relations = embeder.preload_relations(["stop"])
+    elapsed = time.time() - start_time
+
+    print(
+        "RL GloVe preload complete: "
+        f"{added_entities:,} entities added, "
+        f"{added_questions:,} questions added, "
+        f"{added_relations:,} relations added, "
+        f"{elapsed:.1f}s"
+    )
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Collect uncapped visited-node distributions."
@@ -363,8 +406,14 @@ if __name__ == "__main__":
 
         try:
             rl_embeder = GloveEmbeder(
-                "data/embeddings/glove.6B/glove.6B.300d.txt",
+                GLOVE_300D_PATH,
                 DistanceMetric.COSINE,
+            )
+
+            preload_rl_embeddings(
+                rl_embeder,
+                rl_graph,
+                data=data,
             )
 
             rl_result = run_visited_nodes_loop(
