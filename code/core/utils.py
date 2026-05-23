@@ -11,6 +11,13 @@ import networkx as nx
 from core.constants import ActivationFunc, DistanceMetric, LIGHTNING_DIR
 
 
+def get_embedding_cache_suffix(graph_name):
+    if graph_name == "causenet_full":
+        return graph_name
+
+    return None
+
+
 @dataclass
 class RLGraph:
     # Original-style adjacency list for the RL baseline.

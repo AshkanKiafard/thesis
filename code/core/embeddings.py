@@ -35,6 +35,7 @@ class STEmbedder:
         model_path: str,
         distance_metric: DistanceMetric,
         device=None,
+        cache_suffix: str = None,
     ):
         self.device = _resolve_device(device)
 
@@ -57,7 +58,10 @@ class STEmbedder:
         # This avoids writing to ../data, which resolves outside /app inside the Slurm container.
         cache_dir = DATA_DIR / "embeddings"
         os.makedirs(cache_dir, exist_ok=True)
-        self.cache_file = cache_dir / f"{self.model_name}_embeddings.npy"
+        cache_name = self.model_name
+        if cache_suffix:
+            cache_name = f"{cache_name}_{cache_suffix}"
+        self.cache_file = cache_dir / f"{cache_name}_embeddings.npy"
 
         # Load precomputed embeddings if they exist.
         if os.path.exists(self.cache_file):

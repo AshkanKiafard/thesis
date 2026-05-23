@@ -13,8 +13,8 @@ DATA_DIR = CODE_ROOT / "data"
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
-from core.graph_config import get_graph_label, get_graph_path
-from core.utils import get_fine_tuned_models
+from core.graph_config import get_graph_label, get_graph_path, graph_choices
+from core.utils import get_embedding_cache_suffix, get_fine_tuned_models
 
 
 BASE_MODELS = [
@@ -68,6 +68,16 @@ def parse_args():
         help=(
             "Optional single Hugging Face model name or fine-tuned model path. "
             "Alias for the positional model argument."
+        ),
+    )
+    parser.add_argument(
+        "--graph",
+        choices=graph_choices(),
+        default=None,
+        help=(
+            "Graph to pre-embed. If omitted, keep the legacy combined "
+            "causenet+causalbank cache. causenet_full is always stored in "
+            "a separate graph-specific cache file."
         ),
     )
 
@@ -143,7 +153,23 @@ def load_embedding_cache(save_path):
         return {}
 
 
-def pre_embed_model(model_path, graph_nodes, embeddings_dir, batch_size, embedding_device):
+def get_embedding_cache_path(embeddings_dir, model_path, cache_suffix=None):
+    raw_name = Path(model_path).name
+
+    if cache_suffix:
+        raw_name = f"{raw_name}_{cache_suffix}"
+
+    return embeddings_dir / f"{raw_name}_embeddings.npy"
+
+
+def pre_embed_model(
+    model_path,
+    graph_nodes,
+    embeddings_dir,
+    batch_size,
+    embedding_device,
+    cache_suffix=None,
+):
     import numpy as np
     import torch
 
@@ -154,8 +180,11 @@ def pre_embed_model(model_path, graph_nodes, embeddings_dir, batch_size, embeddi
     print(f"PROCESSING MODEL: {model_path}")
     print(f"{'=' * 50}")
 
-    raw_name = Path(model_path).name
-    save_path = embeddings_dir / f"{raw_name}_embeddings.npy"
+    save_path = get_embedding_cache_path(
+        embeddings_dir,
+        model_path,
+        cache_suffix=cache_suffix,
+    )
 
     embeddings = load_embedding_cache(save_path)
 
@@ -175,6 +204,7 @@ def pre_embed_model(model_path, graph_nodes, embeddings_dir, batch_size, embeddi
         model_path=model_path,
         distance_metric=distance_metric,
         device=embedding_device,
+        cache_suffix=cache_suffix,
     )
 
     total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
@@ -220,8 +250,15 @@ def main():
     print(f"Run suffix: {args.run_suffix}")
     print(f"Embedding device: {args.embedding_device}")
 
+    selected_graphs = (
+        (args.graph,)
+        if args.graph is not None
+        else ("causenet", "causalbank")
+    )
+    cache_suffix = get_embedding_cache_suffix(args.graph)
+
     graph_nodes = set()
-    for graph_name in ("causenet", "causalbank"):
+    for graph_name in selected_graphs:
         graph_path = get_graph_path(graph_name)
         if not graph_path.is_absolute():
             graph_path = CODE_ROOT / graph_path
@@ -232,7 +269,15 @@ def main():
         print(f"Loaded {len(current_nodes)} {graph_name} nodes.")
 
     graph_nodes = sorted(graph_nodes)
-    print(f"Combined graph nodes: {len(graph_nodes)}")
+    if args.graph is None:
+        print(f"Combined graph nodes: {len(graph_nodes)}")
+    else:
+        print(f"{args.graph} graph nodes: {len(graph_nodes)}")
+
+    if cache_suffix:
+        print(f"Using graph-specific embedding cache suffix: {cache_suffix}")
+    else:
+        print("Using legacy shared embedding cache.")
 
     if args.single_model is not None:
         model_queue = [args.single_model]
@@ -257,6 +302,7 @@ def main():
             embeddings_dir=embeddings_dir,
             batch_size=args.batch_size,
             embedding_device=args.embedding_device,
+            cache_suffix=cache_suffix,
         )
 
     print("\nAll models processed.")

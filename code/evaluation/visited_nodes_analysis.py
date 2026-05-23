@@ -18,6 +18,7 @@ from core.graph_config import (
     graph_choices,
 )
 from core.utils import (
+    get_embedding_cache_suffix,
     traverse_graph,
     get_fine_tuned_models,
     get_model_distance_metric,
@@ -345,6 +346,9 @@ if __name__ == "__main__":
     print(f"Graph: {graph_label} ({graph_name})")
     print(f"Graph path: {graph_path}")
     print(f"Embedding device: {args.embedding_device}")
+    embedding_cache_suffix = get_embedding_cache_suffix(graph_name)
+    if embedding_cache_suffix:
+        print(f"Embedding cache suffix: {embedding_cache_suffix}")
     print("Model queue:", model_queue)
 
     # RL still needs these parameters
@@ -483,6 +487,7 @@ if __name__ == "__main__":
                 model_path=model_path,
                 distance_metric=distance_metric,
                 device=args.embedding_device,
+                cache_suffix=embedding_cache_suffix,
             )
             print("Preloading graph embeddings on the active device...")
             main_embeder.preload(causal_graph.nodes, batch_size=64, save=True)
