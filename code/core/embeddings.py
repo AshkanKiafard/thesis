@@ -38,6 +38,13 @@ def _move_corrupt_file(path):
     return corrupt_path
 
 
+def _close_memmap(array):
+    mmap = getattr(array, "_mmap", None)
+
+    if mmap is not None:
+        mmap.close()
+
+
 def _load_non_pickle_embedding_cache(paths):
     if not paths["texts"].exists() or not paths["vectors"].exists():
         return None
@@ -211,6 +218,7 @@ def save_st_embedding_cache(
 
         vectors.flush()
         del vectors
+        _close_memmap(existing_vectors)
 
         with open(tmp_texts, "w", encoding="utf-8") as file:
             for text in texts:
@@ -354,6 +362,9 @@ class STEmbedder:
 
     def _has_cached_embedding(self, text: str) -> bool:
         return text in self.cache or text in self.cache_text_to_idx
+
+    def has_cached_embedding(self, text: str) -> bool:
+        return self._has_cached_embedding(text)
 
     def _get_cached_embedding(self, text: str):
         if text in self.cache:
@@ -651,6 +662,14 @@ class STEmbedder:
             serializable_cache,
             existing_text_to_idx=self.cache_text_to_idx,
             existing_vectors=self.cache_vectors,
+        )
+        (
+            self.cache,
+            self.cache_text_to_idx,
+            self.cache_vectors,
+        ) = load_st_embedding_cache_index(
+            self.cache_file,
+            allow_legacy_pickle=False,
         )
 
     def get_distance(self, embed1, embed2):

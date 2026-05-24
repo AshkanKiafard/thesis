@@ -342,7 +342,11 @@ def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
     conversion inside the traversal loop.
     """
     nodes = list(graph.nodes)
-    cached_before = sum(1 for node in nodes if node in embeder.cache)
+    cached_before = sum(
+        1
+        for node in nodes
+        if embeder.has_cached_embedding(node)
+    )
     avg_out_degree = graph.number_of_edges() / max(graph.number_of_nodes(), 1)
     active_dim = embeder.get_active_embedding_dim()
     model_dim = embeder.get_model_dim()
