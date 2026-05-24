@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_DIR = REPO_ROOT / "data" / "datasets" / "filtered"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "data" / "reports" / "bfs_path_lengths"
 DEFAULT_DATASETS = ("msmarco_test", "sem_test")
-DEFAULT_GRAPHS = ("causenet", "causalbank")
+DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank")
 
 
 def resolve_repo_path(path):
