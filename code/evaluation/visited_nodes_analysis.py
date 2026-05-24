@@ -292,7 +292,7 @@ def preload_rl_embeddings(embeder, graph, data=None, batch_size=4096):
 
 
 def get_embedding_index_config(graph_name):
-    if graph_name == "causalbank":
+    if graph_name in {"causalbank", "causalbank_full"}:
         return {"embedding_index_min_successors": 128}
 
     return {}

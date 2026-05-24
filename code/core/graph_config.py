@@ -15,6 +15,10 @@ GRAPH_CONFIGS = {
         "label": "CausalBank",
         "path": Path("data/graphs/Lexical_Cause_Effect_Graph.filtered.txt"),
     },
+    "causalbank_full": {
+        "label": "CausalBank full",
+        "path": Path("data/graphs/Lexical_Cause_Effect_Graph.txt"),
+    },
 }
 
 

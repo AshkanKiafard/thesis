@@ -97,7 +97,7 @@ def load_nodes(graph_name, graph_path):
     if graph_name in {"causenet", "causenet_full"}:
         return set(iter_causenet_nodes(graph_path))
 
-    if graph_name == "causalbank":
+    if graph_name in {"causalbank", "causalbank_full"}:
         return set(iter_causalbank_nodes(graph_path))
 
     raise ValueError(f"Unknown graph name: {graph_name}")
@@ -1046,6 +1046,12 @@ def parse_args():
         help="Path override for filtered CausalBank graph.",
     )
     parser.add_argument(
+        "--causalbank-full-graph",
+        type=Path,
+        default=get_graph_path("causalbank_full"),
+        help="Path override for full CausalBank graph.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
@@ -1099,6 +1105,7 @@ def main():
         "causenet": args.causenet_graph,
         "causenet_full": args.causenet_full_graph,
         "causalbank": args.causalbank_graph,
+        "causalbank_full": args.causalbank_full_graph,
     }
     graph_paths = {
         graph_name: resolve_repo_path(graph_path_overrides[graph_name])

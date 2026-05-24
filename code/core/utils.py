@@ -12,7 +12,7 @@ from core.constants import ActivationFunc, DistanceMetric, LIGHTNING_DIR
 
 
 def get_embedding_cache_suffix(graph_name):
-    if graph_name == "causenet_full":
+    if graph_name in {"causenet_full", "causalbank_full"}:
         return graph_name
 
     return None

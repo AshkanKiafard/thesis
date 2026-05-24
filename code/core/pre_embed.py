@@ -76,8 +76,8 @@ def parse_args():
         default=None,
         help=(
             "Graph to pre-embed. If omitted, keep the legacy combined "
-            "causenet+causalbank cache. causenet_full is always stored in "
-            "a separate graph-specific cache file."
+            "causenet+causalbank cache. Full graph variants are stored in "
+            "separate graph-specific cache files."
         ),
     )
 

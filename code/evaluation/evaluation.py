@@ -533,7 +533,7 @@ def get_used_max_visits(used_config, algorithm):
 
 
 def get_embedding_index_config(graph_name):
-    if graph_name == "causalbank":
+    if graph_name in {"causalbank", "causalbank_full"}:
         return {"embedding_index_min_successors": 128}
 
     return {}
