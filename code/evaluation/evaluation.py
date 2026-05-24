@@ -25,6 +25,7 @@ from core.graph_config import (
     get_graph_path,
     graph_choices,
 )
+from core.indexed_graph import build_indexed_graph
 from core.utils import (
     get_embedding_cache_suffix,
     get_fine_tuned_models,
@@ -386,6 +387,20 @@ def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
             save=False,
             texts_are_unique=True,
         )
+
+    indexed_graph = None
+    if embeder.has_embedding_index():
+        index_start = time.time()
+        indexed_graph = build_indexed_graph(
+            graph,
+            embeder.indexed_text_to_idx,
+        )
+        print(
+            "Indexed graph built: "
+            f"{len(indexed_graph.idx_to_node):,} nodes in "
+            f"{time.time() - index_start:.1f}s"
+        )
+
     elapsed = time.time() - start_time
 
     print(
@@ -395,6 +410,8 @@ def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
         f"avg out-degree {avg_out_degree:.1f}, "
         f"{elapsed:.1f}s"
     )
+
+    return indexed_graph
 
 
 def preload_rl_embeddings(embeder, graph, data=None, batch_size=4096):
@@ -520,6 +537,17 @@ def get_embedding_index_config(graph_name):
         return {"embedding_index_min_successors": 128}
 
     return {}
+
+
+def strip_runtime_config(config):
+    if config is None:
+        return {}
+
+    return {
+        key: value
+        for key, value in config.items()
+        if not str(key).startswith("_")
+    }
 
 
 def load_results_file(output_json_file):
@@ -1258,8 +1286,9 @@ if __name__ == "__main__":
                     f"{selected_test_dimension}."
                 )
 
+            indexed_graph = None
             if not args.skip_embedding_preload:
-                preload_graph_embeddings(
+                indexed_graph = preload_graph_embeddings(
                     main_embeder,
                     causal_graph,
                     batch_size=args.embedding_batch_size,
@@ -1270,6 +1299,11 @@ if __name__ == "__main__":
 
                 print(f"--- Dim: {dim} ---")
                 main_embeder.set_matryoshka_dim(dim)
+
+                if indexed_graph is not None and main_embeder.has_embedding_index():
+                    used_config["_indexed_graph"] = indexed_graph
+                else:
+                    used_config.pop("_indexed_graph", None)
 
                 for strategy_name, strategy in pending_strategies.items():
                     run_warmup_traversal(
@@ -1299,7 +1333,7 @@ if __name__ == "__main__":
                         "run_suffix": run_suffix,
                         "config_source_dataset": config_source_dataset_name,
                         "embedding_device": args.embedding_device,
-                        "used_config": used_config,
+                        "used_config": strip_runtime_config(used_config),
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                         "evaluation": main_summary,
                     },

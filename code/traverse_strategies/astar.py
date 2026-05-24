@@ -17,6 +17,17 @@ def _reconstruct_path(path_links, path_index):
     return path
 
 
+def _reconstruct_index_path(path_links, path_index, indexed_graph):
+    path = []
+
+    while path_index is not None:
+        node_index, path_index = path_links[path_index]
+        path.append(indexed_graph.node_text(node_index))
+
+    path.reverse()
+    return path
+
+
 def _embed_many(embeder, nodes, config):
     # Small successor batches are usually faster through the regular tensor cache.
     min_successors = config.get("embedding_index_min_successors", 128)
@@ -37,6 +48,107 @@ def _embed_many(embeder, nodes, config):
     ]
 
 
+def _get_indexed_graph(config, embeder, start_node, end_node):
+    indexed_graph = config.get("_indexed_graph")
+
+    if indexed_graph is None:
+        return None
+
+    has_embedding_index = getattr(embeder, "has_embedding_index", None)
+    if not callable(has_embedding_index) or not has_embedding_index():
+        return None
+
+    if not indexed_graph.has_node(start_node) or not indexed_graph.has_node(end_node):
+        return None
+
+    return indexed_graph
+
+
+def _astar_traverse_indexed(
+    indexed_graph,
+    start_node: str,
+    end_node: str,
+    embeder: STEmbedder,
+    max_visits: int,
+) -> tuple[list[Any], int]:
+    start_index = indexed_graph.node_index(start_node)
+    end_index = indexed_graph.node_index(end_node)
+
+    path_links = [(start_index, None)]
+    open_set = [(0, 0, start_node, start_index, 0)]
+    best_g = {start_index: 0.0}
+    visited = set()
+    visited_count = 0
+
+    end_node_embed = embeder.embed_index(end_index)
+    adjacency = indexed_graph.adjacency
+
+    while open_set:
+        f_score, g_score, current_node, current_index, path_index = (
+            heapq.heappop(open_set)
+        )
+
+        if current_index == end_index:
+            return _reconstruct_index_path(
+                path_links,
+                path_index,
+                indexed_graph,
+            ), visited_count
+
+        if current_index in visited:
+            continue
+
+        visited.add(current_index)
+        visited_count += 1
+
+        if max_visits != -1 and visited_count > max_visits:
+            return [], visited_count
+
+        current_node_embed = embeder.embed_index(current_index)
+        successors = [
+            successor
+            for successor in adjacency[current_index]
+            if successor not in visited
+        ]
+
+        if not successors:
+            continue
+
+        successor_embeds = embeder.embed_indices(successors)
+        edge_costs = embeder.get_distances(current_node_embed, successor_embeds)
+        heuristic_costs = embeder.get_distances(end_node_embed, successor_embeds)
+
+        for successor, edge_cost, heuristic in zip(
+            successors,
+            edge_costs,
+            heuristic_costs,
+        ):
+            tentative_g = g_score + edge_cost
+
+            if tentative_g >= best_g.get(successor, float("inf")):
+                continue
+
+            best_g[successor] = tentative_g
+            tentative_f = tentative_g + heuristic
+
+            path_links.append((successor, path_index))
+            successor_path_index = len(path_links) - 1
+            successor_node = indexed_graph.node_text(successor)
+
+            heapq.heappush(
+                open_set,
+                (
+                    tentative_f,
+                    tentative_g,
+                    successor_node,
+                    successor,
+                    successor_path_index,
+                ),
+            )
+
+    return [], visited_count
+
+
 def astar_traverse(
     graph: nx.DiGraph,
     start_node: str,
@@ -49,6 +161,16 @@ def astar_traverse(
         config = {}
 
     max_visits = config.get("astar_max_visits", -1)
+    indexed_graph = _get_indexed_graph(config, embeder, start_node, end_node)
+
+    if indexed_graph is not None:
+        return _astar_traverse_indexed(
+            indexed_graph,
+            start_node,
+            end_node,
+            embeder,
+            max_visits,
+        )
 
     # Priority queue entries are:
     # (f_score, g_score, current_node, path_link_index)

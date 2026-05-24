@@ -623,6 +623,25 @@ class STEmbedder:
     def has_embedding_index(self) -> bool:
         return self.embedding_table is not None
 
+    def embed_index(self, index: int) -> torch.Tensor:
+        if self.embedding_table is None:
+            raise ValueError("Embedding index has not been prepared.")
+
+        return self.embedding_table.weight[index].flatten()
+
+    def embed_indices(self, indices) -> torch.Tensor:
+        if self.embedding_table is None:
+            raise ValueError("Embedding index has not been prepared.")
+
+        index_tensor = torch.as_tensor(
+            indices,
+            device=self.device,
+            dtype=torch.long,
+        )
+
+        with torch.no_grad():
+            return self.embedding_table.weight.index_select(0, index_tensor)
+
     def embed_many(self, texts) -> torch.Tensor:
         self._ensure_tensor_cache_dim()
 
@@ -638,14 +657,7 @@ class STEmbedder:
             except KeyError:
                 pass
             else:
-                index_tensor = torch.as_tensor(
-                    indices,
-                    device=self.device,
-                    dtype=torch.long,
-                )
-
-                with torch.no_grad():
-                    return self.embedding_table.weight.index_select(0, index_tensor)
+                return self.embed_indices(indices)
 
         return torch.stack([
             self.embed(text)
