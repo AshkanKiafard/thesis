@@ -27,6 +27,23 @@ def _embedding_cache_paths(cache_file):
     }
 
 
+def _embedding_checkpoint_paths(cache_file):
+    cache_file = Path(cache_file)
+    cache_stem = cache_file.with_suffix("")
+
+    return {
+        "texts": cache_stem.with_name(
+            f"{cache_stem.name}_checkpoint_texts.jsonl"
+        ),
+        "vectors": cache_stem.with_name(
+            f"{cache_stem.name}_checkpoint_vectors.npy"
+        ),
+        "mask": cache_stem.with_name(
+            f"{cache_stem.name}_checkpoint_mask.npy"
+        ),
+    }
+
+
 def _move_corrupt_file(path):
     path = Path(path)
 
@@ -233,23 +250,176 @@ def save_st_embedding_cache(
                 os.remove(path)
 
 
-def _temporary_cache_paths(cache_file):
-    paths = _embedding_cache_paths(cache_file)
-    tmp_texts = paths["texts"].with_name(
-        f"{paths['texts'].name}.tmp.{os.getpid()}"
-    )
-    tmp_vectors = paths["vectors"].with_name(
-        f"{paths['vectors'].name}.tmp.{os.getpid()}"
-    )
-
-    return paths, tmp_texts, tmp_vectors
-
-
 def _write_cache_texts(path, texts):
     with open(path, "w", encoding="utf-8") as file:
         for text in texts:
             file.write(json.dumps(text, ensure_ascii=False))
             file.write("\n")
+
+
+def _checkpoint_texts_match(path, texts):
+    with open(path, encoding="utf-8") as file:
+        for index, expected_text in enumerate(texts):
+            line = file.readline()
+
+            if not line:
+                return (
+                    False,
+                    f"checkpoint has only {index:,} text rows",
+                )
+
+            if json.loads(line) != expected_text:
+                return (
+                    False,
+                    f"checkpoint text mismatch at row {index:,}",
+                )
+
+        if file.readline():
+            return False, "checkpoint has extra text rows"
+
+    return True, None
+
+
+def _move_checkpoint_as_corrupt(paths):
+    for path in paths.values():
+        try:
+            moved_path = _move_corrupt_file(path)
+            if moved_path is not None:
+                print(f"Moved stale embedding checkpoint file to {moved_path}.")
+        except OSError:
+            print(f"Could not move stale embedding checkpoint file {path}.")
+
+
+def _load_embedding_checkpoint(cache_file, texts, dim):
+    paths = _embedding_checkpoint_paths(cache_file)
+    required_paths = tuple(paths.values())
+
+    if not any(path.exists() for path in required_paths):
+        return None
+
+    if not all(path.exists() for path in required_paths):
+        print(
+            "Ignoring incomplete embedding checkpoint "
+            f"{paths['texts']} / {paths['vectors']} / {paths['mask']}."
+        )
+        _move_checkpoint_as_corrupt(paths)
+        return None
+
+    vectors = None
+    mask = None
+
+    try:
+        vectors = np.load(
+            paths["vectors"],
+            allow_pickle=False,
+            mmap_mode="r+",
+        )
+        mask = np.load(
+            paths["mask"],
+            allow_pickle=False,
+            mmap_mode="r+",
+        )
+
+        expected_vector_shape = (len(texts), dim)
+        expected_mask_shape = (len(texts),)
+
+        if vectors.shape != expected_vector_shape:
+            raise ValueError(
+                "checkpoint vector shape mismatch: "
+                f"{vectors.shape} != {expected_vector_shape}"
+            )
+        if mask.shape != expected_mask_shape:
+            raise ValueError(
+                "checkpoint mask shape mismatch: "
+                f"{mask.shape} != {expected_mask_shape}"
+            )
+        if mask.dtype != np.dtype("bool"):
+            raise ValueError(f"checkpoint mask dtype is {mask.dtype}, not bool")
+
+        texts_match, mismatch_reason = _checkpoint_texts_match(
+            paths["texts"],
+            texts,
+        )
+        if not texts_match:
+            raise ValueError(mismatch_reason)
+
+        filled_rows = int(np.count_nonzero(mask))
+        print(
+            "Loaded embedding checkpoint: "
+            f"{filled_rows:,}/{len(texts):,} rows already written "
+            f"from {paths['vectors']}.",
+            flush=True,
+        )
+        return paths, vectors, mask
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            "Ignoring stale embedding checkpoint "
+            f"{paths['texts']} / {paths['vectors']} / {paths['mask']}: {exc}."
+        )
+        if vectors is not None:
+            _close_memmap(vectors)
+        if mask is not None:
+            _close_memmap(mask)
+        _move_checkpoint_as_corrupt(paths)
+
+    return None
+
+
+def _create_embedding_checkpoint(cache_file, texts, dim):
+    paths = _embedding_checkpoint_paths(cache_file)
+    tmp_texts = paths["texts"].with_name(
+        f"{paths['texts'].name}.tmp.{os.getpid()}"
+    )
+
+    try:
+        _write_cache_texts(tmp_texts, texts)
+        os.replace(tmp_texts, paths["texts"])
+
+        vectors = np.lib.format.open_memmap(
+            paths["vectors"],
+            mode="w+",
+            dtype="float32",
+            shape=(len(texts), dim),
+        )
+        mask = np.lib.format.open_memmap(
+            paths["mask"],
+            mode="w+",
+            dtype="bool",
+            shape=(len(texts),),
+        )
+        mask[:] = False
+        mask.flush()
+        vectors.flush()
+
+        print(
+            "Created embedding checkpoint: "
+            f"{paths['vectors']} with {len(texts):,} rows.",
+            flush=True,
+        )
+        return paths, vectors, mask
+    finally:
+        if tmp_texts.exists():
+            os.remove(tmp_texts)
+
+
+def _open_embedding_checkpoint(cache_file, texts, dim):
+    loaded_checkpoint = _load_embedding_checkpoint(cache_file, texts, dim)
+
+    if loaded_checkpoint is not None:
+        return loaded_checkpoint
+
+    return _create_embedding_checkpoint(cache_file, texts, dim)
+
+
+def _promote_embedding_checkpoint(cache_file, checkpoint_paths):
+    cache_paths = _embedding_cache_paths(cache_file)
+    os.replace(checkpoint_paths["vectors"], cache_paths["vectors"])
+    os.replace(checkpoint_paths["texts"], cache_paths["texts"])
+
+    if checkpoint_paths["mask"].exists():
+        os.remove(checkpoint_paths["mask"])
+
+    return cache_paths
 
 
 def _resolve_device(device=None):
@@ -611,9 +781,10 @@ class STEmbedder:
             encoded_rows = 0
             dimension_cache_text_to_idx = {}
             dimension_cache_vectors = None
-            cache_writer = None
-            cache_tmp_texts = None
-            cache_tmp_vectors = None
+            checkpoint_paths = None
+            checkpoint_vectors = None
+            checkpoint_mask = None
+            checkpoint_hits = 0
 
             if self._active_tensor_dim() is not None:
                 dimension_cache_file = self.get_dimension_cache_file(dim)
@@ -633,23 +804,27 @@ class STEmbedder:
 
                 if save and not has_complete_dimension_cache:
                     (
-                        cache_paths,
-                        cache_tmp_texts,
-                        cache_tmp_vectors,
-                    ) = _temporary_cache_paths(dimension_cache_file)
-                    cache_writer = np.lib.format.open_memmap(
-                        cache_tmp_vectors,
-                        mode="w+",
-                        dtype="float32",
-                        shape=(len(unique_texts), dim),
+                        checkpoint_paths,
+                        checkpoint_vectors,
+                        checkpoint_mask,
+                    ) = _open_embedding_checkpoint(
+                        dimension_cache_file,
+                        unique_texts,
+                        dim,
                     )
 
             dimension_cache_total = 0
+            checkpoint_total = 0
             full_cache_total = 0
             missing_total = 0
-            for text in unique_texts:
+            for position, text in enumerate(unique_texts):
                 if text in dimension_cache_text_to_idx:
                     dimension_cache_total += 1
+                elif (
+                    checkpoint_mask is not None
+                    and bool(checkpoint_mask[position])
+                ):
+                    checkpoint_total += 1
                 elif self._has_cached_embedding(text):
                     full_cache_total += 1
                 else:
@@ -658,6 +833,7 @@ class STEmbedder:
             print(
                 "Embedding index source summary: "
                 f"{dimension_cache_total:,} dim-cache rows, "
+                f"{checkpoint_total:,} checkpoint rows, "
                 f"{full_cache_total:,} full-cache rows, "
                 f"{missing_total:,} rows to encode.",
                 flush=True,
@@ -681,6 +857,7 @@ class STEmbedder:
                     batch = unique_texts[start:start + index_batch_size]
                     dimension_cached_positions = []
                     dimension_cached_texts = []
+                    checkpoint_cached_positions = []
                     full_cached_positions = []
                     full_cached_texts = []
                     missing_positions = []
@@ -692,6 +869,11 @@ class STEmbedder:
                         if text in dimension_cache_text_to_idx:
                             dimension_cached_positions.append(position)
                             dimension_cached_texts.append(text)
+                        elif (
+                            checkpoint_mask is not None
+                            and bool(checkpoint_mask[position])
+                        ):
+                            checkpoint_cached_positions.append(position)
                         elif self._has_cached_embedding(text):
                             full_cached_positions.append(position)
                             full_cached_texts.append(text)
@@ -713,11 +895,24 @@ class STEmbedder:
                         )
                         matrix[dimension_cached_positions] = cached_matrix
 
-                        if cache_writer is not None:
-                            cache_writer[dimension_cached_positions] = (
+                        if checkpoint_vectors is not None:
+                            checkpoint_vectors[dimension_cached_positions] = (
                                 cached_matrix_np
                             )
+                            checkpoint_mask[dimension_cached_positions] = True
                         dimension_cache_hits += len(dimension_cached_texts)
+
+                    if checkpoint_cached_positions:
+                        cached_matrix_np = checkpoint_vectors[
+                            checkpoint_cached_positions
+                        ].astype("float32", copy=False)
+                        cached_matrix = torch.as_tensor(
+                            cached_matrix_np,
+                            device=self.device,
+                            dtype=torch.float32,
+                        )
+                        matrix[checkpoint_cached_positions] = cached_matrix
+                        checkpoint_hits += len(checkpoint_cached_positions)
 
                     if full_cached_texts:
                         full_cached_matrix_np = np.stack([
@@ -731,10 +926,11 @@ class STEmbedder:
                         )
                         matrix[full_cached_positions] = full_cached_matrix
 
-                        if cache_writer is not None:
-                            cache_writer[full_cached_positions] = (
+                        if checkpoint_vectors is not None:
+                            checkpoint_vectors[full_cached_positions] = (
                                 full_cached_matrix_np
                             )
+                            checkpoint_mask[full_cached_positions] = True
                         full_cache_hits += len(full_cached_texts)
 
                     if missing_texts:
@@ -769,14 +965,18 @@ class STEmbedder:
                                 active_batch_embeddings
                             )
 
-                            if cache_writer is not None:
-                                cache_writer[missing_batch_positions] = (
+                            if checkpoint_vectors is not None:
+                                active_batch_embeddings_np = (
                                     active_batch_embeddings
                                     .detach()
                                     .cpu()
                                     .numpy()
                                     .astype("float32", copy=False)
                                 )
+                                checkpoint_vectors[missing_batch_positions] = (
+                                    active_batch_embeddings_np
+                                )
+                                checkpoint_mask[missing_batch_positions] = True
                             elif save:
                                 for text, embedding in zip(
                                     missing_batch,
@@ -793,6 +993,7 @@ class STEmbedder:
                             ):
                                 rows_filled = (
                                     dimension_cache_hits
+                                    + checkpoint_hits
                                     + full_cache_hits
                                     + encoded_rows
                                 )
@@ -817,20 +1018,37 @@ class STEmbedder:
                         f"({done / total_texts:.1%}), "
                         f"{encoded_rows:,} encoded, "
                         f"{dimension_cache_hits:,} dim-cache hits, "
+                        f"{checkpoint_hits:,} checkpoint hits, "
                         f"{full_cache_hits:,} full-cache hits, "
                         f"{time.time() - progress_start_time:.1f}s elapsed.",
                         flush=True,
                     )
 
-                if cache_writer is not None:
-                    cache_writer.flush()
-                    del cache_writer
-                    cache_writer = None
-                    _write_cache_texts(cache_tmp_texts, unique_texts)
+                    if checkpoint_vectors is not None:
+                        checkpoint_vectors.flush()
+                        checkpoint_mask.flush()
+
+                if checkpoint_vectors is not None:
+                    checkpoint_vectors.flush()
+                    checkpoint_mask.flush()
+                    checkpoint_filled = int(np.count_nonzero(checkpoint_mask))
+
+                    if checkpoint_filled != total_texts:
+                        raise RuntimeError(
+                            "Embedding checkpoint incomplete after fill: "
+                            f"{checkpoint_filled:,}/{total_texts:,} rows."
+                        )
+
+                    _close_memmap(checkpoint_vectors)
+                    _close_memmap(checkpoint_mask)
+                    checkpoint_vectors = None
+                    checkpoint_mask = None
                     _close_memmap(dimension_cache_vectors)
                     dimension_cache_vectors = None
-                    os.replace(cache_tmp_vectors, cache_paths["vectors"])
-                    os.replace(cache_tmp_texts, cache_paths["texts"])
+                    cache_paths = _promote_embedding_checkpoint(
+                        dimension_cache_file,
+                        checkpoint_paths,
+                    )
                     print(
                         "Saved sliced embedding cache for dim "
                         f"{dim}: {cache_paths['vectors']}",
@@ -842,12 +1060,13 @@ class STEmbedder:
                 if dimension_cache_vectors is not None:
                     _close_memmap(dimension_cache_vectors)
 
-                if cache_writer is not None:
-                    del cache_writer
+                if checkpoint_vectors is not None:
+                    checkpoint_vectors.flush()
+                    _close_memmap(checkpoint_vectors)
 
-                for path in (cache_tmp_texts, cache_tmp_vectors):
-                    if path is not None and Path(path).exists():
-                        os.remove(path)
+                if checkpoint_mask is not None:
+                    checkpoint_mask.flush()
+                    _close_memmap(checkpoint_mask)
 
         self.embedding_table = torch.nn.Embedding.from_pretrained(
             matrix,
