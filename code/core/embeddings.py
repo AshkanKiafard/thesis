@@ -300,36 +300,82 @@ class STEmbedder:
                 for text in unique_texts
             ])
         else:
-            missing_texts = [
-                text
-                for text in unique_texts
-                if text not in self.cache
-            ]
-            added = self.preload(
-                missing_texts,
-                batch_size=batch_size,
-                save=save,
-            )
-
             dim = self._active_tensor_dim() or self.get_model_dim()
             matrix = torch.empty(
                 (len(unique_texts), dim),
                 device=self.device,
                 dtype=torch.float32,
             )
+            added = 0
 
             index_batch_size = max(batch_size, 4096)
             for start in range(0, len(unique_texts), index_batch_size):
                 batch = unique_texts[start:start + index_batch_size]
-                batch_matrix = torch.as_tensor(
-                    np.stack([
-                        self._as_active_numpy(self.cache[text])
-                        for text in batch
-                    ]),
-                    device=self.device,
-                    dtype=torch.float32,
-                )
-                matrix[start:start + len(batch)] = batch_matrix
+                cached_positions = []
+                cached_texts = []
+                missing_positions = []
+                missing_texts = []
+
+                for offset, text in enumerate(batch):
+                    if text in self.cache:
+                        cached_positions.append(start + offset)
+                        cached_texts.append(text)
+                    else:
+                        missing_positions.append(start + offset)
+                        missing_texts.append(text)
+
+                if cached_texts:
+                    cached_matrix = torch.as_tensor(
+                        np.stack([
+                            self._as_active_numpy(self.cache[text])
+                            for text in cached_texts
+                        ]),
+                        device=self.device,
+                        dtype=torch.float32,
+                    )
+                    matrix[cached_positions] = cached_matrix
+
+                if missing_texts:
+                    for missing_start in range(0, len(missing_texts), batch_size):
+                        missing_batch = missing_texts[
+                            missing_start:missing_start + batch_size
+                        ]
+                        missing_batch_positions = missing_positions[
+                            missing_start:missing_start + batch_size
+                        ]
+
+                        with torch.no_grad():
+                            batch_embeddings = self.model.encode(
+                                missing_batch,
+                                batch_size=batch_size,
+                                convert_to_tensor=True,
+                                show_progress_bar=False,
+                                device=self.device,
+                            ).detach()
+
+                        batch_embeddings = batch_embeddings.reshape(
+                            batch_embeddings.shape[0],
+                            -1,
+                        )
+                        active_batch_embeddings = self._trim_matrix_to_active_dim(
+                            batch_embeddings.to(
+                                device=self.device,
+                                dtype=torch.float32,
+                            )
+                        )
+                        matrix[missing_batch_positions] = active_batch_embeddings
+
+                        if save:
+                            for text, embedding in zip(
+                                missing_batch,
+                                batch_embeddings,
+                            ):
+                                self.cache[text] = self._as_numpy(embedding)
+
+                        added += len(missing_batch)
+
+            if save and added:
+                self.save_cache()
 
         self.embedding_table = torch.nn.Embedding.from_pretrained(
             matrix,
