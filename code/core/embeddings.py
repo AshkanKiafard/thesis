@@ -538,29 +538,77 @@ class STEmbedder:
         This is the traversal fast path: successors can be fetched by integer
         index instead of repeatedly collecting tensors and stacking them.
         """
+        if batch_size <= 0:
+            raise ValueError("batch_size must be greater than 0")
+
         unique_texts = list(texts) if texts_are_unique else list(dict.fromkeys(texts))
         self._ensure_tensor_cache_dim()
+        total_texts = len(unique_texts)
+        active_dim = self._active_tensor_dim() or self.get_model_dim()
+        progress_start_time = time.time()
+
+        print(
+            "Preparing embedding index: "
+            f"{total_texts:,} texts, active dim {active_dim}, "
+            f"batch size {batch_size}, "
+            f"populate tensor cache {populate_tensor_cache}.",
+            flush=True,
+        )
 
         if not unique_texts:
             self.indexed_text_to_idx = {}
             self.embedding_table = None
+            print("Embedding index preparation skipped: no texts.", flush=True)
             return 0
 
         if populate_tensor_cache:
-            added = self.preload(unique_texts, batch_size=batch_size, save=save)
-
-            matrix = torch.stack([
-                self.embed(text)
+            cached_before = sum(
+                1
                 for text in unique_texts
-            ])
+                if self._has_cached_embedding(text)
+            )
+            missing_before = total_texts - cached_before
+            print(
+                "Embedding index preload source summary: "
+                f"{cached_before:,} cached, {missing_before:,} to encode.",
+                flush=True,
+            )
+
+            added = self.preload(unique_texts, batch_size=batch_size, save=save)
+            print(
+                "Embedding index preload complete: "
+                f"{added:,} newly encoded, "
+                f"{time.time() - progress_start_time:.1f}s elapsed.",
+                flush=True,
+            )
+
+            tensors = []
+            stack_batch_size = max(batch_size, 4096)
+            for start in range(0, total_texts, stack_batch_size):
+                batch = unique_texts[start:start + stack_batch_size]
+                tensors.extend(self.embed(text) for text in batch)
+
+                done = min(start + len(batch), total_texts)
+                print(
+                    "Embedding index stack progress: "
+                    f"{done:,}/{total_texts:,} rows "
+                    f"({done / total_texts:.1%}), "
+                    f"{time.time() - progress_start_time:.1f}s elapsed.",
+                    flush=True,
+                )
+
+            matrix = torch.stack(tensors)
         else:
-            dim = self._active_tensor_dim() or self.get_model_dim()
+            dim = active_dim
             matrix = torch.empty(
                 (len(unique_texts), dim),
                 device=self.device,
                 dtype=torch.float32,
             )
             added = 0
+            dimension_cache_hits = 0
+            full_cache_hits = 0
+            encoded_rows = 0
             dimension_cache_text_to_idx = {}
             dimension_cache_vectors = None
             cache_writer = None
@@ -596,7 +644,37 @@ class STEmbedder:
                         shape=(len(unique_texts), dim),
                     )
 
+            dimension_cache_total = 0
+            full_cache_total = 0
+            missing_total = 0
+            for text in unique_texts:
+                if text in dimension_cache_text_to_idx:
+                    dimension_cache_total += 1
+                elif self._has_cached_embedding(text):
+                    full_cache_total += 1
+                else:
+                    missing_total += 1
+
+            print(
+                "Embedding index source summary: "
+                f"{dimension_cache_total:,} dim-cache rows, "
+                f"{full_cache_total:,} full-cache rows, "
+                f"{missing_total:,} rows to encode.",
+                flush=True,
+            )
+
             index_batch_size = max(batch_size, 4096)
+            encode_report_interval = max(batch_size, 4096)
+            next_encode_report = (
+                min(encode_report_interval, missing_total)
+                if missing_total
+                else 0
+            )
+            print(
+                "Embedding index fill started: "
+                f"row batch size {index_batch_size:,}.",
+                flush=True,
+            )
 
             try:
                 for start in range(0, len(unique_texts), index_batch_size):
@@ -639,6 +717,7 @@ class STEmbedder:
                             cache_writer[dimension_cached_positions] = (
                                 cached_matrix_np
                             )
+                        dimension_cache_hits += len(dimension_cached_texts)
 
                     if full_cached_texts:
                         full_cached_matrix_np = np.stack([
@@ -656,6 +735,7 @@ class STEmbedder:
                             cache_writer[full_cached_positions] = (
                                 full_cached_matrix_np
                             )
+                        full_cache_hits += len(full_cached_texts)
 
                     if missing_texts:
                         for missing_start in range(0, len(missing_texts), batch_size):
@@ -705,6 +785,42 @@ class STEmbedder:
                                     self.cache[text] = self._as_numpy(embedding)
 
                             added += len(missing_batch)
+                            encoded_rows += len(missing_batch)
+
+                            if (
+                                missing_total
+                                and encoded_rows >= next_encode_report
+                            ):
+                                rows_filled = (
+                                    dimension_cache_hits
+                                    + full_cache_hits
+                                    + encoded_rows
+                                )
+                                print(
+                                    "Embedding index encode progress: "
+                                    f"{encoded_rows:,}/{missing_total:,} "
+                                    "missing rows encoded "
+                                    f"({encoded_rows / missing_total:.1%}), "
+                                    f"{rows_filled:,}/{total_texts:,} total "
+                                    "rows filled, "
+                                    f"{time.time() - progress_start_time:.1f}s "
+                                    "elapsed.",
+                                    flush=True,
+                                )
+                                while next_encode_report <= encoded_rows:
+                                    next_encode_report += encode_report_interval
+
+                    done = min(start + len(batch), total_texts)
+                    print(
+                        "Embedding index fill progress: "
+                        f"{done:,}/{total_texts:,} rows "
+                        f"({done / total_texts:.1%}), "
+                        f"{encoded_rows:,} encoded, "
+                        f"{dimension_cache_hits:,} dim-cache hits, "
+                        f"{full_cache_hits:,} full-cache hits, "
+                        f"{time.time() - progress_start_time:.1f}s elapsed.",
+                        flush=True,
+                    )
 
                 if cache_writer is not None:
                     cache_writer.flush()
@@ -717,7 +833,8 @@ class STEmbedder:
                     os.replace(cache_tmp_texts, cache_paths["texts"])
                     print(
                         "Saved sliced embedding cache for dim "
-                        f"{dim}: {cache_paths['vectors']}"
+                        f"{dim}: {cache_paths['vectors']}",
+                        flush=True,
                     )
                 elif save and added:
                     self.save_cache()
@@ -748,6 +865,13 @@ class STEmbedder:
                     self.tensor_cache.pop(text, None)
             else:
                 self.tensor_cache.clear()
+
+        print(
+            "Embedding index ready: "
+            f"{total_texts:,} rows, {added:,} newly encoded, "
+            f"{time.time() - progress_start_time:.1f}s elapsed.",
+            flush=True,
+        )
 
         return added
 

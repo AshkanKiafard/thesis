@@ -25,7 +25,7 @@ from core.graph_config import (
     get_graph_path,
     graph_choices,
 )
-from core.indexed_graph import build_indexed_graph
+from core.pre_embed import preload_graph_embeddings, preload_rl_embeddings
 from core.utils import (
     get_embedding_cache_suffix,
     get_fine_tuned_models,
@@ -330,130 +330,6 @@ def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=N
         )
 
         break
-
-
-def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
-    """
-    Warm graph-node embeddings before timed A*/Dijkstra evaluation.
-
-    STEmbedder keeps a persisted NumPy cache and a device tensor cache. This
-    step encodes missing graph nodes, restores already persisted embeddings onto
-    the active device, and optionally saves newly encoded nodes back to disk.
-    That keeps timed traversal from doing first-use encoding or CPU-to-GPU cache
-    conversion inside the traversal loop.
-    """
-    nodes = list(graph.nodes)
-    cached_before = sum(
-        1
-        for node in nodes
-        if embeder.has_cached_embedding(node)
-    )
-    avg_out_degree = graph.number_of_edges() / max(graph.number_of_nodes(), 1)
-    active_dim = embeder.get_active_embedding_dim()
-    model_dim = embeder.get_model_dim()
-    use_sliced_index_preload = active_dim < model_dim
-
-    print(
-        f"Preloading graph embeddings for {embeder.get_model_name()} "
-        f"({cached_before}/{len(nodes)} cached, active dim {active_dim})..."
-    )
-
-    start_time = time.time()
-    if use_sliced_index_preload:
-        print(
-            "Using sliced embedding index preload to avoid one device tensor "
-            "per graph node."
-        )
-        added = embeder.prepare_embedding_index(
-            nodes,
-            batch_size=batch_size,
-            save=save_cache,
-            discard_tensor_cache=True,
-            populate_tensor_cache=False,
-            texts_are_unique=True,
-        )
-    else:
-        added = embeder.preload(
-            nodes,
-            batch_size=batch_size,
-            save=save_cache,
-        )
-
-    # The indexed table is only worth its extra device memory on dense graphs.
-    if avg_out_degree >= 128 and not embeder.has_embedding_index():
-        embeder.prepare_embedding_index(
-            nodes,
-            batch_size=batch_size,
-            save=False,
-            texts_are_unique=True,
-        )
-
-    indexed_graph = None
-    if embeder.has_embedding_index():
-        index_start = time.time()
-        indexed_graph = build_indexed_graph(
-            graph,
-            embeder.indexed_text_to_idx,
-        )
-        print(
-            "Indexed graph built: "
-            f"{len(indexed_graph.idx_to_node):,} nodes in "
-            f"{time.time() - index_start:.1f}s"
-        )
-
-    elapsed = time.time() - start_time
-
-    print(
-        f"Embedding preload complete: {added} added, "
-        f"{cached_before + added}/{len(nodes)} graph nodes cached, "
-        f"{len(embeder.indexed_text_to_idx)} indexed, "
-        f"avg out-degree {avg_out_degree:.1f}, "
-        f"{elapsed:.1f}s"
-    )
-
-    return indexed_graph
-
-
-def preload_rl_embeddings(embeder, graph, data=None, batch_size=4096):
-    nodes = list(graph.nodes)
-    entity_texts = nodes + ["stop stop action"]
-
-    print(
-        "Preloading RL GloVe entity embeddings "
-        f"({len(entity_texts):,} entities)..."
-    )
-    start_time = time.time()
-    added_entities = embeder.preload_entities(
-        entity_texts,
-        batch_size=batch_size,
-    )
-
-    question_texts = []
-    if data is not None:
-        graph_nodes = set(graph.nodes)
-
-        for item in data:
-            cause = item["cause"]
-            effect = item["effect"]
-
-            if cause not in graph_nodes or effect not in graph_nodes:
-                continue
-
-            question_texts.append(
-                item.get("question", f"can {cause} cause {effect}?")
-            )
-
-    added_questions = embeder.preload_questions(question_texts)
-    added_relations = embeder.preload_relations(["stop"])
-    elapsed = time.time() - start_time
-
-    print(
-        "RL GloVe preload complete: "
-        f"{added_entities:,} entities added, "
-        f"{added_questions:,} questions added, "
-        f"{added_relations:,} relations added, "
-        f"{elapsed:.1f}s"
-    )
 
 
 def save_all_results_csv(all_results, output_csv_file):
@@ -803,15 +679,15 @@ def parse_args():
         "--skip-embedding-preload",
         action="store_true",
         help=(
-            "Do not prepopulate ST graph-node embeddings before timed A*/Dijkstra "
-            "evaluation."
+            "Do not load the precomputed ST graph-node embedding index before "
+            "timed A*/Dijkstra evaluation."
         ),
     )
     parser.add_argument(
         "--embedding-batch-size",
         type=int,
         default=64,
-        help="Batch size used when preloading ST graph-node embeddings.",
+        help="Batch size used when loading or backfilling the ST embedding index.",
     )
     parser.add_argument(
         "--embedding-device",
@@ -1279,26 +1155,23 @@ if __name__ == "__main__":
                 torch.cuda.empty_cache()
                 continue
 
-            if current_split == "test":
-                main_embeder.set_matryoshka_dim(selected_test_dimension)
-                print(
-                    "Preloading graph embeddings at Matryoshka dim "
-                    f"{selected_test_dimension}."
-                )
-
-            indexed_graph = None
-            if not args.skip_embedding_preload:
-                indexed_graph = preload_graph_embeddings(
-                    main_embeder,
-                    causal_graph,
-                    batch_size=args.embedding_batch_size,
-                    save_cache=not args.no_save_embedding_cache,
-                )
-
             for dim, pending_strategies, used_config in pending_work:
 
                 print(f"--- Dim: {dim} ---")
                 main_embeder.set_matryoshka_dim(dim)
+
+                indexed_graph = None
+                if not args.skip_embedding_preload:
+                    print(
+                        "Loading graph embedding index at Matryoshka dim "
+                        f"{dim}."
+                    )
+                    indexed_graph = preload_graph_embeddings(
+                        main_embeder,
+                        causal_graph,
+                        batch_size=args.embedding_batch_size,
+                        save_cache=not args.no_save_embedding_cache,
+                    )
 
                 if indexed_graph is not None and main_embeder.has_embedding_index():
                     used_config["_indexed_graph"] = indexed_graph

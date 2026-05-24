@@ -17,6 +17,7 @@ from core.graph_config import (
     get_graph_path,
     graph_choices,
 )
+from core.pre_embed import preload_graph_embeddings, preload_rl_embeddings
 from core.utils import (
     get_embedding_cache_suffix,
     traverse_graph,
@@ -249,48 +250,6 @@ def run_visited_nodes_loop(
     return summary
 
 
-def preload_rl_embeddings(embeder, graph, data=None, batch_size=4096):
-    nodes = list(graph.nodes)
-    entity_texts = nodes + ["stop stop action"]
-
-    print(
-        "Preloading RL GloVe entity embeddings "
-        f"({len(entity_texts):,} entities)..."
-    )
-    start_time = time.time()
-    added_entities = embeder.preload_entities(
-        entity_texts,
-        batch_size=batch_size,
-    )
-
-    question_texts = []
-    if data is not None:
-        graph_nodes = set(graph.nodes)
-
-        for item in data:
-            cause = item["cause"]
-            effect = item["effect"]
-
-            if cause not in graph_nodes or effect not in graph_nodes:
-                continue
-
-            question_texts.append(
-                item.get("question", f"can {cause} cause {effect}?")
-            )
-
-    added_questions = embeder.preload_questions(question_texts)
-    added_relations = embeder.preload_relations(["stop"])
-    elapsed = time.time() - start_time
-
-    print(
-        "RL GloVe preload complete: "
-        f"{added_entities:,} entities added, "
-        f"{added_questions:,} questions added, "
-        f"{added_relations:,} relations added, "
-        f"{elapsed:.1f}s"
-    )
-
-
 def get_embedding_index_config(graph_name):
     if graph_name in {"causalbank", "causalbank_full"}:
         return {"embedding_index_min_successors": 128}
@@ -489,21 +448,6 @@ if __name__ == "__main__":
                 device=args.embedding_device,
                 cache_suffix=embedding_cache_suffix,
             )
-            print("Preloading graph embeddings on the active device...")
-            main_embeder.preload(causal_graph.nodes, batch_size=64, save=True)
-
-            avg_out_degree = (
-                causal_graph.number_of_edges()
-                / max(causal_graph.number_of_nodes(), 1)
-            )
-
-            # The indexed table is only worth its extra device memory on dense graphs.
-            if avg_out_degree >= 128:
-                main_embeder.prepare_embedding_index(
-                    causal_graph.nodes,
-                    batch_size=64,
-                    save=False,
-                )
 
             # Collect one uncapped distribution per Matryoshka dimension.
             model_dim = main_embeder.get_model_dim()
@@ -516,19 +460,41 @@ if __name__ == "__main__":
 
             for dim in matryoshka_dims:
                 existing_results = load_results_file(output_json_file)
-
-                main_embeder.set_matryoshka_dim(dim)
-
-                for strategy_name, strategy in [
+                strategy_items = [
                     ("A*", ts.astar_traverse),
                     ("Dijkstra", ts.dijkstra_traverse),
-                ]:
-                    existing_results = load_results_file(output_json_file)
+                ]
+                pending_strategy_items = [
+                    (strategy_name, strategy)
+                    for strategy_name, strategy in strategy_items
+                    if not already_done(
+                        existing_results,
+                        model_name,
+                        dim,
+                        strategy_name,
+                    )
+                ]
 
-                    if already_done(existing_results, model_name, dim, strategy_name):
-                        print(f"Skipping {strategy_name} {model_name} dim {dim}")
-                        continue
+                if not pending_strategy_items:
+                    print(f"Skipping {model_name} dim {dim}")
+                    continue
 
+                main_embeder.set_matryoshka_dim(dim)
+                print(
+                    "Loading graph embedding index at Matryoshka dim "
+                    f"{dim}."
+                )
+                indexed_graph = preload_graph_embeddings(
+                    main_embeder,
+                    causal_graph,
+                    batch_size=64,
+                    save_cache=True,
+                )
+                runtime_config = dict(semantic_config)
+                if indexed_graph is not None and main_embeder.has_embedding_index():
+                    runtime_config["_indexed_graph"] = indexed_graph
+
+                for strategy_name, strategy in pending_strategy_items:
                     print(f"\n--- Running {strategy_name} dim {dim} ---")
 
                     strategy_result = run_visited_nodes_loop(
@@ -541,7 +507,7 @@ if __name__ == "__main__":
                             f"{strategy_name} | {model_name} | dim {dim} | "
                             f"{dataset_name} | {run_suffix}"
                         ),
-                        config=semantic_config,
+                        config=runtime_config,
                     )
 
                     save_result(

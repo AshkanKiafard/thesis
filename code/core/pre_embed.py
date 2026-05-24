@@ -3,6 +3,7 @@ import bz2
 import gc
 import json
 import sys
+import time
 from pathlib import Path
 
 # code/core/pre_embed.py -> code root is one level above this file.
@@ -14,6 +15,7 @@ if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
 from core.graph_config import get_graph_label, get_graph_path, graph_choices
+from core.indexed_graph import build_indexed_graph
 from core.utils import get_embedding_cache_suffix, get_fine_tuned_models
 
 
@@ -78,6 +80,25 @@ def parse_args():
             "Graph to pre-embed. If omitted, keep the legacy combined "
             "causenet+causalbank cache. Full graph variants are stored in "
             "separate graph-specific cache files."
+        ),
+    )
+    parser.add_argument(
+        "--dim",
+        type=int,
+        default=None,
+        help=(
+            "Optional Matryoshka dimension to pre-embed for the selected "
+            "single model. This writes the dim-specific cache instead of "
+            "forcing a full-dimension cache."
+        ),
+    )
+    parser.add_argument(
+        "--no-index",
+        action="store_true",
+        help=(
+            "Only fill the persisted embedding cache. By default this script "
+            "also builds the runtime embedding index table once, which validates "
+            "that evaluation can load the same indexed cache."
         ),
     )
 
@@ -165,6 +186,113 @@ def get_embedding_cache_path(embeddings_dir, model_path, cache_suffix=None):
     return embeddings_dir / f"{raw_name}_embeddings.npy"
 
 
+def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
+    """
+    Load or create graph-node embeddings and expose one runtime index table.
+
+    The persisted cache is the reusable preembedding artifact. The torch
+    embedding table and IndexedGraph are process-local runtime structures, so
+    evaluation still has to load them before timed traversal. Missing rows are
+    encoded here as a fallback when pre_embed.py was not run beforehand.
+    """
+    nodes = list(graph.nodes)
+    cached_before = sum(
+        1
+        for node in nodes
+        if embeder.has_cached_embedding(node)
+    )
+    active_dim = embeder.get_active_embedding_dim()
+    model_dim = embeder.get_model_dim()
+
+    print(
+        f"Preparing graph embedding index for {embeder.get_model_name()} "
+        f"({cached_before:,}/{len(nodes):,} cached, "
+        f"active dim {active_dim}, model dim {model_dim})...",
+        flush=True,
+    )
+
+    start_time = time.time()
+    added = embeder.prepare_embedding_index(
+        nodes,
+        batch_size=batch_size,
+        save=save_cache,
+        discard_tensor_cache=True,
+        populate_tensor_cache=False,
+        texts_are_unique=True,
+    )
+
+    index_start = time.time()
+    indexed_graph = build_indexed_graph(
+        graph,
+        embeder.indexed_text_to_idx,
+    )
+    print(
+        "Indexed graph built: "
+        f"{len(indexed_graph.idx_to_node):,} nodes in "
+        f"{time.time() - index_start:.1f}s",
+        flush=True,
+    )
+
+    elapsed = time.time() - start_time
+    print(
+        f"Graph embedding index ready: {added:,} added, "
+        f"{cached_before + added:,}/{len(nodes):,} graph nodes cached, "
+        f"{len(embeder.indexed_text_to_idx):,} indexed, "
+        f"{elapsed:.1f}s",
+        flush=True,
+    )
+
+    return indexed_graph
+
+
+def preload_rl_embeddings(embeder, graph, data=None, batch_size=4096):
+    """
+    Preload the GloVe embedding caches used by the RL traversal baseline.
+
+    RL uses separate entity/question/relation embedding paths, so warming these
+    caches before timed evaluation keeps preprocessing out of traversal timing.
+    """
+    nodes = list(graph.nodes)
+    entity_texts = nodes + ["stop stop action"]
+
+    print(
+        "Preloading RL GloVe entity embeddings "
+        f"({len(entity_texts):,} entities)..."
+    )
+    start_time = time.time()
+    added_entities = embeder.preload_entities(
+        entity_texts,
+        batch_size=batch_size,
+    )
+
+    question_texts = []
+    if data is not None:
+        graph_nodes = set(graph.nodes)
+
+        for item in data:
+            cause = item["cause"]
+            effect = item["effect"]
+
+            if cause not in graph_nodes or effect not in graph_nodes:
+                continue
+
+            question_texts.append(
+                item.get("question", f"can {cause} cause {effect}?")
+            )
+
+    added_questions = embeder.preload_questions(question_texts)
+    added_relations = embeder.preload_relations(["stop"])
+    elapsed = time.time() - start_time
+
+    print(
+        "RL GloVe preload complete: "
+        f"{added_entities:,} entities added, "
+        f"{added_questions:,} questions added, "
+        f"{added_relations:,} relations added, "
+        f"{elapsed:.1f}s"
+    )
+
+
 def pre_embed_model(
     model_path,
     graph_nodes,
@@ -172,6 +300,8 @@ def pre_embed_model(
     batch_size,
     embedding_device,
     cache_suffix=None,
+    dim=None,
+    build_index=True,
 ):
     import torch
 
@@ -181,6 +311,62 @@ def pre_embed_model(
     print(f"\n{'=' * 50}")
     print(f"PROCESSING MODEL: {model_path}")
     print(f"{'=' * 50}")
+
+    print("Loading model...")
+
+    distance_metric = get_model_distance_metric(model_path)
+    print(f"Distance metric: {distance_metric}")
+
+    embeder = STEmbedder(
+        model_path=model_path,
+        distance_metric=distance_metric,
+        device=embedding_device,
+        cache_suffix=cache_suffix,
+    )
+
+    model_dim = embeder.get_model_dim()
+    if dim is not None:
+        if dim > model_dim:
+            raise ValueError(
+                f"Requested dim {dim}, but {model_path} only has "
+                f"{model_dim} embedding dimensions."
+            )
+        embeder.set_matryoshka_dim(dim)
+
+    active_dim = embeder.get_active_embedding_dim()
+    print(f"Model dim: {model_dim}")
+    print(f"Active dim: {active_dim}")
+
+    if build_index:
+        cached_before = sum(
+            1
+            for node in graph_nodes
+            if embeder.has_cached_embedding(node)
+        )
+        print(
+            "Preparing embedding cache and runtime index table "
+            f"({cached_before:,}/{len(graph_nodes):,} cached).",
+            flush=True,
+        )
+        added = embeder.prepare_embedding_index(
+            graph_nodes,
+            batch_size=batch_size,
+            save=True,
+            discard_tensor_cache=True,
+            populate_tensor_cache=False,
+            texts_are_unique=True,
+        )
+        print(
+            "Preembedding complete: "
+            f"{added:,} newly encoded, "
+            f"{len(embeder.indexed_text_to_idx):,} indexed rows.",
+            flush=True,
+        )
+        print("Cleaning up memory ...")
+        del embeder
+        gc.collect()
+        torch.cuda.empty_cache()
+        return
 
     save_path = get_embedding_cache_path(
         embeddings_dir,
@@ -199,19 +385,10 @@ def pre_embed_model(
 
     if not uncached_nodes:
         print("All nodes already cached. Skipping computation.")
+        del embeder
+        gc.collect()
+        torch.cuda.empty_cache()
         return
-
-    print("Loading model...")
-
-    distance_metric = get_model_distance_metric(model_path)
-    print(f"Distance metric: {distance_metric}")
-
-    embeder = STEmbedder(
-        model_path=model_path,
-        distance_metric=distance_metric,
-        device=embedding_device,
-        cache_suffix=cache_suffix,
-    )
 
     total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
     new_embeddings = {}
@@ -231,7 +408,8 @@ def pre_embed_model(
         if batch_index % 10 == 0:
             print(
                 f"Processed batch {batch_index + 1}/{total_batches} "
-                f"(Total: {start + len(batch)}/{len(uncached_nodes)})"
+                f"(Total: {start + len(batch)}/{len(uncached_nodes)})",
+                flush=True,
             )
 
     print(f"Saving embeddings to {save_path}...")
@@ -256,12 +434,21 @@ def main():
 
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be greater than 0")
+    if args.dim is not None and args.dim <= 0:
+        raise ValueError("--dim must be greater than 0")
+    if args.dim is not None and args.single_model is None:
+        raise ValueError("--dim requires a single positional model or --model-path")
+    if args.dim is not None and args.no_index:
+        raise ValueError("--dim-specific preembedding requires index mode")
 
     embeddings_dir = DATA_DIR / "embeddings"
     embeddings_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Run suffix: {args.run_suffix}")
     print(f"Embedding device: {args.embedding_device}")
+    if args.dim is not None:
+        print(f"Matryoshka dim: {args.dim}")
+    print(f"Build runtime embedding index: {not args.no_index}")
 
     selected_graphs = (
         (args.graph,)
@@ -316,6 +503,8 @@ def main():
             batch_size=args.batch_size,
             embedding_device=args.embedding_device,
             cache_suffix=cache_suffix,
+            dim=args.dim,
+            build_index=not args.no_index,
         )
 
     print("\nAll models processed.")
