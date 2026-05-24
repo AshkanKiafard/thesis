@@ -233,6 +233,25 @@ def save_st_embedding_cache(
                 os.remove(path)
 
 
+def _temporary_cache_paths(cache_file):
+    paths = _embedding_cache_paths(cache_file)
+    tmp_texts = paths["texts"].with_name(
+        f"{paths['texts'].name}.tmp.{os.getpid()}"
+    )
+    tmp_vectors = paths["vectors"].with_name(
+        f"{paths['vectors'].name}.tmp.{os.getpid()}"
+    )
+
+    return paths, tmp_texts, tmp_vectors
+
+
+def _write_cache_texts(path, texts):
+    with open(path, "w", encoding="utf-8") as file:
+        for text in texts:
+            file.write(json.dumps(text, ensure_ascii=False))
+            file.write("\n")
+
+
 def _resolve_device(device=None):
     if device is None or device == "auto":
         return "cuda" if torch.cuda.is_available() else "cpu"
@@ -409,6 +428,17 @@ class STEmbedder:
     def get_active_embedding_dim(self):
         return self._active_tensor_dim() or self.get_model_dim()
 
+    def get_dimension_cache_file(self, dim: int) -> Path:
+        suffix = f"_dim{dim}_embeddings.npy"
+        name = self.cache_file.name
+
+        if name.endswith("_embeddings.npy"):
+            return self.cache_file.with_name(
+                f"{name[:-len('_embeddings.npy')]}{suffix}"
+            )
+
+        return self.cache_file.with_name(f"{self.cache_file.stem}_dim{dim}.npy")
+
     def embed(self, text: str) -> torch.Tensor:
         self._ensure_tensor_cache_dim()
 
@@ -531,75 +561,176 @@ class STEmbedder:
                 dtype=torch.float32,
             )
             added = 0
+            dimension_cache_text_to_idx = {}
+            dimension_cache_vectors = None
+            cache_writer = None
+            cache_tmp_texts = None
+            cache_tmp_vectors = None
+
+            if self._active_tensor_dim() is not None:
+                dimension_cache_file = self.get_dimension_cache_file(dim)
+                (
+                    _,
+                    dimension_cache_text_to_idx,
+                    dimension_cache_vectors,
+                ) = load_st_embedding_cache_index(
+                    dimension_cache_file,
+                    allow_legacy_pickle=False,
+                )
+
+                has_complete_dimension_cache = all(
+                    text in dimension_cache_text_to_idx
+                    for text in unique_texts
+                )
+
+                if save and not has_complete_dimension_cache:
+                    (
+                        cache_paths,
+                        cache_tmp_texts,
+                        cache_tmp_vectors,
+                    ) = _temporary_cache_paths(dimension_cache_file)
+                    cache_writer = np.lib.format.open_memmap(
+                        cache_tmp_vectors,
+                        mode="w+",
+                        dtype="float32",
+                        shape=(len(unique_texts), dim),
+                    )
 
             index_batch_size = max(batch_size, 4096)
-            for start in range(0, len(unique_texts), index_batch_size):
-                batch = unique_texts[start:start + index_batch_size]
-                cached_positions = []
-                cached_texts = []
-                missing_positions = []
-                missing_texts = []
 
-                for offset, text in enumerate(batch):
-                    if self._has_cached_embedding(text):
-                        cached_positions.append(start + offset)
-                        cached_texts.append(text)
-                    else:
-                        missing_positions.append(start + offset)
-                        missing_texts.append(text)
+            try:
+                for start in range(0, len(unique_texts), index_batch_size):
+                    batch = unique_texts[start:start + index_batch_size]
+                    dimension_cached_positions = []
+                    dimension_cached_texts = []
+                    full_cached_positions = []
+                    full_cached_texts = []
+                    missing_positions = []
+                    missing_texts = []
 
-                if cached_texts:
-                    cached_matrix = torch.as_tensor(
-                        np.stack([
-                            self._as_active_numpy(self._get_cached_embedding(text))
-                            for text in cached_texts
-                        ]),
-                        device=self.device,
-                        dtype=torch.float32,
-                    )
-                    matrix[cached_positions] = cached_matrix
+                    for offset, text in enumerate(batch):
+                        position = start + offset
 
-                if missing_texts:
-                    for missing_start in range(0, len(missing_texts), batch_size):
-                        missing_batch = missing_texts[
-                            missing_start:missing_start + batch_size
-                        ]
-                        missing_batch_positions = missing_positions[
-                            missing_start:missing_start + batch_size
-                        ]
+                        if text in dimension_cache_text_to_idx:
+                            dimension_cached_positions.append(position)
+                            dimension_cached_texts.append(text)
+                        elif self._has_cached_embedding(text):
+                            full_cached_positions.append(position)
+                            full_cached_texts.append(text)
+                        else:
+                            missing_positions.append(position)
+                            missing_texts.append(text)
 
-                        with torch.no_grad():
-                            batch_embeddings = self.model.encode(
-                                missing_batch,
-                                batch_size=batch_size,
-                                convert_to_tensor=True,
-                                show_progress_bar=False,
-                                device=self.device,
-                            ).detach()
-
-                        batch_embeddings = batch_embeddings.reshape(
-                            batch_embeddings.shape[0],
-                            -1,
+                    if dimension_cached_texts:
+                        cached_matrix_np = np.stack([
+                            dimension_cache_vectors[
+                                dimension_cache_text_to_idx[text]
+                            ].astype("float32", copy=False)
+                            for text in dimension_cached_texts
+                        ])
+                        cached_matrix = torch.as_tensor(
+                            cached_matrix_np,
+                            device=self.device,
+                            dtype=torch.float32,
                         )
-                        active_batch_embeddings = self._trim_matrix_to_active_dim(
-                            batch_embeddings.to(
-                                device=self.device,
-                                dtype=torch.float32,
+                        matrix[dimension_cached_positions] = cached_matrix
+
+                        if cache_writer is not None:
+                            cache_writer[dimension_cached_positions] = (
+                                cached_matrix_np
                             )
+
+                    if full_cached_texts:
+                        full_cached_matrix_np = np.stack([
+                            self._as_active_numpy(self._get_cached_embedding(text))
+                            for text in full_cached_texts
+                        ])
+                        full_cached_matrix = torch.as_tensor(
+                            full_cached_matrix_np,
+                            device=self.device,
+                            dtype=torch.float32,
                         )
-                        matrix[missing_batch_positions] = active_batch_embeddings
+                        matrix[full_cached_positions] = full_cached_matrix
 
-                        if save:
-                            for text, embedding in zip(
-                                missing_batch,
-                                batch_embeddings,
-                            ):
-                                self.cache[text] = self._as_numpy(embedding)
+                        if cache_writer is not None:
+                            cache_writer[full_cached_positions] = (
+                                full_cached_matrix_np
+                            )
 
-                        added += len(missing_batch)
+                    if missing_texts:
+                        for missing_start in range(0, len(missing_texts), batch_size):
+                            missing_batch = missing_texts[
+                                missing_start:missing_start + batch_size
+                            ]
+                            missing_batch_positions = missing_positions[
+                                missing_start:missing_start + batch_size
+                            ]
 
-            if save and added:
-                self.save_cache()
+                            with torch.no_grad():
+                                batch_embeddings = self.model.encode(
+                                    missing_batch,
+                                    batch_size=batch_size,
+                                    convert_to_tensor=True,
+                                    show_progress_bar=False,
+                                    device=self.device,
+                                ).detach()
+
+                            batch_embeddings = batch_embeddings.reshape(
+                                batch_embeddings.shape[0],
+                                -1,
+                            )
+                            active_batch_embeddings = self._trim_matrix_to_active_dim(
+                                batch_embeddings.to(
+                                    device=self.device,
+                                    dtype=torch.float32,
+                                )
+                            )
+                            matrix[missing_batch_positions] = (
+                                active_batch_embeddings
+                            )
+
+                            if cache_writer is not None:
+                                cache_writer[missing_batch_positions] = (
+                                    active_batch_embeddings
+                                    .detach()
+                                    .cpu()
+                                    .numpy()
+                                    .astype("float32", copy=False)
+                                )
+                            elif save:
+                                for text, embedding in zip(
+                                    missing_batch,
+                                    batch_embeddings,
+                                ):
+                                    self.cache[text] = self._as_numpy(embedding)
+
+                            added += len(missing_batch)
+
+                if cache_writer is not None:
+                    cache_writer.flush()
+                    del cache_writer
+                    cache_writer = None
+                    _write_cache_texts(cache_tmp_texts, unique_texts)
+                    _close_memmap(dimension_cache_vectors)
+                    dimension_cache_vectors = None
+                    os.replace(cache_tmp_vectors, cache_paths["vectors"])
+                    os.replace(cache_tmp_texts, cache_paths["texts"])
+                    print(
+                        "Saved sliced embedding cache for dim "
+                        f"{dim}: {cache_paths['vectors']}"
+                    )
+                elif save and added:
+                    self.save_cache()
+            finally:
+                if dimension_cache_vectors is not None:
+                    _close_memmap(dimension_cache_vectors)
+
+                if cache_writer is not None:
+                    del cache_writer
+
+                for path in (cache_tmp_texts, cache_tmp_vectors):
+                    if path is not None and Path(path).exists():
+                        os.remove(path)
 
         self.embedding_table = torch.nn.Embedding.from_pretrained(
             matrix,

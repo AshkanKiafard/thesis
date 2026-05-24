@@ -367,7 +367,7 @@ def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
         added = embeder.prepare_embedding_index(
             nodes,
             batch_size=batch_size,
-            save=False,
+            save=save_cache,
             discard_tensor_cache=True,
             populate_tensor_cache=False,
             texts_are_unique=True,
