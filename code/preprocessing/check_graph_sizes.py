@@ -8,7 +8,7 @@ from core.graph_config import get_graph_label, get_graph_path, graph_choices
 from core.utils import load_causal_graph
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank")
+DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank", "causalbank_full")
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "data" / "reports" / "graph_sizes"
 
 
