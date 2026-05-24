@@ -142,17 +142,18 @@ def load_graph_nodes_for_pre_embed(graph_name, graph_path):
 
 
 def load_embedding_cache(save_path):
-    from core.embeddings import load_st_embedding_cache
+    from core.embeddings import load_st_embedding_cache_index
 
-    embeddings = load_st_embedding_cache(save_path)
+    embeddings, text_to_idx, vectors = load_st_embedding_cache_index(save_path)
+    num_embeddings = len(embeddings) + len(text_to_idx)
 
-    if embeddings:
-        print(f"Loaded {len(embeddings)} existing embeddings from {save_path}")
+    if num_embeddings:
+        print(f"Loaded {num_embeddings} existing embeddings from {save_path}")
 
     else:
         print("No existing cache found. Starting fresh.")
 
-    return embeddings
+    return embeddings, text_to_idx, vectors
 
 
 def get_embedding_cache_path(embeddings_dir, model_path, cache_suffix=None):
@@ -187,9 +188,13 @@ def pre_embed_model(
         cache_suffix=cache_suffix,
     )
 
-    embeddings = load_embedding_cache(save_path)
+    embeddings, text_to_idx, vectors = load_embedding_cache(save_path)
 
-    uncached_nodes = [node for node in graph_nodes if node not in embeddings]
+    uncached_nodes = [
+        node
+        for node in graph_nodes
+        if node not in embeddings and node not in text_to_idx
+    ]
     print(f"Found {len(uncached_nodes)} nodes that need embedding.")
 
     if not uncached_nodes:
@@ -209,6 +214,7 @@ def pre_embed_model(
     )
 
     total_batches = (len(uncached_nodes) + batch_size - 1) // batch_size
+    new_embeddings = {}
 
     for start in range(0, len(uncached_nodes), batch_size):
         batch = uncached_nodes[start : start + batch_size]
@@ -219,7 +225,7 @@ def pre_embed_model(
         batch_embeddings = [embeder.embed_numpy(node) for node in batch]
 
         for node, emb in zip(batch, batch_embeddings):
-            embeddings[node] = emb
+            new_embeddings[node] = emb
 
         batch_index = start // batch_size
         if batch_index % 10 == 0:
@@ -229,7 +235,13 @@ def pre_embed_model(
             )
 
     print(f"Saving embeddings to {save_path}...")
-    save_st_embedding_cache(save_path, embeddings)
+    embeddings.update(new_embeddings)
+    save_st_embedding_cache(
+        save_path,
+        embeddings,
+        existing_text_to_idx=text_to_idx,
+        existing_vectors=vectors,
+    )
     print("Save complete.")
 
     print("Cleaning up memory ...")

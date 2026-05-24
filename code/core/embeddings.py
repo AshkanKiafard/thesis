@@ -38,85 +38,138 @@ def _move_corrupt_file(path):
     return corrupt_path
 
 
-def load_st_embedding_cache(cache_file, allow_legacy_pickle=True):
-    paths = _embedding_cache_paths(cache_file)
+def _load_non_pickle_embedding_cache(paths):
+    if not paths["texts"].exists() or not paths["vectors"].exists():
+        return None
 
-    if paths["texts"].exists() and paths["vectors"].exists():
-        try:
-            vectors = np.load(
-                paths["vectors"],
-                allow_pickle=False,
-                mmap_mode="r",
-            )
-            with open(paths["texts"], encoding="utf-8") as file:
-                texts = [json.loads(line) for line in file]
+    try:
+        vectors = np.load(
+            paths["vectors"],
+            allow_pickle=False,
+            mmap_mode="r",
+        )
+        with open(paths["texts"], encoding="utf-8") as file:
+            texts = [json.loads(line) for line in file]
 
-            if len(texts) != vectors.shape[0]:
-                raise ValueError(
-                    "Cache text/vector length mismatch: "
-                    f"{len(texts)} texts, {vectors.shape[0]} vectors"
-                )
+        if len(texts) != vectors.shape[0]:
+            raise ValueError(
+                "Cache text/vector length mismatch: "
+                f"{len(texts)} texts, {vectors.shape[0]} vectors"
+            )
 
-            cache = {
-                text: vectors[index].astype("float32", copy=False)
-                for index, text in enumerate(texts)
-            }
-            print(
-                "Loaded cached embeddings from "
-                f"{paths['texts']} and {paths['vectors']}"
-            )
-            return cache
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            print(
-                "Ignoring corrupt non-pickle embedding cache "
-                f"{paths['texts']} / {paths['vectors']}: {exc}."
-            )
-            for path in (paths["texts"], paths["vectors"]):
-                try:
-                    moved_path = _move_corrupt_file(path)
-                    if moved_path is not None:
-                        print(f"Moved corrupt cache file to {moved_path}.")
-                except OSError:
-                    print(f"Could not move corrupt cache file {path}.")
-
-    if allow_legacy_pickle and paths["legacy"].exists():
-        try:
-            cache = np.load(paths["legacy"], allow_pickle=True).item()
-            print(
-                "Loaded legacy pickle embedding cache from "
-                f"{paths['legacy']}. Resaving will convert it to "
-                "the non-pickle cache format."
-            )
-            return cache
-        except (EOFError, OSError, ValueError) as exc:
+        print(
+            "Loaded cached embeddings from "
+            f"{paths['texts']} and {paths['vectors']}"
+        )
+        return texts, vectors
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(
+            "Ignoring corrupt non-pickle embedding cache "
+            f"{paths['texts']} / {paths['vectors']}: {exc}."
+        )
+        for path in (paths["texts"], paths["vectors"]):
             try:
-                moved_path = _move_corrupt_file(paths["legacy"])
-                print(
-                    "Ignoring corrupt legacy embedding cache "
-                    f"{paths['legacy']}: {exc}. "
-                    f"Moved it to {moved_path}."
-                )
+                moved_path = _move_corrupt_file(path)
+                if moved_path is not None:
+                    print(f"Moved corrupt cache file to {moved_path}.")
             except OSError:
-                print(
-                    "Ignoring corrupt legacy embedding cache "
-                    f"{paths['legacy']}: {exc}. "
-                    "Could not move the corrupt file."
-                )
+                print(f"Could not move corrupt cache file {path}.")
+
+    return None
+
+
+def _load_legacy_pickle_embedding_cache(paths, allow_legacy_pickle=True):
+    if not allow_legacy_pickle or not paths["legacy"].exists():
+        return {}
+
+    try:
+        cache = np.load(paths["legacy"], allow_pickle=True).item()
+        print(
+            "Loaded legacy pickle embedding cache from "
+            f"{paths['legacy']}. Resaving will convert it to "
+            "the non-pickle cache format."
+        )
+        return cache
+    except (EOFError, OSError, ValueError) as exc:
+        try:
+            moved_path = _move_corrupt_file(paths["legacy"])
+            print(
+                "Ignoring corrupt legacy embedding cache "
+                f"{paths['legacy']}: {exc}. "
+                f"Moved it to {moved_path}."
+            )
+        except OSError:
+            print(
+                "Ignoring corrupt legacy embedding cache "
+                f"{paths['legacy']}: {exc}. "
+                "Could not move the corrupt file."
+            )
 
     return {}
 
 
-def save_st_embedding_cache(cache_file, cache):
+def load_st_embedding_cache(cache_file, allow_legacy_pickle=True):
     paths = _embedding_cache_paths(cache_file)
-    texts = list(cache.keys())
+    non_pickle_cache = _load_non_pickle_embedding_cache(paths)
 
-    if texts:
-        vectors = np.stack([
-            np.asarray(cache[text], dtype="float32")
-            for text in texts
-        ])
+    if non_pickle_cache is not None:
+        texts, vectors = non_pickle_cache
+        return {
+            text: vectors[index].astype("float32", copy=False)
+            for index, text in enumerate(texts)
+        }
+
+    return _load_legacy_pickle_embedding_cache(
+        paths,
+        allow_legacy_pickle=allow_legacy_pickle,
+    )
+
+
+def load_st_embedding_cache_index(cache_file, allow_legacy_pickle=True):
+    paths = _embedding_cache_paths(cache_file)
+    non_pickle_cache = _load_non_pickle_embedding_cache(paths)
+
+    if non_pickle_cache is not None:
+        texts, vectors = non_pickle_cache
+        text_to_idx = {
+            text: index
+            for index, text in enumerate(texts)
+        }
+        return {}, text_to_idx, vectors
+
+    cache = _load_legacy_pickle_embedding_cache(
+        paths,
+        allow_legacy_pickle=allow_legacy_pickle,
+    )
+
+    return cache, {}, None
+
+
+def save_st_embedding_cache(
+    cache_file,
+    cache,
+    existing_text_to_idx=None,
+    existing_vectors=None,
+):
+    paths = _embedding_cache_paths(cache_file)
+    existing_text_to_idx = existing_text_to_idx or {}
+    existing_texts = sorted(
+        existing_text_to_idx,
+        key=existing_text_to_idx.__getitem__,
+    )
+    new_texts = [
+        text
+        for text in cache
+        if text not in existing_text_to_idx
+    ]
+    texts = existing_texts + new_texts
+
+    if existing_vectors is not None and existing_vectors.shape[0] > 0:
+        embedding_dim = existing_vectors.shape[1]
+    elif new_texts:
+        embedding_dim = np.asarray(cache[new_texts[0]], dtype="float32").size
     else:
-        vectors = np.empty((0, 0), dtype="float32")
+        embedding_dim = 0
 
     tmp_texts = paths["texts"].with_name(
         f"{paths['texts'].name}.tmp.{os.getpid()}"
@@ -126,8 +179,38 @@ def save_st_embedding_cache(cache_file, cache):
     )
 
     try:
-        with open(tmp_vectors, "wb") as file:
-            np.save(file, vectors, allow_pickle=False)
+        vectors = np.lib.format.open_memmap(
+            tmp_vectors,
+            mode="w+",
+            dtype="float32",
+            shape=(len(texts), embedding_dim),
+        )
+
+        write_start = 0
+
+        if existing_vectors is not None and existing_texts:
+            chunk_size = 100_000
+            for start in range(0, len(existing_texts), chunk_size):
+                end = min(start + chunk_size, len(existing_texts))
+                vectors[start:end] = existing_vectors[start:end]
+
+            write_start = len(existing_texts)
+
+        if new_texts:
+            chunk_size = 100_000
+            for start in range(0, len(new_texts), chunk_size):
+                batch_texts = new_texts[start:start + chunk_size]
+                batch_vectors = np.stack([
+                    np.asarray(cache[text], dtype="float32")
+                    for text in batch_texts
+                ])
+                target_start = write_start + start
+                vectors[target_start:target_start + len(batch_texts)] = (
+                    batch_vectors
+                )
+
+        vectors.flush()
+        del vectors
 
         with open(tmp_texts, "w", encoding="utf-8") as file:
             for text in texts:
@@ -178,6 +261,8 @@ class STEmbedder:
         # CPU cache is persisted as NumPy. Tensor cache keeps hot embeddings on
         # the active torch device for traversal distance computations.
         self.cache = {}
+        self.cache_text_to_idx = {}
+        self.cache_vectors = None
         self.tensor_cache = {}
         self.tensor_cache_dim = None
         self.indexed_text_to_idx = {}
@@ -192,7 +277,11 @@ class STEmbedder:
             cache_name = f"{cache_name}_{cache_suffix}"
         self.cache_file = cache_dir / f"{cache_name}_embeddings.npy"
 
-        self.cache = load_st_embedding_cache(self.cache_file)
+        (
+            self.cache,
+            self.cache_text_to_idx,
+            self.cache_vectors,
+        ) = load_st_embedding_cache_index(self.cache_file)
 
         tokenizer_kwargs = {}
         # Fix known tokenizer regex issue for Mistral/Qwen-style tokenizers.
@@ -263,6 +352,19 @@ class STEmbedder:
 
         return array
 
+    def _has_cached_embedding(self, text: str) -> bool:
+        return text in self.cache or text in self.cache_text_to_idx
+
+    def _get_cached_embedding(self, text: str):
+        if text in self.cache:
+            return self.cache[text]
+
+        index = self.cache_text_to_idx.get(text)
+        if index is None or self.cache_vectors is None:
+            return None
+
+        return self.cache_vectors[index]
+
     def _clear_device_cache(self):
         self.tensor_cache.clear()
         self.indexed_text_to_idx = {}
@@ -306,8 +408,9 @@ class STEmbedder:
         if self.embedding_table is not None and index is not None:
             return self.embedding_table.weight[index].flatten()
 
-        if text in self.cache:
-            tensor = self._as_active_tensor(self.cache[text])
+        cached_embedding = self._get_cached_embedding(text)
+        if cached_embedding is not None:
+            tensor = self._as_active_tensor(cached_embedding)
             self.tensor_cache[text] = tensor
             return tensor
 
@@ -326,10 +429,13 @@ class STEmbedder:
         return tensor
 
     def embed_numpy(self, text: str) -> np.ndarray:
-        if text not in self.cache:
-            self.embed(text)
+        cached_embedding = self._get_cached_embedding(text)
 
-        return self._as_numpy(self.cache[text])
+        if cached_embedding is None:
+            self.embed(text)
+            cached_embedding = self._get_cached_embedding(text)
+
+        return self._as_numpy(cached_embedding)
 
     def preload(self, texts, batch_size: int = 64, save: bool = True) -> int:
         if batch_size <= 0:
@@ -340,13 +446,14 @@ class STEmbedder:
         unique_texts = list(dict.fromkeys(texts))
 
         for text in unique_texts:
-            if text in self.cache and text not in self.tensor_cache:
-                self.tensor_cache[text] = self._as_active_tensor(self.cache[text])
+            if self._has_cached_embedding(text) and text not in self.tensor_cache:
+                cached_embedding = self._get_cached_embedding(text)
+                self.tensor_cache[text] = self._as_active_tensor(cached_embedding)
 
         missing_texts = [
             text
             for text in unique_texts
-            if text not in self.cache
+            if not self._has_cached_embedding(text)
         ]
 
         if not missing_texts:
@@ -423,7 +530,7 @@ class STEmbedder:
                 missing_texts = []
 
                 for offset, text in enumerate(batch):
-                    if text in self.cache:
+                    if self._has_cached_embedding(text):
                         cached_positions.append(start + offset)
                         cached_texts.append(text)
                     else:
@@ -433,7 +540,7 @@ class STEmbedder:
                 if cached_texts:
                     cached_matrix = torch.as_tensor(
                         np.stack([
-                            self._as_active_numpy(self.cache[text])
+                            self._as_active_numpy(self._get_cached_embedding(text))
                             for text in cached_texts
                         ]),
                         device=self.device,
@@ -539,7 +646,12 @@ class STEmbedder:
             text: self._as_numpy(embedding)
             for text, embedding in self.cache.items()
         }
-        save_st_embedding_cache(self.cache_file, serializable_cache)
+        save_st_embedding_cache(
+            self.cache_file,
+            serializable_cache,
+            existing_text_to_idx=self.cache_text_to_idx,
+            existing_vectors=self.cache_vectors,
+        )
 
     def get_distance(self, embed1, embed2):
         e1 = self._trim_to_active_dim(self._as_tensor(embed1))
