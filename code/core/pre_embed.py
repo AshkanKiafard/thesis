@@ -142,15 +142,17 @@ def load_graph_nodes_for_pre_embed(graph_name, graph_path):
 
 
 def load_embedding_cache(save_path):
-    import numpy as np
+    from core.embeddings import load_st_embedding_cache
 
-    try:
-        embeddings = np.load(save_path, allow_pickle=True).item()
+    embeddings = load_st_embedding_cache(save_path)
+
+    if embeddings:
         print(f"Loaded {len(embeddings)} existing embeddings from {save_path}")
-        return embeddings
-    except FileNotFoundError:
+
+    else:
         print("No existing cache found. Starting fresh.")
-        return {}
+
+    return embeddings
 
 
 def get_embedding_cache_path(embeddings_dir, model_path, cache_suffix=None):
@@ -170,10 +172,9 @@ def pre_embed_model(
     embedding_device,
     cache_suffix=None,
 ):
-    import numpy as np
     import torch
 
-    from core.embeddings import STEmbedder
+    from core.embeddings import STEmbedder, save_st_embedding_cache
     from core.utils import get_model_distance_metric
 
     print(f"\n{'=' * 50}")
@@ -228,7 +229,7 @@ def pre_embed_model(
             )
 
     print(f"Saving embeddings to {save_path}...")
-    np.save(save_path, embeddings)
+    save_st_embedding_cache(save_path, embeddings)
     print("Save complete.")
 
     print("Cleaning up memory ...")

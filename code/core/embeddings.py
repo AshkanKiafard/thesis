@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from pathlib import Path
@@ -13,6 +14,132 @@ from core.constants import DistanceMetric
 # code/core/embeddings.py -> repo root is two levels above this file.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "code" / "data"
+
+
+def _embedding_cache_paths(cache_file):
+    cache_file = Path(cache_file)
+    cache_stem = cache_file.with_suffix("")
+
+    return {
+        "legacy": cache_file,
+        "texts": cache_stem.with_name(f"{cache_stem.name}_texts.jsonl"),
+        "vectors": cache_stem.with_name(f"{cache_stem.name}_vectors.npy"),
+    }
+
+
+def _move_corrupt_file(path):
+    path = Path(path)
+
+    if not path.exists():
+        return None
+
+    corrupt_path = path.with_name(f"{path.name}.corrupt.{int(time.time())}")
+    os.replace(path, corrupt_path)
+    return corrupt_path
+
+
+def load_st_embedding_cache(cache_file, allow_legacy_pickle=True):
+    paths = _embedding_cache_paths(cache_file)
+
+    if paths["texts"].exists() and paths["vectors"].exists():
+        try:
+            vectors = np.load(
+                paths["vectors"],
+                allow_pickle=False,
+                mmap_mode="r",
+            )
+            with open(paths["texts"], encoding="utf-8") as file:
+                texts = [json.loads(line) for line in file]
+
+            if len(texts) != vectors.shape[0]:
+                raise ValueError(
+                    "Cache text/vector length mismatch: "
+                    f"{len(texts)} texts, {vectors.shape[0]} vectors"
+                )
+
+            cache = {
+                text: vectors[index].astype("float32", copy=False)
+                for index, text in enumerate(texts)
+            }
+            print(
+                "Loaded cached embeddings from "
+                f"{paths['texts']} and {paths['vectors']}"
+            )
+            return cache
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(
+                "Ignoring corrupt non-pickle embedding cache "
+                f"{paths['texts']} / {paths['vectors']}: {exc}."
+            )
+            for path in (paths["texts"], paths["vectors"]):
+                try:
+                    moved_path = _move_corrupt_file(path)
+                    if moved_path is not None:
+                        print(f"Moved corrupt cache file to {moved_path}.")
+                except OSError:
+                    print(f"Could not move corrupt cache file {path}.")
+
+    if allow_legacy_pickle and paths["legacy"].exists():
+        try:
+            cache = np.load(paths["legacy"], allow_pickle=True).item()
+            print(
+                "Loaded legacy pickle embedding cache from "
+                f"{paths['legacy']}. Resaving will convert it to "
+                "the non-pickle cache format."
+            )
+            return cache
+        except (EOFError, OSError, ValueError) as exc:
+            try:
+                moved_path = _move_corrupt_file(paths["legacy"])
+                print(
+                    "Ignoring corrupt legacy embedding cache "
+                    f"{paths['legacy']}: {exc}. "
+                    f"Moved it to {moved_path}."
+                )
+            except OSError:
+                print(
+                    "Ignoring corrupt legacy embedding cache "
+                    f"{paths['legacy']}: {exc}. "
+                    "Could not move the corrupt file."
+                )
+
+    return {}
+
+
+def save_st_embedding_cache(cache_file, cache):
+    paths = _embedding_cache_paths(cache_file)
+    texts = list(cache.keys())
+
+    if texts:
+        vectors = np.stack([
+            np.asarray(cache[text], dtype="float32")
+            for text in texts
+        ])
+    else:
+        vectors = np.empty((0, 0), dtype="float32")
+
+    tmp_texts = paths["texts"].with_name(
+        f"{paths['texts'].name}.tmp.{os.getpid()}"
+    )
+    tmp_vectors = paths["vectors"].with_name(
+        f"{paths['vectors'].name}.tmp.{os.getpid()}"
+    )
+
+    try:
+        with open(tmp_vectors, "wb") as file:
+            np.save(file, vectors, allow_pickle=False)
+
+        with open(tmp_texts, "w", encoding="utf-8") as file:
+            for text in texts:
+                file.write(json.dumps(text, ensure_ascii=False))
+                file.write("\n")
+
+        os.replace(tmp_vectors, paths["vectors"])
+        os.replace(tmp_texts, paths["texts"])
+    finally:
+        for path in (tmp_texts, tmp_vectors):
+            if path.exists():
+                os.remove(path)
 
 
 def _resolve_device(device=None):
@@ -65,28 +192,7 @@ class STEmbedder:
             cache_name = f"{cache_name}_{cache_suffix}"
         self.cache_file = cache_dir / f"{cache_name}_embeddings.npy"
 
-        # Load precomputed embeddings if they exist.
-        if os.path.exists(self.cache_file):
-            try:
-                self.cache = np.load(self.cache_file, allow_pickle=True).item()
-                print(f"Loaded cached embeddings from {self.cache_file}")
-            except (EOFError, OSError, ValueError) as exc:
-                corrupt_cache_file = self.cache_file.with_name(
-                    f"{self.cache_file.name}.corrupt.{int(time.time())}"
-                )
-                try:
-                    os.replace(self.cache_file, corrupt_cache_file)
-                    print(
-                        "Ignoring corrupt embedding cache "
-                        f"{self.cache_file}: {exc}. "
-                        f"Moved it to {corrupt_cache_file}."
-                    )
-                except OSError:
-                    print(
-                        "Ignoring corrupt embedding cache "
-                        f"{self.cache_file}: {exc}. "
-                        "Could not move the corrupt file."
-                    )
+        self.cache = load_st_embedding_cache(self.cache_file)
 
         tokenizer_kwargs = {}
         # Fix known tokenizer regex issue for Mistral/Qwen-style tokenizers.
@@ -433,17 +539,7 @@ class STEmbedder:
             text: self._as_numpy(embedding)
             for text, embedding in self.cache.items()
         }
-        tmp_cache_file = self.cache_file.with_name(
-            f"{self.cache_file.name}.tmp.{os.getpid()}"
-        )
-
-        try:
-            with open(tmp_cache_file, "wb") as file:
-                np.save(file, serializable_cache)
-            os.replace(tmp_cache_file, self.cache_file)
-        finally:
-            if os.path.exists(tmp_cache_file):
-                os.remove(tmp_cache_file)
+        save_st_embedding_cache(self.cache_file, serializable_cache)
 
     def get_distance(self, embed1, embed2):
         e1 = self._trim_to_active_dim(self._as_tensor(embed1))
