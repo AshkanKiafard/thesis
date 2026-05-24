@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -66,8 +67,26 @@ class STEmbedder:
 
         # Load precomputed embeddings if they exist.
         if os.path.exists(self.cache_file):
-            self.cache = np.load(self.cache_file, allow_pickle=True).item()
-            print(f"Loaded cached embeddings from {self.cache_file}")
+            try:
+                self.cache = np.load(self.cache_file, allow_pickle=True).item()
+                print(f"Loaded cached embeddings from {self.cache_file}")
+            except (EOFError, OSError, ValueError) as exc:
+                corrupt_cache_file = self.cache_file.with_name(
+                    f"{self.cache_file.name}.corrupt.{int(time.time())}"
+                )
+                try:
+                    os.replace(self.cache_file, corrupt_cache_file)
+                    print(
+                        "Ignoring corrupt embedding cache "
+                        f"{self.cache_file}: {exc}. "
+                        f"Moved it to {corrupt_cache_file}."
+                    )
+                except OSError:
+                    print(
+                        "Ignoring corrupt embedding cache "
+                        f"{self.cache_file}: {exc}. "
+                        "Could not move the corrupt file."
+                    )
 
         tokenizer_kwargs = {}
         # Fix known tokenizer regex issue for Mistral/Qwen-style tokenizers.
@@ -368,7 +387,17 @@ class STEmbedder:
             text: self._as_numpy(embedding)
             for text, embedding in self.cache.items()
         }
-        np.save(self.cache_file, serializable_cache)
+        tmp_cache_file = self.cache_file.with_name(
+            f"{self.cache_file.name}.tmp.{os.getpid()}"
+        )
+
+        try:
+            with open(tmp_cache_file, "wb") as file:
+                np.save(file, serializable_cache)
+            os.replace(tmp_cache_file, self.cache_file)
+        finally:
+            if os.path.exists(tmp_cache_file):
+                os.remove(tmp_cache_file)
 
     def get_distance(self, embed1, embed2):
         e1 = self._trim_to_active_dim(self._as_tensor(embed1))
