@@ -343,26 +343,44 @@ def preload_graph_embeddings(embeder, graph, batch_size=64, save_cache=True):
     """
     nodes = list(graph.nodes)
     cached_before = sum(1 for node in nodes if node in embeder.cache)
+    avg_out_degree = graph.number_of_edges() / max(graph.number_of_nodes(), 1)
+    active_dim = embeder.get_active_embedding_dim()
+    model_dim = embeder.get_model_dim()
+    use_sliced_index_preload = active_dim < model_dim
 
     print(
         f"Preloading graph embeddings for {embeder.get_model_name()} "
-        f"({cached_before}/{len(nodes)} cached)..."
+        f"({cached_before}/{len(nodes)} cached, active dim {active_dim})..."
     )
 
     start_time = time.time()
-    added = embeder.preload(
-        nodes,
-        batch_size=batch_size,
-        save=save_cache,
-    )
-    avg_out_degree = graph.number_of_edges() / max(graph.number_of_nodes(), 1)
+    if use_sliced_index_preload:
+        print(
+            "Using sliced embedding index preload to avoid one device tensor "
+            "per graph node."
+        )
+        added = embeder.prepare_embedding_index(
+            nodes,
+            batch_size=batch_size,
+            save=False,
+            discard_tensor_cache=True,
+            populate_tensor_cache=False,
+            texts_are_unique=True,
+        )
+    else:
+        added = embeder.preload(
+            nodes,
+            batch_size=batch_size,
+            save=save_cache,
+        )
 
     # The indexed table is only worth its extra device memory on dense graphs.
-    if avg_out_degree >= 128:
+    if avg_out_degree >= 128 and not embeder.has_embedding_index():
         embeder.prepare_embedding_index(
             nodes,
             batch_size=batch_size,
             save=False,
+            texts_are_unique=True,
         )
     elapsed = time.time() - start_time
 
@@ -1228,6 +1246,13 @@ if __name__ == "__main__":
                 gc.collect()
                 torch.cuda.empty_cache()
                 continue
+
+            if current_split == "test":
+                main_embeder.set_matryoshka_dim(selected_test_dimension)
+                print(
+                    "Preloading graph embeddings at Matryoshka dim "
+                    f"{selected_test_dimension}."
+                )
 
             if not args.skip_embedding_preload:
                 preload_graph_embeddings(

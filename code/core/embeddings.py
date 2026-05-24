@@ -51,6 +51,7 @@ class STEmbedder:
         # the active torch device for traversal distance computations.
         self.cache = {}
         self.tensor_cache = {}
+        self.tensor_cache_dim = None
         self.indexed_text_to_idx = {}
         self.embedding_table = None
 
@@ -95,13 +96,84 @@ class STEmbedder:
 
         return np.asarray(embedding, dtype="float32")
 
+    def _active_tensor_dim(self):
+        if self.matryoshka_dim is None:
+            return None
+
+        model_dim = self.get_model_dim()
+        if self.matryoshka_dim < model_dim:
+            return self.matryoshka_dim
+
+        return None
+
+    def _trim_to_active_dim(self, tensor: torch.Tensor) -> torch.Tensor:
+        active_dim = self._active_tensor_dim()
+
+        if active_dim is not None and tensor.numel() > active_dim:
+            return tensor[:active_dim]
+
+        return tensor
+
+    def _trim_matrix_to_active_dim(self, matrix: torch.Tensor) -> torch.Tensor:
+        active_dim = self._active_tensor_dim()
+
+        if (
+            active_dim is not None
+            and matrix.dim() >= 2
+            and matrix.shape[1] > active_dim
+        ):
+            return matrix[:, :active_dim]
+
+        return matrix
+
+    def _as_active_tensor(self, embedding) -> torch.Tensor:
+        return self._trim_to_active_dim(self._as_tensor(embedding))
+
+    def _as_active_numpy(self, embedding) -> np.ndarray:
+        array = self._as_numpy(embedding)
+        active_dim = self._active_tensor_dim()
+
+        if active_dim is not None and array.size > active_dim:
+            return array[:active_dim]
+
+        return array
+
+    def _clear_device_cache(self):
+        self.tensor_cache.clear()
+        self.indexed_text_to_idx = {}
+        self.embedding_table = None
+
+        if self.device.startswith("cuda"):
+            torch.cuda.empty_cache()
+
+    def _ensure_tensor_cache_dim(self):
+        active_dim = self._active_tensor_dim()
+
+        if self.tensor_cache_dim != active_dim:
+            self._clear_device_cache()
+            self.tensor_cache_dim = active_dim
+
     def set_matryoshka_dim(self, dim: int):
+        if dim is not None and dim <= 0:
+            raise ValueError("Matryoshka dimension must be greater than 0")
+
+        previous_active_dim = self._active_tensor_dim()
         self.matryoshka_dim = dim
+        active_dim = self._active_tensor_dim()
+
+        if previous_active_dim != active_dim:
+            self._clear_device_cache()
+            self.tensor_cache_dim = active_dim
 
     def get_model_dim(self):
         return self.model.get_sentence_embedding_dimension()
 
+    def get_active_embedding_dim(self):
+        return self._active_tensor_dim() or self.get_model_dim()
+
     def embed(self, text: str) -> torch.Tensor:
+        self._ensure_tensor_cache_dim()
+
         if text in self.tensor_cache:
             return self.tensor_cache[text]
 
@@ -110,7 +182,7 @@ class STEmbedder:
             return self.embedding_table.weight[index].flatten()
 
         if text in self.cache:
-            tensor = self._as_tensor(self.cache[text])
+            tensor = self._as_active_tensor(self.cache[text])
             self.tensor_cache[text] = tensor
             return tensor
 
@@ -122,9 +194,10 @@ class STEmbedder:
                 device=self.device,
             ).detach()
 
-        tensor = self._as_tensor(emb)
+        raw_tensor = self._as_tensor(emb)
+        tensor = self._trim_to_active_dim(raw_tensor)
         self.tensor_cache[text] = tensor
-        self.cache[text] = self._as_numpy(tensor)
+        self.cache[text] = self._as_numpy(raw_tensor)
         return tensor
 
     def embed_numpy(self, text: str) -> np.ndarray:
@@ -137,11 +210,13 @@ class STEmbedder:
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than 0")
 
+        self._ensure_tensor_cache_dim()
+
         unique_texts = list(dict.fromkeys(texts))
 
         for text in unique_texts:
             if text in self.cache and text not in self.tensor_cache:
-                self.tensor_cache[text] = self._as_tensor(self.cache[text])
+                self.tensor_cache[text] = self._as_active_tensor(self.cache[text])
 
         missing_texts = [
             text
@@ -165,9 +240,10 @@ class STEmbedder:
                 ).detach()
 
             for text, emb in zip(batch, batch_embeddings):
-                tensor = self._as_tensor(emb)
+                raw_tensor = self._as_tensor(emb)
+                tensor = self._trim_to_active_dim(raw_tensor)
                 self.tensor_cache[text] = tensor
-                self.cache[text] = self._as_numpy(tensor)
+                self.cache[text] = self._as_numpy(raw_tensor)
 
         if save:
             self.save_cache()
@@ -180,6 +256,8 @@ class STEmbedder:
         batch_size: int = 64,
         save: bool = True,
         discard_tensor_cache: bool = False,
+        populate_tensor_cache: bool = True,
+        texts_are_unique: bool = False,
     ) -> int:
         """
         Preload texts and expose them through one torch embedding table.
@@ -187,19 +265,52 @@ class STEmbedder:
         This is the traversal fast path: successors can be fetched by integer
         index instead of repeatedly collecting tensors and stacking them.
         """
-        unique_texts = list(dict.fromkeys(texts))
+        unique_texts = list(texts) if texts_are_unique else list(dict.fromkeys(texts))
+        self._ensure_tensor_cache_dim()
 
         if not unique_texts:
             self.indexed_text_to_idx = {}
             self.embedding_table = None
             return 0
 
-        added = self.preload(unique_texts, batch_size=batch_size, save=save)
+        if populate_tensor_cache:
+            added = self.preload(unique_texts, batch_size=batch_size, save=save)
 
-        matrix = torch.stack([
-            self.embed(text)
-            for text in unique_texts
-        ])
+            matrix = torch.stack([
+                self.embed(text)
+                for text in unique_texts
+            ])
+        else:
+            missing_texts = [
+                text
+                for text in unique_texts
+                if text not in self.cache
+            ]
+            added = self.preload(
+                missing_texts,
+                batch_size=batch_size,
+                save=save,
+            )
+
+            dim = self._active_tensor_dim() or self.get_model_dim()
+            matrix = torch.empty(
+                (len(unique_texts), dim),
+                device=self.device,
+                dtype=torch.float32,
+            )
+
+            index_batch_size = max(batch_size, 4096)
+            for start in range(0, len(unique_texts), index_batch_size):
+                batch = unique_texts[start:start + index_batch_size]
+                batch_matrix = torch.as_tensor(
+                    np.stack([
+                        self._as_active_numpy(self.cache[text])
+                        for text in batch
+                    ]),
+                    device=self.device,
+                    dtype=torch.float32,
+                )
+                matrix[start:start + len(batch)] = batch_matrix
 
         self.embedding_table = torch.nn.Embedding.from_pretrained(
             matrix,
@@ -212,8 +323,11 @@ class STEmbedder:
         }
 
         if discard_tensor_cache:
-            for text in unique_texts:
-                self.tensor_cache.pop(text, None)
+            if populate_tensor_cache:
+                for text in unique_texts:
+                    self.tensor_cache.pop(text, None)
+            else:
+                self.tensor_cache.clear()
 
         return added
 
@@ -221,10 +335,12 @@ class STEmbedder:
         return self.embedding_table is not None
 
     def embed_many(self, texts) -> torch.Tensor:
+        self._ensure_tensor_cache_dim()
+
         texts = list(texts)
 
         if not texts:
-            dim = self.get_model_dim()
+            dim = self._active_tensor_dim() or self.get_model_dim()
             return torch.empty((0, dim), device=self.device, dtype=torch.float32)
 
         if self.embedding_table is not None:
@@ -255,13 +371,8 @@ class STEmbedder:
         np.save(self.cache_file, serializable_cache)
 
     def get_distance(self, embed1, embed2):
-        e1 = self._as_tensor(embed1)
-        e2 = self._as_tensor(embed2)
-
-        # Optionally truncate embeddings to a smaller Matryoshka dimension.
-        if self.matryoshka_dim is not None and self.matryoshka_dim < e1.numel():
-            e1 = e1[:self.matryoshka_dim]
-            e2 = e2[:self.matryoshka_dim]
+        e1 = self._trim_to_active_dim(self._as_tensor(embed1))
+        e2 = self._trim_to_active_dim(self._as_tensor(embed2))
 
         if self.distance_metric == DistanceMetric.COSINE:
             norm1 = torch.linalg.vector_norm(e1)
@@ -277,7 +388,7 @@ class STEmbedder:
         return float(torch.linalg.vector_norm(e1 - e2).item())
 
     def get_distances(self, embed1, embeddings):
-        e1 = self._as_tensor(embed1)
+        e1 = self._trim_to_active_dim(self._as_tensor(embed1))
         if isinstance(embeddings, torch.Tensor):
             if embeddings.numel() == 0:
                 return []
@@ -299,9 +410,7 @@ class STEmbedder:
                 for embedding in embeddings
             ])
 
-        if self.matryoshka_dim is not None and self.matryoshka_dim < e1.numel():
-            e1 = e1[:self.matryoshka_dim]
-            matrix = matrix[:, :self.matryoshka_dim]
+        matrix = self._trim_matrix_to_active_dim(matrix)
 
         if self.distance_metric == DistanceMetric.COSINE:
             norm1 = torch.linalg.vector_norm(e1)
