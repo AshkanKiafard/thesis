@@ -411,12 +411,27 @@ def cleanup_zombie_trials(study, label: str = ""):
                 print(f"Warning: Could not update status for {label_prefix}Trial {f_trial.number}: {e}")
 
 
-def find_latest_hparam_study(optuna_hparam_search_dir, curr_model_name, normalize_str, mrl_str):
+def find_latest_hparam_study(
+    optuna_hparam_search_dir,
+    curr_model_name,
+    normalize_str,
+    mrl_str,
+    hparam_search_space_slug=None,
+    include_slugged_studies=True,
+):
     study_prefix = f"{curr_model_name}_{normalize_str}_{mrl_str}_"
+
+    if hparam_search_space_slug is not None:
+        study_prefix += f"{hparam_search_space_slug}_"
 
     matching_studies = [
         p for p in optuna_hparam_search_dir.glob(f"{study_prefix}*.sqlite3")
         if not p.name.endswith(".sqlite3.sqlite3")
+        and (
+            hparam_search_space_slug is not None
+            or include_slugged_studies
+            or not p.stem[len(study_prefix):].startswith("act-")
+        )
     ]
 
     matching_studies = sorted(

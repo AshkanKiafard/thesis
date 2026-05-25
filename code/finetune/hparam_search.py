@@ -93,7 +93,64 @@ def parse_args():
         help="Number of Optuna trials for activation, distance metric, and learning rate search"
     )
 
+    parser.add_argument(
+        "--activation",
+        type=str,
+        default=None,
+        choices=["relu", "gelu"],
+        help="Force every trial to use this activation instead of searching activation"
+    )
+
+    parser.add_argument(
+        "--distance",
+        type=str,
+        default=None,
+        choices=["cosine", "euclid", "euclidean"],
+        help="Force every trial to use this distance metric instead of searching distance"
+    )
+
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="Force every trial to use this learning rate instead of searching LR"
+    )
+
     return parser.parse_args()
+
+
+def canonical_activation(value):
+    if value is None:
+        return None
+
+    value = value.strip().lower()
+    parse_activation_func(value)
+    return value
+
+
+def canonical_distance(value):
+    if value is None:
+        return None
+
+    value = value.strip().lower()
+    parse_distance_metric(value)
+
+    if value == "euclidean":
+        return "euclid"
+
+    return value
+
+
+def format_lr_slug(value):
+    return f"{value:.12g}".replace(".", "p").replace("+", "").replace("-", "m")
+
+
+def build_search_space_slug(fixed_activation, fixed_distance, fixed_lr):
+    activation_part = fixed_activation if fixed_activation is not None else "search"
+    distance_part = fixed_distance if fixed_distance is not None else "search"
+    lr_part = format_lr_slug(fixed_lr) if fixed_lr is not None else "search"
+
+    return f"act-{activation_part}_dist-{distance_part}_lr-{lr_part}"
 
 
 def run_training_trial(f_trial, f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
@@ -193,16 +250,23 @@ def run_training_trial(f_trial, f_model_path, f_curr_model_name, f_train_dataset
 
 def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
               f_batch_size, f_accumulate_grad_batches, f_normalize,
-              f_use_matryoshka, f_epochs, f_patience, f_causal_graph):
+              f_use_matryoshka, f_epochs, f_patience, f_causal_graph,
+              f_fixed_activation, f_fixed_distance, f_fixed_lr):
     # Activation, distance metric, and learning rate are optimized jointly.
     # This is the standard Optuna setup: all relevant hyperparameters are part
     # of the same search space instead of being optimized in separate stages.
-    f_activation_func_str = trial.suggest_categorical("activation", ["relu", "gelu"])
-    f_distance_metric_str = trial.suggest_categorical("distance", ["cosine", "euclid"])
+    activation_choices = [f_fixed_activation] if f_fixed_activation is not None else ["relu", "gelu"]
+    distance_choices = [f_fixed_distance] if f_fixed_distance is not None else ["cosine", "euclid"]
+
+    f_activation_func_str = trial.suggest_categorical("activation", activation_choices)
+    f_distance_metric_str = trial.suggest_categorical("distance", distance_choices)
 
     # The LR range is intentionally narrow because previous runs already showed
     # that useful learning rates are in this area.
-    lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
+    if f_fixed_lr is None:
+        lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
+    else:
+        lr = trial.suggest_float("lr", f_fixed_lr, f_fixed_lr, log=True)
 
     # Datasets depend only on model and distance metric, not on activation or LR.
     # Therefore, they are precomputed once before the Optuna objective and reused here.
@@ -247,6 +311,9 @@ if __name__ == "__main__":
     epochs = args.epochs
     patience = args.patience
     target_trials = args.trials
+    fixed_activation = canonical_activation(args.activation)
+    fixed_distance = canonical_distance(args.distance)
+    fixed_lr = args.lr
 
     if batch_size > 128:
         raise ValueError("batch_size must be <= 128")
@@ -256,9 +323,14 @@ if __name__ == "__main__":
         raise ValueError("patience must be >= 0")
     if patience >= epochs:
         print("Warning: patience >= epochs, so early stopping will probably not trigger.")
+    if fixed_lr is not None and fixed_lr <= 0:
+        raise ValueError("lr must be > 0")
 
     # Keep the effective batch size fixed across models for fair comparison.
     accumulate_grad_batches = 128 // batch_size
+
+    hparam_search_space_slug = build_search_space_slug(fixed_activation, fixed_distance, fixed_lr)
+    full_search_space_slug = build_search_space_slug(None, None, None)
 
     print(f"Batch size: {batch_size}")
     print(f"Accumulate grad batches: {accumulate_grad_batches}")
@@ -266,6 +338,9 @@ if __name__ == "__main__":
     print(f"Search epochs per trial: {epochs}")
     print(f"Search patience: {patience}")
     print(f"Optuna trials: {target_trials}")
+    print(f"Activation: {fixed_activation if fixed_activation is not None else 'search'}")
+    print(f"Distance: {fixed_distance if fixed_distance is not None else 'search'}")
+    print(f"LR: {fixed_lr if fixed_lr is not None else 'search'}")
 
     causal_graph = load_causal_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
 
@@ -285,11 +360,12 @@ if __name__ == "__main__":
     optuna_hparam_search_dir = optuna_root_dir / "hparam_search"
     optuna_hparam_search_dir.mkdir(parents=True, exist_ok=True)
 
-    # Dataset creation is done before the objective because both distance datasets
-    # are needed anyway for the search.
+    # Dataset creation is done before the objective because datasets depend on
+    # distance. If distance is fixed, only that dataset is needed.
     datasets_by_distance = {}
+    distance_search_space = [fixed_distance] if fixed_distance is not None else ["cosine", "euclid"]
 
-    for curr_distance_metric_str in ["cosine", "euclid"]:
+    for curr_distance_metric_str in distance_search_space:
         curr_distance_metric = parse_distance_metric(curr_distance_metric_str)
 
         dataset_suffix = f"{curr_model_name.replace('/', '_')}_{curr_distance_metric_str}"
@@ -355,7 +431,20 @@ if __name__ == "__main__":
         curr_model_name=curr_model_name,
         normalize_str=normalize_str,
         mrl_str=mrl_str,
+        hparam_search_space_slug=hparam_search_space_slug,
     )
+
+    # Old full-search studies did not include an explicit search-space slug.
+    # Keep them resumable, but do not let a full search resume a fixed-search study.
+    if latest_study is None and hparam_search_space_slug == full_search_space_slug:
+        latest_study = find_latest_hparam_study(
+            optuna_hparam_search_dir=optuna_hparam_search_dir,
+            curr_model_name=curr_model_name,
+            normalize_str=normalize_str,
+            mrl_str=mrl_str,
+            hparam_search_space_slug=None,
+            include_slugged_studies=False,
+        )
 
     if latest_study is not None:
         optuna_db_path, study_name = latest_study
@@ -373,7 +462,7 @@ if __name__ == "__main__":
         # and easier manual inspection of study files.
         study_name = (
             f"{curr_model_name}_{normalize_str}_{mrl_str}_"
-            f"{target_trials}trials_{epochs}epochs_{patience}patience"
+            f"{hparam_search_space_slug}_{target_trials}trials_{epochs}epochs_{patience}patience"
         )
 
         optuna_db_path = optuna_hparam_search_dir / f"{study_name}.sqlite3"
@@ -418,6 +507,9 @@ if __name__ == "__main__":
                 epochs,
                 patience,
                 causal_graph,
+                fixed_activation,
+                fixed_distance,
+                fixed_lr,
             ),
             n_trials=trials_to_run,
             gc_after_trial=True
