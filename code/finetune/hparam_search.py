@@ -38,9 +38,9 @@ from core.utils import load_causal_graph, parse_activation_func, parse_distance_
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
 torch.set_float32_matmul_precision("medium")
 
-HPARAM_SEARCH_DEFAULT_BATCH_SIZE = 1024
-HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE = 1024
-HPARAM_SEARCH_MAX_BATCH_SIZE = 1024
+HPARAM_SEARCH_DEFAULT_BATCH_SIZE = 128
+HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE = 128
+HPARAM_SEARCH_MAX_BATCH_SIZE = 128
 
 
 def parse_args():
