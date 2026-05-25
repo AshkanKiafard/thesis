@@ -102,6 +102,13 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--run-suffix",
+        type=str,
+        default="best_v2",
+        help="Suffix for Optuna study and hparam-search log names"
+    )
+
+    parser.add_argument(
         "--activation",
         type=str,
         default=None,
@@ -259,7 +266,8 @@ def run_training_trial(f_trial, f_model_path, f_curr_model_name, f_train_dataset
 def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
               f_batch_size, f_accumulate_grad_batches, f_normalize,
               f_use_matryoshka, f_epochs, f_patience, f_causal_graph,
-              f_fixed_activation, f_fixed_distance, f_fixed_lr):
+              f_fixed_activation, f_fixed_distance, f_fixed_lr,
+              f_run_suffix):
     # Activation, distance metric, and learning rate are optimized jointly.
     # This is the standard Optuna setup: all relevant hyperparameters are part
     # of the same search space instead of being optimized in separate stages.
@@ -305,7 +313,7 @@ def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
         f_distance_metric_str=f_distance_metric_str,
         f_lr=lr,
         f_log_group="hparam_search",
-        f_run_suffix=f"trial_{trial.number}",
+        f_run_suffix=f"{f_run_suffix}_trial_{trial.number}",
     )
 
 
@@ -319,6 +327,7 @@ if __name__ == "__main__":
     epochs = args.epochs
     patience = args.patience
     target_trials = args.trials
+    run_suffix = args.run_suffix
     fixed_activation = canonical_activation(args.activation)
     fixed_distance = canonical_distance(args.distance)
     fixed_lr = args.lr
@@ -361,6 +370,7 @@ if __name__ == "__main__":
     print(f"Search epochs per trial: {epochs}")
     print(f"Search patience: {patience}")
     print(f"Optuna trials: {target_trials}")
+    print(f"Run suffix: {run_suffix}")
     print(f"Activation: {fixed_activation if fixed_activation is not None else 'search'}")
     print(f"Distance: {fixed_distance if fixed_distance is not None else 'search'}")
     print(f"LR: {fixed_lr if fixed_lr is not None else 'search'}")
@@ -454,6 +464,7 @@ if __name__ == "__main__":
         curr_model_name=curr_model_name,
         normalize_str=normalize_str,
         mrl_str=mrl_str,
+        run_suffix=run_suffix,
         hparam_search_space_slug=hparam_search_space_slug,
     )
 
@@ -465,6 +476,7 @@ if __name__ == "__main__":
             curr_model_name=curr_model_name,
             normalize_str=normalize_str,
             mrl_str=mrl_str,
+            run_suffix=run_suffix,
             hparam_search_space_slug=None,
             include_slugged_studies=False,
         )
@@ -484,7 +496,7 @@ if __name__ == "__main__":
         # The study name still includes the search settings for readability
         # and easier manual inspection of study files.
         study_name = (
-            f"{curr_model_name}_{normalize_str}_{mrl_str}_"
+            f"{curr_model_name}_{normalize_str}_{mrl_str}_{run_suffix}_"
             f"{hparam_search_space_slug}_{target_trials}trials_{epochs}epochs_{patience}patience"
         )
 
@@ -533,6 +545,7 @@ if __name__ == "__main__":
                 fixed_activation,
                 fixed_distance,
                 fixed_lr,
+                run_suffix,
             ),
             n_trials=trials_to_run,
             gc_after_trial=True

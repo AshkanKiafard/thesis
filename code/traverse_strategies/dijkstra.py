@@ -66,6 +66,22 @@ def _get_indexed_graph(config, embeder, start_node, end_node):
     return indexed_graph
 
 
+def _has_normalized_runtime_embeddings(embeder):
+    has_normalized = getattr(embeder, "has_normalized_runtime_embeddings", None)
+    return callable(has_normalized) and has_normalized()
+
+
+def _get_distances(embeder, source_embed, target_embeds, assume_normalized):
+    if assume_normalized:
+        return embeder.get_distances(
+            source_embed,
+            target_embeds,
+            assume_normalized=True,
+        )
+
+    return embeder.get_distances(source_embed, target_embeds)
+
+
 def _dijkstra_traverse_indexed(
     indexed_graph,
     start_node: str,
@@ -82,6 +98,7 @@ def _dijkstra_traverse_indexed(
     distances = {start_index: 0}
     parents = {start_index: None}
     adjacency = indexed_graph.adjacency
+    assume_normalized = _has_normalized_runtime_embeddings(embeder)
 
     while open_set:
         distance, current_node, current_index = heapq.heappop(open_set)
@@ -113,7 +130,12 @@ def _dijkstra_traverse_indexed(
             continue
 
         successor_embeds = embeder.embed_indices(successors)
-        edge_costs = embeder.get_distances(current_node_embed, successor_embeds)
+        edge_costs = _get_distances(
+            embeder,
+            current_node_embed,
+            successor_embeds,
+            assume_normalized,
+        )
 
         for successor, edge_cost in zip(successors, edge_costs):
             new_distance = distance + edge_cost
@@ -163,6 +185,7 @@ def dijkstra_traverse(
     distances = {start_node: 0}
     parents = {start_node: None}
     adjacency = graph._succ
+    assume_normalized = _has_normalized_runtime_embeddings(embeder)
 
     while open_set:
         distance, current_node = heapq.heappop(open_set)
@@ -193,7 +216,12 @@ def dijkstra_traverse(
             continue
 
         successor_embeds = _embed_many(embeder, successors, config)
-        edge_costs = embeder.get_distances(current_node_embed, successor_embeds)
+        edge_costs = _get_distances(
+            embeder,
+            current_node_embed,
+            successor_embeds,
+            assume_normalized,
+        )
 
         for successor, edge_cost in zip(successors, edge_costs):
             # Edge weights are defined by embedding distance between connected nodes.

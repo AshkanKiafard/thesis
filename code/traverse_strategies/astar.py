@@ -64,6 +64,22 @@ def _get_indexed_graph(config, embeder, start_node, end_node):
     return indexed_graph
 
 
+def _has_normalized_runtime_embeddings(embeder):
+    has_normalized = getattr(embeder, "has_normalized_runtime_embeddings", None)
+    return callable(has_normalized) and has_normalized()
+
+
+def _get_distances(embeder, source_embed, target_embeds, assume_normalized):
+    if assume_normalized:
+        return embeder.get_distances(
+            source_embed,
+            target_embeds,
+            assume_normalized=True,
+        )
+
+    return embeder.get_distances(source_embed, target_embeds)
+
+
 def _astar_traverse_indexed(
     indexed_graph,
     start_node: str,
@@ -82,6 +98,7 @@ def _astar_traverse_indexed(
 
     end_node_embed = embeder.embed_index(end_index)
     adjacency = indexed_graph.adjacency
+    assume_normalized = _has_normalized_runtime_embeddings(embeder)
 
     while open_set:
         f_score, g_score, current_node, current_index, path_index = (
@@ -115,8 +132,18 @@ def _astar_traverse_indexed(
             continue
 
         successor_embeds = embeder.embed_indices(successors)
-        edge_costs = embeder.get_distances(current_node_embed, successor_embeds)
-        heuristic_costs = embeder.get_distances(end_node_embed, successor_embeds)
+        edge_costs = _get_distances(
+            embeder,
+            current_node_embed,
+            successor_embeds,
+            assume_normalized,
+        )
+        heuristic_costs = _get_distances(
+            embeder,
+            end_node_embed,
+            successor_embeds,
+            assume_normalized,
+        )
 
         for successor, edge_cost, heuristic in zip(
             successors,
@@ -190,6 +217,7 @@ def astar_traverse(
     # Embed the target node once so we do not recompute it for every expansion.
     end_node_embed = embeder.embed(end_node)
     adjacency = graph._succ
+    assume_normalized = _has_normalized_runtime_embeddings(embeder)
 
     while open_set:
         f_score, g_score, current_node, path_index = heapq.heappop(open_set)
@@ -220,8 +248,18 @@ def astar_traverse(
             continue
 
         successor_embeds = _embed_many(embeder, successors, config)
-        edge_costs = embeder.get_distances(current_node_embed, successor_embeds)
-        heuristic_costs = embeder.get_distances(end_node_embed, successor_embeds)
+        edge_costs = _get_distances(
+            embeder,
+            current_node_embed,
+            successor_embeds,
+            assume_normalized,
+        )
+        heuristic_costs = _get_distances(
+            embeder,
+            end_node_embed,
+            successor_embeds,
+            assume_normalized,
+        )
 
         for successor, edge_cost, heuristic in zip(
             successors,

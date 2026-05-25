@@ -537,8 +537,30 @@ class STEmbedder:
 
         return matrix
 
+    def _normalize_vector_for_cosine(self, tensor: torch.Tensor) -> torch.Tensor:
+        if self.distance_metric != DistanceMetric.COSINE:
+            return tensor
+
+        return torch.nn.functional.normalize(tensor, p=2, dim=0)
+
+    def _normalize_matrix_for_cosine(
+        self,
+        matrix: torch.Tensor,
+        inplace: bool = False,
+    ) -> torch.Tensor:
+        if self.distance_metric != DistanceMetric.COSINE:
+            return matrix
+
+        if not inplace:
+            return torch.nn.functional.normalize(matrix, p=2, dim=1)
+
+        norms = torch.linalg.vector_norm(matrix, dim=1, keepdim=True)
+        return matrix.div_(norms.clamp_min_(1e-12))
+
     def _as_active_tensor(self, embedding) -> torch.Tensor:
-        return self._trim_to_active_dim(self._as_tensor(embedding))
+        return self._normalize_vector_for_cosine(
+            self._trim_to_active_dim(self._as_tensor(embedding))
+        )
 
     def _as_active_numpy(self, embedding) -> np.ndarray:
         array = self._as_numpy(embedding)
@@ -634,7 +656,9 @@ class STEmbedder:
             ).detach()
 
         raw_tensor = self._as_tensor(emb)
-        tensor = self._trim_to_active_dim(raw_tensor)
+        tensor = self._normalize_vector_for_cosine(
+            self._trim_to_active_dim(raw_tensor)
+        )
         self.tensor_cache[text] = tensor
         self.cache[text] = self._as_numpy(raw_tensor)
         return tensor
@@ -684,7 +708,9 @@ class STEmbedder:
 
             for text, emb in zip(batch, batch_embeddings):
                 raw_tensor = self._as_tensor(emb)
-                tensor = self._trim_to_active_dim(raw_tensor)
+                tensor = self._normalize_vector_for_cosine(
+                    self._trim_to_active_dim(raw_tensor)
+                )
                 self.tensor_cache[text] = tensor
                 self.cache[text] = self._as_numpy(raw_tensor)
 
@@ -1068,8 +1094,10 @@ class STEmbedder:
                     checkpoint_mask.flush()
                     _close_memmap(checkpoint_mask)
 
+        runtime_matrix = self._normalize_matrix_for_cosine(matrix, inplace=True)
+
         self.embedding_table = torch.nn.Embedding.from_pretrained(
-            matrix,
+            runtime_matrix,
             freeze=True,
         ).to(self.device)
         self.embedding_table.eval()
@@ -1096,6 +1124,9 @@ class STEmbedder:
 
     def has_embedding_index(self) -> bool:
         return self.embedding_table is not None
+
+    def has_normalized_runtime_embeddings(self) -> bool:
+        return self.distance_metric == DistanceMetric.COSINE
 
     def embed_index(self, index: int) -> torch.Tensor:
         if self.embedding_table is None:
@@ -1163,21 +1194,16 @@ class STEmbedder:
         e2 = self._trim_to_active_dim(self._as_tensor(embed2))
 
         if self.distance_metric == DistanceMetric.COSINE:
-            norm1 = torch.linalg.vector_norm(e1)
-            norm2 = torch.linalg.vector_norm(e2)
-
-            # If one vector is zero, cosine similarity is undefined.
-            # Returning 1.0 here means "max distance".
-            if norm1 == 0 or norm2 == 0:
-                return 1.0
-
-            return float((1 - torch.dot(e1, e2) / (norm1 * norm2)).item())
+            e1 = self._normalize_vector_for_cosine(e1)
+            e2 = self._normalize_vector_for_cosine(e2)
+            return float((1 - torch.dot(e1, e2)).item())
 
         return float(torch.linalg.vector_norm(e1 - e2).item())
 
-    def get_distances(self, embed1, embeddings):
+    def get_distances(self, embed1, embeddings, assume_normalized=False):
         e1 = self._trim_to_active_dim(self._as_tensor(embed1))
-        if isinstance(embeddings, torch.Tensor):
+        embeddings_is_tensor = isinstance(embeddings, torch.Tensor)
+        if embeddings_is_tensor:
             if embeddings.numel() == 0:
                 return []
 
@@ -1201,12 +1227,11 @@ class STEmbedder:
         matrix = self._trim_matrix_to_active_dim(matrix)
 
         if self.distance_metric == DistanceMetric.COSINE:
-            norm1 = torch.linalg.vector_norm(e1)
-            norm2 = torch.linalg.vector_norm(matrix, dim=1)
-            denominator = norm1 * norm2
-            distances = torch.ones(matrix.shape[0], device=self.device, dtype=torch.float32)
-            valid = denominator != 0
-            distances[valid] = 1 - (matrix[valid] @ e1) / denominator[valid]
+            if not assume_normalized:
+                e1 = self._normalize_vector_for_cosine(e1)
+                matrix = self._normalize_matrix_for_cosine(matrix)
+
+            distances = 1 - (matrix @ e1)
         else:
             distances = torch.linalg.vector_norm(matrix - e1, dim=1)
 
@@ -1384,17 +1409,13 @@ class GloveEmbeder:
         e2 = self._as_tensor(embed2)
 
         if self.distance_metric == DistanceMetric.COSINE:
-            norm1 = torch.linalg.vector_norm(e1)
-            norm2 = torch.linalg.vector_norm(e2)
-
-            if norm1 == 0 or norm2 == 0:
-                return 1.0
-
-            return float((1 - torch.dot(e1, e2) / (norm1 * norm2)).item())
+            e1 = torch.nn.functional.normalize(e1, p=2, dim=0)
+            e2 = torch.nn.functional.normalize(e2, p=2, dim=0)
+            return float((1 - torch.dot(e1, e2)).item())
 
         return float(torch.linalg.vector_norm(e1 - e2).item())
 
-    def get_distances(self, embed1, embeddings):
+    def get_distances(self, embed1, embeddings, assume_normalized=False):
         if not embeddings:
             return []
 
@@ -1402,12 +1423,10 @@ class GloveEmbeder:
         matrix = torch.stack([self._as_tensor(embedding) for embedding in embeddings])
 
         if self.distance_metric == DistanceMetric.COSINE:
-            norm1 = torch.linalg.vector_norm(e1)
-            norm2 = torch.linalg.vector_norm(matrix, dim=1)
-            denominator = norm1 * norm2
-            distances = torch.ones(matrix.shape[0], device=self.device, dtype=torch.float32)
-            valid = denominator != 0
-            distances[valid] = 1 - (matrix[valid] @ e1) / denominator[valid]
+            if not assume_normalized:
+                e1 = torch.nn.functional.normalize(e1, p=2, dim=0)
+                matrix = torch.nn.functional.normalize(matrix, p=2, dim=1)
+            distances = 1 - (matrix @ e1)
         else:
             distances = torch.linalg.vector_norm(matrix - e1, dim=1)
 

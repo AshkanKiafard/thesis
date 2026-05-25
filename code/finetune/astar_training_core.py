@@ -51,7 +51,10 @@ class MatryoshkaAStarLoss(nn.Module):
 
     def distance(self, a, b):
         if self.distance_metric == DistanceMetric.COSINE:
-            return 1 - torch.nn.functional.cosine_similarity(a, b)
+            if self.normalize:
+                return 1 - (a * b).sum(dim=-1)
+
+            return 1 - F.cosine_similarity(a, b, dim=-1)
         elif self.distance_metric == DistanceMetric.EUCLIDEAN:
             return torch.norm(a - b, dim=-1)
         else:
@@ -238,11 +241,23 @@ class LitAStar(pl.LightningModule):
     def has_embedding_index(self):
         return self.val_embedding_table is not None
 
+    def has_normalized_runtime_embeddings(self):
+        return (
+            self.loss_fn.distance_metric == DistanceMetric.COSINE
+            and self.loss_fn.normalize
+        )
+
     def get_distance(self, emb_a, emb_b):
         # traverse_graph also expects a distance function on the model side.
+        if (
+            self.loss_fn.distance_metric == DistanceMetric.COSINE
+            and self.loss_fn.normalize
+        ):
+            return (1 - torch.dot(emb_a.flatten(), emb_b.flatten())).item()
+
         return self.loss_fn.distance(emb_a.unsqueeze(0), emb_b.unsqueeze(0)).item()
 
-    def get_distances(self, emb_a, embeddings):
+    def get_distances(self, emb_a, embeddings, assume_normalized=False):
         if isinstance(embeddings, torch.Tensor):
             if embeddings.numel() == 0:
                 return []
@@ -260,6 +275,13 @@ class LitAStar(pl.LightningModule):
                 return []
 
             matrix = torch.stack(list(embeddings))
+
+        if (
+            self.loss_fn.distance_metric == DistanceMetric.COSINE
+            and (self.loss_fn.normalize or assume_normalized)
+        ):
+            return (1 - (matrix @ emb_a)).detach().cpu().tolist()
+
         left = emb_a.unsqueeze(0).expand_as(matrix)
 
         return self.loss_fn.distance(left, matrix).detach().cpu().tolist()
@@ -416,10 +438,14 @@ def find_latest_hparam_study(
     curr_model_name,
     normalize_str,
     mrl_str,
+    run_suffix=None,
     hparam_search_space_slug=None,
     include_slugged_studies=True,
 ):
     study_prefix = f"{curr_model_name}_{normalize_str}_{mrl_str}_"
+
+    if run_suffix is not None:
+        study_prefix += f"{run_suffix}_"
 
     if hparam_search_space_slug is not None:
         study_prefix += f"{hparam_search_space_slug}_"
@@ -462,16 +488,25 @@ def find_latest_hparam_study(
     return latest_study_path, latest_summary.study_name
 
 
-def load_hparams(optuna_hparam_search_dir, curr_model_name, normalize_str, mrl_str):
+def load_hparams(
+    optuna_hparam_search_dir,
+    curr_model_name,
+    normalize_str,
+    mrl_str,
+    run_suffix=None,
+):
     latest_study = find_latest_hparam_study(
         optuna_hparam_search_dir=optuna_hparam_search_dir,
         curr_model_name=curr_model_name,
         normalize_str=normalize_str,
         mrl_str=mrl_str,
+        run_suffix=run_suffix,
     )
 
     if latest_study is None:
         study_prefix = f"{curr_model_name}_{normalize_str}_{mrl_str}_"
+        if run_suffix is not None:
+            study_prefix += f"{run_suffix}_"
         raise FileNotFoundError(
             f"No Optuna hparam search study found in {optuna_hparam_search_dir} "
             f"starting with: {study_prefix}"

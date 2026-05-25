@@ -324,6 +324,7 @@ if __name__ == "__main__":
         curr_model_name=curr_model_name,
         normalize_str=normalize_str,
         mrl_str=mrl_str,
+        run_suffix=run_suffix,
     )
 
     activation_func_str = best_params["activation"]
