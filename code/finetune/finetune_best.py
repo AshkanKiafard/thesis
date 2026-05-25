@@ -228,7 +228,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
     print(f"Loading best checkpoint for export: {best_checkpoint_path}")
 
     best_model = LitAStar.load_from_checkpoint(
-        best_checkpoint_path,
+        checkpoint_path=best_checkpoint_path,
         model_name=f_model_path,
         cls_activation_func=f_activation_func,
         cls_distance_metric=f_distance_metric,

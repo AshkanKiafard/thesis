@@ -38,6 +38,10 @@ from core.utils import load_causal_graph, parse_activation_func, parse_distance_
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
 torch.set_float32_matmul_precision("medium")
 
+HPARAM_SEARCH_DEFAULT_BATCH_SIZE = 1024
+HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE = 1024
+HPARAM_SEARCH_MAX_BATCH_SIZE = 1024
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -54,8 +58,12 @@ def parse_args():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=128,
-        help="Physical batch size. Will use gradient accumulation to reach effective batch size of 128."
+        default=HPARAM_SEARCH_DEFAULT_BATCH_SIZE,
+        help=(
+            "Physical batch size. Batch sizes up to the target effective batch size "
+            f"will use gradient accumulation to reach {HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE}; "
+            f"larger batch sizes run directly up to {HPARAM_SEARCH_MAX_BATCH_SIZE}."
+        )
     )
 
     parser.add_argument(
@@ -264,7 +272,7 @@ def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
     # The LR range is intentionally narrow because previous runs already showed
     # that useful learning rates are in this area.
     if f_fixed_lr is None:
-        lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
+        lr = trial.suggest_float("lr", 2.5e-5, 5e-5, log=True)
     else:
         lr = trial.suggest_float("lr", f_fixed_lr, f_fixed_lr, log=True)
 
@@ -315,10 +323,19 @@ if __name__ == "__main__":
     fixed_distance = canonical_distance(args.distance)
     fixed_lr = args.lr
 
-    if batch_size > 128:
-        raise ValueError("batch_size must be <= 128")
-    if 128 % batch_size != 0:
-        raise ValueError("batch_size must divide 128 (e.g. 128, 64, 32, 16, 8)")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be > 0")
+    if batch_size > HPARAM_SEARCH_MAX_BATCH_SIZE:
+        raise ValueError(f"batch_size must be <= {HPARAM_SEARCH_MAX_BATCH_SIZE}")
+    if (
+        batch_size <= HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE
+        and HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE % batch_size != 0
+    ):
+        raise ValueError(
+            f"batch_size must divide {HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE} "
+            f"when batch_size <= {HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE} "
+            "(e.g. 128, 64, 32, 16, 8)"
+        )
     if patience < 0:
         raise ValueError("patience must be >= 0")
     if patience >= epochs:
@@ -326,12 +343,18 @@ if __name__ == "__main__":
     if fixed_lr is not None and fixed_lr <= 0:
         raise ValueError("lr must be > 0")
 
-    # Keep the effective batch size fixed across models for fair comparison.
-    accumulate_grad_batches = 128 // batch_size
+    # Keep smaller physical batches at the target effective batch size with
+    # accumulation. Larger explicitly requested batches run directly.
+    if batch_size <= HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE:
+        accumulate_grad_batches = HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE // batch_size
+    else:
+        accumulate_grad_batches = 1
 
     hparam_search_space_slug = build_search_space_slug(fixed_activation, fixed_distance, fixed_lr)
     full_search_space_slug = build_search_space_slug(None, None, None)
 
+    print(f"Max hparam search batch size: {HPARAM_SEARCH_MAX_BATCH_SIZE}")
+    print(f"Target effective batch size: {HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE}")
     print(f"Batch size: {batch_size}")
     print(f"Accumulate grad batches: {accumulate_grad_batches}")
     print(f"Effective batch size: {batch_size * accumulate_grad_batches}")
