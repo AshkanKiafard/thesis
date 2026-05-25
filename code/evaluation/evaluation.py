@@ -715,6 +715,17 @@ def parse_args():
         help="Skip RL_Baseline and avoid loading the separate RL graph.",
     )
     parser.add_argument(
+        "--skip-dijkstra",
+        action="store_true",
+        help="Skip Dijkstra model evaluation while still evaluating A*.",
+    )
+    parser.add_argument(
+        "--skip-dijakstra",
+        dest="skip_dijkstra",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--force-baselines",
         action="store_true",
         help=(
@@ -1077,6 +1088,9 @@ if __name__ == "__main__":
         )
         raise SystemExit(0)
 
+    if args.skip_dijkstra:
+        print("Skipping Dijkstra model evaluation because --skip-dijkstra was set.")
+
     if current_split == "test":
         semantic_model_queue = [selected_test_model_path]
     else:
@@ -1132,7 +1146,10 @@ if __name__ == "__main__":
                     )
                     pending_strategies["A*"] = ts.astar_traverse
 
-                if "Dijkstra" not in completed_algorithms:
+                if (
+                    not args.skip_dijkstra
+                    and "Dijkstra" not in completed_algorithms
+                ):
                     used_config["dijkstra_max_visits"] = get_p95_cap(
                         p95_configs,
                         model_name,
