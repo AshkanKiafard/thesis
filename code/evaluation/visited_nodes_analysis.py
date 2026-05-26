@@ -33,6 +33,9 @@ from core.utils import (
 # -------------------------------------------------------------------------
 
 EVALUATION_OUTPUT_ROOT = Path("data/evaluation")
+BFS_LEGACY_BASELINE_MODEL = "BFS_Baseline"
+BFS_UNCAPPED_BASELINE_MODEL = "BFS_Uncapped_Baseline"
+RL_BASELINE_MODEL = "RL_Baseline"
 
 # Base models evaluated with embedding-guided graph strategies.
 base_models = [
@@ -349,8 +352,13 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     # BFS baseline
     # -------------------------------------------------------------------------
-    if not already_done(existing_results, "BFS_Baseline"):
-        print("\n=== Running BFS Baseline ===")
+    has_bfs_uncapped_result = any(
+        already_done(existing_results, model)
+        for model in (BFS_UNCAPPED_BASELINE_MODEL, BFS_LEGACY_BASELINE_MODEL)
+    )
+
+    if not has_bfs_uncapped_result:
+        print("\n=== Running BFS Uncapped Baseline ===")
 
         bfs_result = run_visited_nodes_loop(
             data=data,
@@ -364,7 +372,7 @@ if __name__ == "__main__":
 
         save_result(
             {
-                "model": "BFS_Baseline",
+                "model": BFS_UNCAPPED_BASELINE_MODEL,
                 "dimension": None,
                 "dataset": dataset_name,
                 "split": split,
@@ -375,14 +383,14 @@ if __name__ == "__main__":
             output_json_file,
         )
     else:
-        print("\n=== skipping BFS Baseline ===")
+        print("\n=== skipping BFS Uncapped Baseline ===")
 
     existing_results = load_results_file(output_json_file)
 
     # -------------------------------------------------------------------------
     # RL baseline
     # -------------------------------------------------------------------------
-    if not already_done(existing_results, "RL_Baseline"):
+    if not already_done(existing_results, RL_BASELINE_MODEL):
         print("\n=== Running RL Baseline ===")
 
         try:
@@ -410,7 +418,7 @@ if __name__ == "__main__":
 
             save_result(
                 {
-                    "model": "RL_Baseline",
+                    "model": RL_BASELINE_MODEL,
                     "dimension": None,
                     "dataset": dataset_name,
                     "split": split,

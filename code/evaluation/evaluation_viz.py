@@ -22,6 +22,15 @@ EVALUATION_INPUT_ROOT = Path("data/evaluation")
 PLOT_FORMATS = ["pdf", "png"]
 PNG_DPI = 300
 
+BFS_CAPPED_BASELINE_MODEL = "BFS_Baseline"
+BFS_UNCAPPED_BASELINE_MODEL = "BFS_Uncapped_Baseline"
+RL_BASELINE_MODEL = "RL_Baseline"
+BASELINE_MODEL_NAMES = {
+    BFS_UNCAPPED_BASELINE_MODEL,
+    BFS_CAPPED_BASELINE_MODEL,
+    RL_BASELINE_MODEL,
+}
+
 BASE_MODEL_LABELS = {
     "all-mpnet-base-v2": "MPNet Base",
     "bge-large-en-v1.5": "BGE Large Base",
@@ -30,8 +39,9 @@ BASE_MODEL_LABELS = {
     "Qwen3-Embedding-4B": "Qwen 4B Base",
     "granite-embedding-small-english-r2": "Granite Small Base",
     "granite-embedding-english-r2": "Granite Base",
-    "BFS_Baseline": "BFS Baseline",
-    "RL_Baseline": "RL Baseline",
+    BFS_UNCAPPED_BASELINE_MODEL: "BFS (no max visits)",
+    BFS_CAPPED_BASELINE_MODEL: "BFS (max visits)",
+    RL_BASELINE_MODEL: "RL Baseline",
 }
 
 MODEL_BASE_COLORS = {
@@ -403,8 +413,9 @@ def model_sort_key(model_name):
     base_name = get_model_base_name(model_name)
 
     base_order = {
-        "BFS_Baseline": -2,
-        "RL_Baseline": -1,
+        BFS_UNCAPPED_BASELINE_MODEL: -3,
+        BFS_CAPPED_BASELINE_MODEL: -2,
+        RL_BASELINE_MODEL: -1,
         "all-mpnet-base-v2": 0,
         "bge-large-en-v1.5": 1,
         "mxbai-embed-large-v1": 2,
@@ -522,7 +533,7 @@ def extract_baselines(eval_data):
     for entry in eval_data:
         model = entry.get("model")
 
-        if model not in {"BFS_Baseline", "RL_Baseline"}:
+        if model not in BASELINE_MODEL_NAMES:
             continue
 
         evaluation = entry.get("evaluation", {})
@@ -551,7 +562,7 @@ def extract_semantic_data(eval_data):
     for entry in eval_data:
         model_name = entry.get("model")
 
-        if model_name in {"BFS_Baseline", "RL_Baseline"}:
+        if model_name in BASELINE_MODEL_NAMES:
             continue
 
         if "dimension" not in entry or "evaluation" not in entry:
@@ -654,24 +665,12 @@ def get_model_subsets(df, value_col):
 
 
 def add_baseline_lines(ax, baselines, metric_key):
-    bfs = baselines.get("BFS_Baseline")
-    rl = baselines.get("RL_Baseline")
-
-    if bfs and bfs.get(metric_key) is not None:
-        ax.axhline(
-            y=bfs[metric_key],
-            color="black",
-            linestyle="--",
-            label="BFS Baseline",
-        )
-
-    if rl and rl.get(metric_key) is not None:
-        ax.axhline(
-            y=rl[metric_key],
-            color="red",
-            linestyle="-.",
-            label="RL Baseline",
-        )
+    plot_selected_baseline_lines_on_axis(
+        ax=ax,
+        baselines=baselines,
+        metric_key=metric_key,
+        selected_names=get_valid_baseline_names(baselines, metric_key),
+    )
 
 
 def collect_metric_values(df, baselines, metric_key):
@@ -769,8 +768,32 @@ BASELINE_LINE_STYLES = [
     {"color": "#999999", "linestyle": "--", "linewidth": 1.2, "zorder": 3},
 ]
 
+BASELINE_LINE_STYLES_BY_MODEL = {
+    BFS_UNCAPPED_BASELINE_MODEL: {
+        "color": "#111111",
+        "linestyle": "--",
+        "linewidth": 1.2,
+        "zorder": 3,
+    },
+    BFS_CAPPED_BASELINE_MODEL: {
+        "color": "#777777",
+        "linestyle": "-.",
+        "linewidth": 1.2,
+        "zorder": 3,
+    },
+    RL_BASELINE_MODEL: {
+        "color": "#B00020",
+        "linestyle": ":",
+        "linewidth": 1.4,
+        "zorder": 3,
+    },
+}
+
 
 def get_baseline_line_style(baselines, baseline_name):
+    if baseline_name in BASELINE_LINE_STYLES_BY_MODEL:
+        return BASELINE_LINE_STYLES_BY_MODEL[baseline_name]
+
     baseline_names = sorted(baselines.keys(), key=model_sort_key)
     baseline_index = baseline_names.index(baseline_name)
 
@@ -2083,6 +2106,23 @@ def plot_normalized_confusion_matrices_all_models(per_example_df, output_path):
 # P95 / visited-node analysis extraction
 # -------------------------------------------------------------------------
 
+def get_p95_model_label(model):
+    if model == BFS_CAPPED_BASELINE_MODEL:
+        return BASE_MODEL_LABELS[BFS_UNCAPPED_BASELINE_MODEL]
+
+    return parse_model_label(model)
+
+
+def get_baseline_default_algorithm(model):
+    if model in {BFS_UNCAPPED_BASELINE_MODEL, BFS_CAPPED_BASELINE_MODEL}:
+        return "BFS"
+
+    if model == RL_BASELINE_MODEL:
+        return "RL"
+
+    return model.replace("_Baseline", "")
+
+
 def extract_p95_data(visited_nodes_data):
     rows = []
 
@@ -2094,9 +2134,12 @@ def extract_p95_data(visited_nodes_data):
         if model is None:
             continue
 
-        if model in {"BFS_Baseline", "RL_Baseline"}:
-            algorithm = analysis.get("strategy", model.replace("_Baseline", ""))
-            model_label = parse_model_label(model)
+        if model in BASELINE_MODEL_NAMES:
+            algorithm = analysis.get(
+                "strategy",
+                get_baseline_default_algorithm(model),
+            )
+            model_label = get_p95_model_label(model)
             model_id = model
         else:
             algorithm = analysis.get("strategy", "A*")
@@ -2198,7 +2241,7 @@ def plot_p95_bar_chart(p95_df, output_path, successful_only=True):
 
 def plot_p95_vs_dimension(p95_df, output_path, successful_only=True):
     df = p95_df.copy()
-    df = df[~df["model"].isin(["BFS_Baseline", "RL_Baseline"])]
+    df = df[~df["model"].isin(BASELINE_MODEL_NAMES)]
     df = df[df["dimension"].notna()]
 
     if df.empty:
@@ -2494,8 +2537,7 @@ def plot_all_p95_analysis(p95_df, plot_root):
     )
 
     # Individual histogram:
-    # - one for BFS
-    # - one for RL
+    # - one for each baseline with visited-node data
     # - one per A* model and Matryoshka dimension
     plot_individual_visited_node_histograms(
         p95_df=p95_df,
@@ -2577,7 +2619,7 @@ def plot_result_set(dataset_name, run_suffix, graph_name, eval_results_path, vis
     # - p95_analysis/p95_successful_only_bar.pdf
     # - p95_analysis/p95_successful_only_vs_dimension.pdf
     # - p95_analysis/visited_counts_all_grid.pdf
-    # - p95_analysis/individual_histograms/BFS_Baseline/baseline/histogram.pdf
+    # - p95_analysis/individual_histograms/BFS_Uncapped_Baseline/baseline/histogram.pdf
     # - p95_analysis/individual_histograms/RL_Baseline/baseline/histogram.pdf
     # - p95_analysis/individual_histograms/<model>/dim_<dim>/histogram.pdf
     # -------------------------------------------------------------------------

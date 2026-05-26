@@ -39,6 +39,9 @@ from core.utils import (
 from evaluation.select_best_model import select_best_astar_model, print_selection
 
 EVALUATION_OUTPUT_ROOT = Path("data/evaluation")
+BFS_CAPPED_BASELINE_MODEL = "BFS_Baseline"
+BFS_UNCAPPED_BASELINE_MODEL = "BFS_Uncapped_Baseline"
+RL_BASELINE_MODEL = "RL_Baseline"
 
 base_models = [
     "sentence-transformers/all-mpnet-base-v2",
@@ -273,6 +276,24 @@ def get_p95_cap(p95_configs, model, dimension, strategy):
         return p95_configs[strategy_key]
 
     raise KeyError(f"Missing p95 config for {strategy_key}")
+
+
+def get_bfs_max_visits_cap(p95_configs):
+    """
+    The capped BFS evaluation uses the p95 from an uncapped BFS analysis.
+
+    Older visited_nodes_analysis.json files stored that source run as
+    BFS_Baseline. Newer files use BFS_Uncapped_Baseline.
+    """
+    for model in (BFS_UNCAPPED_BASELINE_MODEL, BFS_CAPPED_BASELINE_MODEL):
+        strategy_key = (model, None, "BFS")
+        if strategy_key in p95_configs:
+            return p95_configs[strategy_key]
+
+    raise KeyError(
+        "Missing p95 config for uncapped BFS source. Tried "
+        f"{BFS_UNCAPPED_BASELINE_MODEL} and {BFS_CAPPED_BASELINE_MODEL}."
+    )
 
 
 def compute_embedding_path_cost(path, embeder):
@@ -707,7 +728,18 @@ def parse_args():
     parser.add_argument(
         "--skip-bfs-baseline",
         action="store_true",
-        help="Skip BFS_Baseline even if it is missing from the output file.",
+        help=(
+            "Skip the capped BFS_Baseline even if it is missing from the "
+            "output file."
+        ),
+    )
+    parser.add_argument(
+        "--skip-bfs-uncapped-baseline",
+        action="store_true",
+        help=(
+            "Skip BFS_Uncapped_Baseline even if it is missing from the "
+            "output file."
+        ),
     )
     parser.add_argument(
         "--skip-rl-baseline",
@@ -729,16 +761,25 @@ def parse_args():
         "--force-baselines",
         action="store_true",
         help=(
-            "Rerun BFS_Baseline and RL_Baseline even if they already exist. "
-            "Existing baseline entries are replaced; model entries are kept."
+            "Rerun BFS_Uncapped_Baseline, BFS_Baseline, and RL_Baseline even "
+            "if they already exist. Existing baseline entries are replaced; "
+            "model entries are kept."
         ),
     )
     parser.add_argument(
         "--force-bfs-baseline",
         action="store_true",
         help=(
-            "Rerun BFS_Baseline even if it already exists. Existing BFS_Baseline "
-            "entries are replaced."
+            "Rerun the capped BFS_Baseline even if it already exists. "
+            "Existing BFS_Baseline entries are replaced."
+        ),
+    )
+    parser.add_argument(
+        "--force-bfs-uncapped-baseline",
+        action="store_true",
+        help=(
+            "Rerun BFS_Uncapped_Baseline even if it already exists. Existing "
+            "BFS_Uncapped_Baseline entries are replaced."
         ),
     )
     parser.add_argument(
@@ -899,15 +940,28 @@ if __name__ == "__main__":
     with open(dataset_path, encoding="utf-8") as file:
         valid_data = json.load(file)
 
+    force_bfs_uncapped_baseline = (
+        args.force_baselines or args.force_bfs_uncapped_baseline
+    )
     force_bfs_baseline = args.force_baselines or args.force_bfs_baseline
     force_rl_baseline = args.force_baselines or args.force_rl_baseline
 
     existing_results = load_results_file(output_json_file)
+    has_bfs_uncapped_baseline = any(
+        entry.get("model") == BFS_UNCAPPED_BASELINE_MODEL
+        for entry in existing_results
+    )
     has_bfs_baseline = any(
-        entry["model"] == "BFS_Baseline" for entry in existing_results
+        entry.get("model") == BFS_CAPPED_BASELINE_MODEL
+        for entry in existing_results
     )
     has_rl_baseline = any(
-        entry["model"] == "RL_Baseline" for entry in existing_results
+        entry.get("model") == RL_BASELINE_MODEL
+        for entry in existing_results
+    )
+    should_run_bfs_uncapped_baseline = (
+        not args.skip_bfs_uncapped_baseline
+        and (force_bfs_uncapped_baseline or not has_bfs_uncapped_baseline)
     )
     should_run_bfs_baseline = (
         not args.skip_bfs_baseline
@@ -918,11 +972,18 @@ if __name__ == "__main__":
         and (force_rl_baseline or not has_rl_baseline)
     )
 
+    if (
+        force_bfs_uncapped_baseline
+        and has_bfs_uncapped_baseline
+        and should_run_bfs_uncapped_baseline
+    ):
+        print(f"Force rerun enabled for {BFS_UNCAPPED_BASELINE_MODEL}.")
+
     if force_bfs_baseline and has_bfs_baseline and should_run_bfs_baseline:
-        print("Force rerun enabled for BFS_Baseline.")
+        print(f"Force rerun enabled for {BFS_CAPPED_BASELINE_MODEL}.")
 
     if force_rl_baseline and has_rl_baseline and should_run_rl_baseline:
-        print("Force rerun enabled for RL_Baseline.")
+        print(f"Force rerun enabled for {RL_BASELINE_MODEL}.")
 
     print(f"Loading causal graph from: {graph_path}")
     graph_load_start = time.time()
@@ -939,15 +1000,62 @@ if __name__ == "__main__":
         f"in {time.time() - graph_load_start:.1f}s"
     )
 
-    if should_run_bfs_baseline:
-        bfs_config = {
-            "bfs_max_visits": get_p95_cap(
-                p95_configs,
-                "BFS_Baseline",
-                None,
-                "BFS",
+    if should_run_bfs_uncapped_baseline:
+        bfs_uncapped_config = {"bfs_max_visits": -1}
+
+        run_warmup_traversal(
+            valid_data,
+            causal_graph,
+            None,
+            ts.bfs_traverse,
+            "BFS",
+            config=bfs_uncapped_config,
+        )
+
+        bfs_uncapped_summary = run_evaluation_loop(
+            valid_data,
+            causal_graph,
+            None,
+            {"BFS": ts.bfs_traverse},
+            f"BFS Uncapped Baseline | {dataset_name} | {run_suffix}",
+            config=bfs_uncapped_config,
+        )
+
+        save_result(
+            {
+                "model": BFS_UNCAPPED_BASELINE_MODEL,
+                "dimension": None,
+                "split": current_split,
+                "run_suffix": run_suffix,
+                "config_source_dataset": config_source_dataset_name,
+                "used_config": bfs_uncapped_config,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "evaluation": bfs_uncapped_summary,
+            },
+            output_json_file,
+            output_csv_file,
+            replace_existing=(
+                (
+                    lambda entry: entry.get("model")
+                    == BFS_UNCAPPED_BASELINE_MODEL
+                )
+                if force_bfs_uncapped_baseline
+                else None
+            ),
+        )
+    else:
+        if args.skip_bfs_uncapped_baseline:
+            print(
+                f"Skipping {BFS_UNCAPPED_BASELINE_MODEL} because "
+                "--skip-bfs-uncapped-baseline was set."
             )
-        }
+        elif has_bfs_uncapped_baseline:
+            print(f"Skipping {BFS_UNCAPPED_BASELINE_MODEL} because it already exists.")
+        else:
+            print(f"Skipping {BFS_UNCAPPED_BASELINE_MODEL}.")
+
+    if should_run_bfs_baseline:
+        bfs_config = {"bfs_max_visits": get_bfs_max_visits_cap(p95_configs)}
 
         run_warmup_traversal(
             valid_data,
@@ -963,13 +1071,13 @@ if __name__ == "__main__":
             causal_graph,
             None,
             {"BFS": ts.bfs_traverse},
-            f"BFS Baseline | {dataset_name} | {run_suffix}",
+            f"BFS Capped Baseline | {dataset_name} | {run_suffix}",
             config=bfs_config,
         )
 
         save_result(
             {
-                "model": "BFS_Baseline",
+                "model": BFS_CAPPED_BASELINE_MODEL,
                 "dimension": None,
                 "split": current_split,
                 "run_suffix": run_suffix,
@@ -981,18 +1089,24 @@ if __name__ == "__main__":
             output_json_file,
             output_csv_file,
             replace_existing=(
-                (lambda entry: entry.get("model") == "BFS_Baseline")
+                (
+                    lambda entry: entry.get("model")
+                    == BFS_CAPPED_BASELINE_MODEL
+                )
                 if force_bfs_baseline
                 else None
             ),
         )
     else:
         if args.skip_bfs_baseline:
-            print("Skipping BFS_Baseline because --skip-bfs-baseline was set.")
+            print(
+                f"Skipping {BFS_CAPPED_BASELINE_MODEL} because "
+                "--skip-bfs-baseline was set."
+            )
         elif has_bfs_baseline:
-            print("Skipping BFS_Baseline because it already exists.")
+            print(f"Skipping {BFS_CAPPED_BASELINE_MODEL} because it already exists.")
         else:
-            print("Skipping BFS_Baseline.")
+            print(f"Skipping {BFS_CAPPED_BASELINE_MODEL}.")
 
     existing_results = load_results_file(output_json_file)
 
@@ -1051,7 +1165,7 @@ if __name__ == "__main__":
 
         save_result(
             {
-                "model": "RL_Baseline",
+                "model": RL_BASELINE_MODEL,
                 "dimension": None,
                 "split": current_split,
                 "run_suffix": run_suffix,
@@ -1064,7 +1178,7 @@ if __name__ == "__main__":
             output_json_file,
             output_csv_file,
             replace_existing=(
-                (lambda entry: entry.get("model") == "RL_Baseline")
+                (lambda entry: entry.get("model") == RL_BASELINE_MODEL)
                 if force_rl_baseline
                 else None
             ),
@@ -1075,11 +1189,14 @@ if __name__ == "__main__":
         gc.collect()
     else:
         if args.skip_rl_baseline:
-            print("Skipping RL_Baseline because --skip-rl-baseline was set.")
+            print(
+                f"Skipping {RL_BASELINE_MODEL} because "
+                "--skip-rl-baseline was set."
+            )
         elif has_rl_baseline:
-            print("Skipping RL_Baseline because it already exists.")
+            print(f"Skipping {RL_BASELINE_MODEL} because it already exists.")
         else:
-            print("Skipping RL_Baseline.")
+            print(f"Skipping {RL_BASELINE_MODEL}.")
 
     if args.baselines_only:
         print(

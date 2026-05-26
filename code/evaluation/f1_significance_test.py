@@ -18,6 +18,7 @@ DEFAULT_REFERENCE_CONTAINS = [
 DEFAULT_REFERENCE_DIMENSION = 128
 DEFAULT_REFERENCE_ALGORITHM = "A*"
 DEFAULT_COMPARISONS = [
+    "model=BFS_Uncapped_Baseline,algorithm=BFS",
     "model=BFS_Baseline,algorithm=BFS",
     "model=RL_Baseline,algorithm=RL",
 ]
@@ -185,8 +186,10 @@ def parse_selector(text):
     Parse a comparison selector.
 
     Accepted forms:
+    - "BFS_Uncapped_Baseline"
     - "BFS_Baseline"
     - "RL_Baseline"
+    - "model=BFS_Uncapped_Baseline,algorithm=BFS"
     - "model=BFS_Baseline,algorithm=BFS"
     - "model=RL_Baseline,algorithm=RL"
     - "model_contains=Qwen,dimension=128,algorithm=A*"
@@ -536,7 +539,9 @@ def parse_args():
         action="append",
         default=None,
         help=(
-            "Comparison selector. Examples: 'BFS_Baseline', 'RL_Baseline', "
+            "Comparison selector. Examples: 'BFS_Uncapped_Baseline', "
+            "'BFS_Baseline', 'RL_Baseline', "
+            "'model=BFS_Uncapped_Baseline,algorithm=BFS', "
             "'model=BFS_Baseline,algorithm=BFS', "
             "'model=RL_Baseline,algorithm=RL', "
             "'model_contains=Qwen,dimension=64,algorithm=A*'. "
