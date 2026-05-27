@@ -280,7 +280,7 @@ def objective(trial, f_model_path, f_curr_model_name, f_datasets_by_distance,
     # The LR range is intentionally narrow because previous runs already showed
     # that useful learning rates are in this area.
     if f_fixed_lr is None:
-        lr = trial.suggest_float("lr", 2.5e-5, 5e-5, log=True)
+        lr = trial.suggest_float("lr", 2.5e-5, 3e-5, log=True)
     else:
         lr = trial.suggest_float("lr", f_fixed_lr, f_fixed_lr, log=True)
 
