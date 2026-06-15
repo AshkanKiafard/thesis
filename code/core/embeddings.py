@@ -11,6 +11,8 @@ from sentence_transformers import SentenceTransformer
 
 from core.constants import DistanceMetric
 
+# Split embedding caches are NumPy .npy files plus JSONL row labels, so they can
+# be read lazily with np.load(..., mmap_mode=...) without a custom binary layout.
 # code/core/embeddings.py -> repo root is two levels above this file.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "code" / "data"
@@ -21,7 +23,6 @@ def _embedding_cache_paths(cache_file):
     cache_stem = cache_file.with_suffix("")
 
     return {
-        "legacy": cache_file,
         "texts": cache_stem.with_name(f"{cache_stem.name}_texts.jsonl"),
         "vectors": cache_stem.with_name(f"{cache_stem.name}_vectors.npy"),
     }
@@ -62,7 +63,7 @@ def _close_memmap(array):
         mmap.close()
 
 
-def _load_non_pickle_embedding_cache(paths):
+def _load_embedding_cache_files(paths):
     if not paths["texts"].exists() or not paths["vectors"].exists():
         return None
 
@@ -88,7 +89,7 @@ def _load_non_pickle_embedding_cache(paths):
         return texts, vectors
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(
-            "Ignoring corrupt non-pickle embedding cache "
+            "Ignoring corrupt JSONL/mmap embedding cache "
             f"{paths['texts']} / {paths['vectors']}: {exc}."
         )
         for path in (paths["texts"], paths["vectors"]):
@@ -102,71 +103,36 @@ def _load_non_pickle_embedding_cache(paths):
     return None
 
 
-def _load_legacy_pickle_embedding_cache(paths, allow_legacy_pickle=True):
-    if not allow_legacy_pickle or not paths["legacy"].exists():
-        return {}
+def load_st_embedding_cache(cache_file):
+    paths = _embedding_cache_paths(cache_file)
+    cache_files = _load_embedding_cache_files(paths)
 
-    try:
-        cache = np.load(paths["legacy"], allow_pickle=True).item()
-        print(
-            "Loaded legacy pickle embedding cache from "
-            f"{paths['legacy']}. Resaving will convert it to "
-            "the non-pickle cache format."
-        )
-        return cache
-    except (EOFError, OSError, ValueError) as exc:
+    if cache_files is not None:
+        texts, vectors = cache_files
         try:
-            moved_path = _move_corrupt_file(paths["legacy"])
-            print(
-                "Ignoring corrupt legacy embedding cache "
-                f"{paths['legacy']}: {exc}. "
-                f"Moved it to {moved_path}."
-            )
-        except OSError:
-            print(
-                "Ignoring corrupt legacy embedding cache "
-                f"{paths['legacy']}: {exc}. "
-                "Could not move the corrupt file."
-            )
+            return {
+                text: np.array(vectors[index], dtype="float32", copy=True)
+                for index, text in enumerate(texts)
+            }
+        finally:
+            _close_memmap(vectors)
 
     return {}
 
 
-def load_st_embedding_cache(cache_file, allow_legacy_pickle=True):
+def load_st_embedding_cache_index(cache_file):
     paths = _embedding_cache_paths(cache_file)
-    non_pickle_cache = _load_non_pickle_embedding_cache(paths)
+    cache_files = _load_embedding_cache_files(paths)
 
-    if non_pickle_cache is not None:
-        texts, vectors = non_pickle_cache
-        return {
-            text: vectors[index].astype("float32", copy=False)
-            for index, text in enumerate(texts)
-        }
-
-    return _load_legacy_pickle_embedding_cache(
-        paths,
-        allow_legacy_pickle=allow_legacy_pickle,
-    )
-
-
-def load_st_embedding_cache_index(cache_file, allow_legacy_pickle=True):
-    paths = _embedding_cache_paths(cache_file)
-    non_pickle_cache = _load_non_pickle_embedding_cache(paths)
-
-    if non_pickle_cache is not None:
-        texts, vectors = non_pickle_cache
+    if cache_files is not None:
+        texts, vectors = cache_files
         text_to_idx = {
             text: index
             for index, text in enumerate(texts)
         }
         return {}, text_to_idx, vectors
 
-    cache = _load_legacy_pickle_embedding_cache(
-        paths,
-        allow_legacy_pickle=allow_legacy_pickle,
-    )
-
-    return cache, {}, None
+    return {}, {}, None
 
 
 def save_st_embedding_cache(
@@ -464,6 +430,7 @@ class STEmbedder:
         self.tensor_cache_dim = None
         self.indexed_text_to_idx = {}
         self.embedding_table = None
+        self.embedding_table_dim = None
 
         # Store embedding caches inside the mounted project directory.
         # This avoids writing to ../data, which resolves outside /app inside the Slurm container.
@@ -587,19 +554,39 @@ class STEmbedder:
 
         return self.cache_vectors[index]
 
-    def _clear_device_cache(self):
-        self.tensor_cache.clear()
-        self.indexed_text_to_idx = {}
-        self.embedding_table = None
+    def _embedding_index_covers_active_dim(self):
+        if self.embedding_table is None or self.embedding_table_dim is None:
+            return False
 
-        if self.device.startswith("cuda"):
+        required_dim = self._active_tensor_dim() or self.get_model_dim()
+        return self.embedding_table_dim >= required_dim
+
+    def _clear_device_cache(self, clear_embedding_index=True):
+        had_tensor_cache = bool(self.tensor_cache)
+        had_embedding_index = self.embedding_table is not None
+
+        self.tensor_cache.clear()
+        if clear_embedding_index:
+            self.indexed_text_to_idx = {}
+            self.embedding_table = None
+            self.embedding_table_dim = None
+
+        if (
+            self.device.startswith("cuda")
+            and (
+                had_tensor_cache
+                or (clear_embedding_index and had_embedding_index)
+            )
+        ):
             torch.cuda.empty_cache()
 
     def _ensure_tensor_cache_dim(self):
         active_dim = self._active_tensor_dim()
 
         if self.tensor_cache_dim != active_dim:
-            self._clear_device_cache()
+            self._clear_device_cache(
+                clear_embedding_index=not self._embedding_index_covers_active_dim()
+            )
             self.tensor_cache_dim = active_dim
 
     def set_matryoshka_dim(self, dim: int):
@@ -611,7 +598,9 @@ class STEmbedder:
         active_dim = self._active_tensor_dim()
 
         if previous_active_dim != active_dim:
-            self._clear_device_cache()
+            self._clear_device_cache(
+                clear_embedding_index=not self._embedding_index_covers_active_dim()
+            )
             self.tensor_cache_dim = active_dim
 
     def get_model_dim(self):
@@ -820,7 +809,6 @@ class STEmbedder:
                     dimension_cache_vectors,
                 ) = load_st_embedding_cache_index(
                     dimension_cache_file,
-                    allow_legacy_pickle=False,
                 )
 
                 has_complete_dimension_cache = all(
@@ -1101,6 +1089,7 @@ class STEmbedder:
             freeze=True,
         ).to(self.device)
         self.embedding_table.eval()
+        self.embedding_table_dim = int(runtime_matrix.shape[1])
         self.indexed_text_to_idx = {
             text: index
             for index, text in enumerate(unique_texts)
@@ -1126,13 +1115,17 @@ class STEmbedder:
         return self.embedding_table is not None
 
     def has_normalized_runtime_embeddings(self) -> bool:
-        return self.distance_metric == DistanceMetric.COSINE
+        if self.distance_metric != DistanceMetric.COSINE:
+            return False
+
+        active_dim = self._active_tensor_dim() or self.get_model_dim()
+        return self.embedding_table_dim in {None, active_dim}
 
     def embed_index(self, index: int) -> torch.Tensor:
         if self.embedding_table is None:
             raise ValueError("Embedding index has not been prepared.")
 
-        return self.embedding_table.weight[index].flatten()
+        return self._trim_to_active_dim(self.embedding_table.weight[index].flatten())
 
     def embed_indices(self, indices) -> torch.Tensor:
         if self.embedding_table is None:
@@ -1145,7 +1138,9 @@ class STEmbedder:
         )
 
         with torch.no_grad():
-            return self.embedding_table.weight.index_select(0, index_tensor)
+            return self._trim_matrix_to_active_dim(
+                self.embedding_table.weight.index_select(0, index_tensor)
+            )
 
     def embed_many(self, texts) -> torch.Tensor:
         self._ensure_tensor_cache_dim()
@@ -1186,7 +1181,6 @@ class STEmbedder:
             self.cache_vectors,
         ) = load_st_embedding_cache_index(
             self.cache_file,
-            allow_legacy_pickle=False,
         )
 
     def get_distance(self, embed1, embed2):

@@ -3,6 +3,7 @@ from typing import Any, Dict
 
 import networkx as nx
 
+from core.constants import EMBEDDING_INDEX_MIN_SUCCESSORS
 from core.embeddings import STEmbedder
 
 
@@ -31,8 +32,13 @@ def _reconstruct_index_path(parents, end_index, indexed_graph):
 
 
 def _embed_many(embeder, nodes, config):
-    # Small successor batches are usually faster through the regular tensor cache.
-    min_successors = config.get("embedding_index_min_successors", 128)
+    # See benchmarks/embed_many_threshold_benchmark.py: small successor batches
+    # are still faster through single-row lookups, while embed_many starts
+    # winning around 16 successors on the astar_gpu runtime.
+    min_successors = config.get(
+        "embedding_index_min_successors",
+        EMBEDDING_INDEX_MIN_SUCCESSORS,
+    )
     has_embedding_index = getattr(embeder, "has_embedding_index", None)
     can_use_index = (
         has_embedding_index()

@@ -17,7 +17,7 @@ from sklearn.metrics import (
 )
 
 import traverse_strategies as ts
-from core.constants import GLOVE_300D_PATH
+from core.constants import EMBEDDING_INDEX_MIN_SUCCESSORS, GLOVE_300D_PATH
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.graph_config import (
     DEFAULT_GRAPH_NAME,
@@ -427,13 +427,6 @@ def get_used_max_visits(used_config, algorithm):
         return used_config.get("astar_max_visits")
 
     return None
-
-
-def get_embedding_index_config(graph_name):
-    if graph_name in {"causalbank", "causalbank_full"}:
-        return {"embedding_index_min_successors": 128}
-
-    return {}
 
 
 def strip_runtime_config(config):
@@ -1279,7 +1272,9 @@ if __name__ == "__main__":
                     print(f"Skipping {model_name} dim {dim}")
                     continue
 
-                used_config.update(get_embedding_index_config(graph_name))
+                used_config["embedding_index_min_successors"] = (
+                    EMBEDDING_INDEX_MIN_SUCCESSORS
+                )
                 pending_work.append((dim, pending_strategies, used_config))
 
             if not pending_work:

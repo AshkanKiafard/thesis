@@ -9,6 +9,11 @@ import numpy as np
 import pandas as pd
 
 from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
+from core.utils import (
+    format_model_display_name,
+    get_model_base_name,
+    is_finetuned_model_name,
+)
 
 # -------------------------------------------------------------------------
 # Paths / global config
@@ -32,16 +37,24 @@ BASELINE_MODEL_NAMES = {
 }
 
 BASE_MODEL_LABELS = {
-    "all-mpnet-base-v2": "MPNet Base",
-    "bge-large-en-v1.5": "BGE Large Base",
-    "mxbai-embed-large-v1": "MxBai Large Base",
-    "Qwen3-Embedding-0.6B": "Qwen 0.6B Base",
-    "Qwen3-Embedding-4B": "Qwen 4B Base",
-    "granite-embedding-small-english-r2": "Granite Small Base",
-    "granite-embedding-english-r2": "Granite Base",
-    BFS_UNCAPPED_BASELINE_MODEL: "BFS (no max visits)",
-    BFS_CAPPED_BASELINE_MODEL: "BFS (max visits)",
-    RL_BASELINE_MODEL: "RL Baseline",
+    "all-mpnet-base-v2": format_model_display_name("all-mpnet-base-v2"),
+    "bge-large-en-v1.5": format_model_display_name("bge-large-en-v1.5"),
+    "mxbai-embed-large-v1": format_model_display_name("mxbai-embed-large-v1"),
+    "Qwen3-Embedding-0.6B": format_model_display_name("Qwen3-Embedding-0.6B"),
+    "Qwen3-Embedding-4B": format_model_display_name("Qwen3-Embedding-4B"),
+    "granite-embedding-small-english-r2": format_model_display_name(
+        "granite-embedding-small-english-r2"
+    ),
+    "granite-embedding-english-r2": format_model_display_name(
+        "granite-embedding-english-r2"
+    ),
+    BFS_UNCAPPED_BASELINE_MODEL: format_model_display_name(
+        BFS_UNCAPPED_BASELINE_MODEL
+    ),
+    BFS_CAPPED_BASELINE_MODEL: format_model_display_name(
+        BFS_CAPPED_BASELINE_MODEL
+    ),
+    RL_BASELINE_MODEL: format_model_display_name(RL_BASELINE_MODEL),
 }
 
 MODEL_BASE_COLORS = {
@@ -301,19 +314,6 @@ def sanitize_path_component(value):
 # Model labels / sorting
 # -------------------------------------------------------------------------
 
-MODEL_NAME_STOP_TOKENS = {
-    "relu",
-    "gelu",
-    "cosine",
-    "euclid",
-    "norm",
-    "nonorm",
-    "matryoshka",
-    "single",
-    "best",
-}
-
-
 def adjust_color(color, amount):
     rgb = np.array(mcolors.to_rgb(color))
 
@@ -325,86 +325,8 @@ def adjust_color(color, amount):
     return mcolors.to_hex(np.clip(adjusted, 0.0, 1.0))
 
 
-def get_model_base_name(model_name):
-    name = str(model_name).removesuffix("_finetuned")
-    name = name.removesuffix("_best")
-    parts = name.split("_")
-
-    base_parts = []
-    for part in parts:
-        if part in MODEL_NAME_STOP_TOKENS:
-            break
-        base_parts.append(part)
-
-    return "_".join(base_parts)
-
-
-def is_finetuned_model(model_name):
-    name = str(model_name)
-
-    if name.endswith("_finetuned"):
-        return True
-
-    parts = name.removesuffix("_finetuned").split("_")
-    return any(part in MODEL_NAME_STOP_TOKENS for part in parts)
-
-
 def parse_model_label(model_name):
-    if model_name in BASE_MODEL_LABELS:
-        return BASE_MODEL_LABELS[model_name]
-
-    name = model_name.removesuffix("_finetuned")
-    name = name.removesuffix("_best")
-    parts = name.split("_")
-    base_name = get_model_base_name(model_name)
-
-    activation = None
-    distance = None
-    normalization = None
-    training = None
-
-    for part in parts:
-        if part == "relu":
-            activation = "ReLU"
-        elif part == "gelu":
-            activation = "GELU"
-        elif part == "cosine":
-            distance = "Cosine"
-        elif part == "euclid":
-            distance = "Euclidean"
-        elif part == "norm":
-            normalization = "Norm"
-        elif part == "nonorm":
-            normalization = "NoNorm"
-        elif part == "matryoshka":
-            training = "Matryoshka"
-        elif part == "single":
-            training = "Single"
-
-    prefix_map = {
-        "all-mpnet-base-v2": "MPNet",
-        "bge-large-en-v1.5": "BGE Large",
-        "mxbai-embed-large-v1": "MxBai Large",
-        "Qwen3-Embedding-0.6B": "Qwen 0.6B",
-        "Qwen3-Embedding-4B": "Qwen 4B",
-        "granite-embedding-small-english-r2": "Granite Small",
-        "granite-embedding-english-r2": "Granite",
-    }
-
-    prefix = prefix_map.get(base_name, base_name)
-
-    label_parts = [prefix]
-
-    if activation:
-        label_parts.append(activation)
-    if distance:
-        label_parts.append(distance)
-    if normalization:
-        label_parts.append(normalization)
-    if training:
-        label_parts.append(training)
-
-    return " + ".join(label_parts)
+    return format_model_display_name(model_name)
 
 
 def model_sort_key(model_name):
@@ -709,7 +631,7 @@ def get_model_line_style(model_name):
     family_color = MODEL_BASE_COLORS.get(base_name, "#4C78A8")
     marker = MODEL_BASE_MARKERS.get(base_name, "o")
 
-    if is_finetuned_model(model_name):
+    if is_finetuned_model_name(model_name):
         color = adjust_color(family_color, -0.08)
 
         return {

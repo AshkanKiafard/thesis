@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 import traverse_strategies as ts
-from core.constants import GLOVE_300D_PATH
+from core.constants import EMBEDDING_INDEX_MIN_SUCCESSORS, GLOVE_300D_PATH
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.graph_config import (
     DEFAULT_GRAPH_NAME,
@@ -253,13 +253,6 @@ def run_visited_nodes_loop(
     return summary
 
 
-def get_embedding_index_config(graph_name):
-    if graph_name in {"causalbank", "causalbank_full"}:
-        return {"embedding_index_min_successors": 128}
-
-    return {}
-
-
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Collect uncapped visited-node distributions."
@@ -464,7 +457,9 @@ if __name__ == "__main__":
             print(f"Model dim: {model_dim}")
             print(f"Matryoshka dims: {matryoshka_dims}")
 
-            semantic_config = get_embedding_index_config(graph_name)
+            semantic_config = {
+                "embedding_index_min_successors": EMBEDDING_INDEX_MIN_SUCCESSORS
+            }
 
             for dim in matryoshka_dims:
                 existing_results = load_results_file(output_json_file)

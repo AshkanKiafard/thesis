@@ -77,9 +77,10 @@ def parse_args():
         choices=graph_choices(),
         default=None,
         help=(
-            "Graph to pre-embed. If omitted, keep the legacy combined "
-            "causenet+causalbank cache. Full graph variants are stored in "
-            "separate graph-specific cache files."
+            "Graph to pre-embed. If omitted, pre-embed the combined "
+            "causenet+causalbank node set into the shared JSONL/mmap cache. "
+            "Full graph variants are stored in separate graph-specific cache "
+            "files."
         ),
     )
     parser.add_argument(
@@ -477,7 +478,7 @@ def main():
     if cache_suffix:
         print(f"Using graph-specific embedding cache suffix: {cache_suffix}")
     else:
-        print("Using legacy shared embedding cache.")
+        print("Using shared JSONL/mmap embedding cache.")
 
     if args.single_model is not None:
         model_queue = [args.single_model]

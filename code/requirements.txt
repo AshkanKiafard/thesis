@@ -1,5 +1,7 @@
 datasets~=4.4.1
 gradio~=5.49.1
+fastapi~=0.116.1
+uvicorn~=0.35.0
 networkx~=3.6
 numpy~=2.3.5
 optuna~=4.6.0

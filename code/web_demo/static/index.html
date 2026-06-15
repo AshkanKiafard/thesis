@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <title>Webis Demo Causal Graph A* Inference</title>
+    <meta charset="utf-8">
+    <meta name="description" content="Interactive demo for A* inference on causal graphs">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="copyright" content="&copy; 2025 Webis">
+    <link rel="icon" type="image/png" href="https://assets.webis.de/img/favicon.png">
+    <link rel="stylesheet" href="https://assets.webis.de/css/style.css?1760090551">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="uk-offcanvas-content">
+<script src="https://assets.webis.de/js/thirdparty/uikit/uikit.min.js"></script>
+<script src="https://assets.webis.de/js/thirdparty/uikit/uikit-icons.min.js"></script>
+
+<div class="uk-background-secondary global-nav" data-uk-sticky>
+    <nav class="uk-navbar-container uk-navbar-transparent uk-container uk-light" data-uk-navbar="mode: click">
+        <div class="uk-navbar-left">
+            <ul class="uk-navbar-nav">
+                <li>
+                    <a href="https://webis.de/"><img src="https://assets.webis.de/img/webis-logo.png" alt="Webis Logo" class="uk-logo"> Webis.de</a>
+                </li>
+            </ul>
+        </div>
+    </nav>
+</div>
+
+<div data-uk-height-viewport="expand: true">
+<nav class="uk-container">
+<ul class="uk-breadcrumb">
+<li><a href="https://webis.de">Webis.de</a></li>
+<li><a href="https://webis.de/research.html">Research</a></li>
+<li><a href="#">Causal Graph Inference</a></li>
+<li class="uk-disabled"><a href="#">Demo</a></li>
+</ul>
+</nav>
+
+<script type="application/ld+json">
+{
+    "@context":"http://schema.org/",
+    "@type":"Demo",
+    "name":"Causal Graph A* Inference",
+    "description":"Interactive A* inference demo for causal knowledge graphs.",
+    "url":"http://127.0.0.1:8000/",
+    "keywords":["causal graph", "A*", "inference", "Webis"],
+    "creator":[
+        {
+            "@type":"Organization",
+            "url":"https://webis.de/",
+            "name":"The Web Technology & Information Systems Network",
+            "alternateName":"Webis"
+        }
+    ]
+}
+</script>
+
+<main class="uk-section uk-section-default demo-main">
+    <div class="uk-container">
+        <h1>Causal Graph A* Inference</h1>
+
+        <div id="alert" class="demo-alert" hidden></div>
+
+        <section class="demo-layout" aria-label="A* inference demo">
+            <aside class="demo-panel controls-panel">
+                <form id="controls" class="uk-form-stacked">
+                    <div class="uk-margin-small-bottom">
+                        <label class="uk-form-label" for="graph-select">Causal Graph</label>
+                        <select id="graph-select" class="uk-select"></select>
+                    </div>
+
+                    <div class="uk-margin-small-bottom">
+                        <label class="uk-form-label" for="model-select">A* Model</label>
+                        <select id="model-select" class="uk-select"></select>
+                    </div>
+
+                    <div class="uk-margin-small-bottom">
+                        <label class="uk-form-label" for="dim-select">Embedding Dimension</label>
+                        <select id="dim-select" class="uk-select"></select>
+                    </div>
+
+                    <div class="uk-margin-small-bottom">
+                        <label class="uk-form-label" for="source-input">Start Concept</label>
+                        <input id="source-input" class="uk-input" list="source-suggestions" autocomplete="off">
+                        <datalist id="source-suggestions"></datalist>
+                    </div>
+
+                    <div class="uk-margin-small-bottom">
+                        <label class="uk-form-label" for="target-input">Target Concept</label>
+                        <input id="target-input" class="uk-input" list="target-suggestions" autocomplete="off">
+                        <datalist id="target-suggestions"></datalist>
+                    </div>
+
+                    <div class="pick-mode" role="group" aria-label="Node click target">
+                        <button type="button" class="uk-button uk-button-default pick-button active" id="pick-source">
+                            <span data-uk-icon="icon: location; ratio: 0.85"></span>
+                            Start
+                        </button>
+                        <button type="button" class="uk-button uk-button-default pick-button" id="pick-target">
+                            <span data-uk-icon="icon: future; ratio: 0.85"></span>
+                            Target
+                        </button>
+                    </div>
+
+                    <details class="advanced-settings">
+                        <summary>Advanced settings</summary>
+                        <div class="uk-margin-small-top">
+                            <label class="uk-form-label" for="astar-max-visits">A* Max Visits</label>
+                            <input id="astar-max-visits" class="uk-input" type="number" min="-1" step="1">
+                            <div id="astar-max-visits-source" class="advanced-note"></div>
+                        </div>
+                        <div class="uk-margin-small-top">
+                            <label class="uk-form-label" for="embedding-threshold">Embedding-Index Threshold</label>
+                            <input id="embedding-threshold" class="uk-input" type="number" min="1" step="1">
+                        </div>
+                    </details>
+
+                    <button id="run-button" type="submit" class="uk-button uk-button-primary run-button">
+                        <span data-uk-icon="icon: play; ratio: 0.85"></span>
+                        Run A*
+                    </button>
+                </form>
+
+                <div class="result-panel">
+                    <h2>Result</h2>
+                    <div id="result-status" class="result-status idle">Ready</div>
+                    <dl class="metrics">
+                        <div><dt>Hops</dt><dd id="metric-hops">-</dd></div>
+                        <div><dt>Visited</dt><dd id="metric-visited">-</dd></div>
+                        <div><dt>Runtime</dt><dd id="metric-runtime">-</dd></div>
+                    </dl>
+                    <ol id="path-list" class="path-list"></ol>
+                </div>
+            </aside>
+
+            <section class="graph-panel">
+                <div class="graph-toolbar">
+                    <span id="graph-caption">Loading graph sample...</span>
+                    <button id="reload-subgraph" class="uk-button uk-button-default uk-button-small" type="button" title="Reload sampled graph">
+                        <span data-uk-icon="icon: refresh; ratio: 0.8"></span>
+                    </button>
+                </div>
+                <div id="graph"></div>
+            </section>
+        </section>
+    </div>
+</main>
+
+</div>
+
+<footer class="uk-section uk-section-muted footer-section">
+    <div class="uk-container">
+        <div class="uk-grid uk-grid-small uk-margin-top">
+            <div class="uk-width-1-5@s"></div>
+            <div class="uk-width-expand uk-visible@s"></div>
+            <div>
+              &copy; 2025 <a href="https://webis.de/">Webis Group</a> <span class="uk-padding-small">&bullet;</span>
+              <a href="https://github.com/webis-de"><span data-uk-icon="icon: github; ratio:0.8"></span></a>
+              <a href="https://twitter.com/webis_de"><span data-uk-icon="icon: twitter; ratio:0.9"></span></a>
+              <a href="https://www.youtube.com/webis"><span data-uk-icon="icon: youtube; ratio:0.9"></span></a> <span class="uk-padding-small">&bullet;</span>
+              <a href="https://webis.de/people.html">Contact</a> <span class="uk-padding-small">&bullet;</span>
+              <a href="https://webis.de/legal.html">Impressum / Terms / Privacy</a>
+            </div>
+        </div>
+    </div>
+</footer>
+
+<script src="https://unpkg.com/3d-force-graph@1.77.0/dist/3d-force-graph.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
