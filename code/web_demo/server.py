@@ -12,6 +12,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+# Transformers may import model classes that use torch.compile at import time.
+# The web demo does inference only, and disabling TorchDynamo avoids fragile
+# Inductor imports on Windows environments with mixed torch package versions.
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -41,7 +46,7 @@ EMBEDDINGS_DIR = CODE_ROOT / "data" / "embeddings"
 GRAPH_CACHE_DIR = CODE_ROOT / "data" / "cache" / "web_demo_graphs"
 VISUAL_CACHE_DIR = CODE_ROOT / "data" / "cache" / "web_demo_graph_previews"
 
-DEFAULT_RUN_SUFFIX = os.environ.get("WEB_DEMO_RUN_SUFFIX", "best_v2")
+DEFAULT_RUN_SUFFIX = os.environ.get("WEB_DEMO_RUN_SUFFIX", "v3")
 EMBEDDING_DEVICE = os.environ.get("WEB_DEMO_EMBEDDING_DEVICE", "auto")
 ASTAR_MAX_VISITS = int(os.environ.get("WEB_DEMO_ASTAR_MAX_VISITS", "-1"))
 SUBGRAPH_LIMIT = int(os.environ.get("WEB_DEMO_SUBGRAPH_LIMIT", "240"))

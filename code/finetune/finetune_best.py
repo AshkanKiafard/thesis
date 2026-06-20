@@ -84,7 +84,7 @@ def parse_args():
     parser.add_argument(
         "--run-suffix",
         type=str,
-        default="best_v2",
+        default="v3",
         help="Suffix for checkpoint/log/model directory names"
     )
 

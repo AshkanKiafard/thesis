@@ -56,9 +56,9 @@ def build_output_paths(dataset_path: str, run_suffix: str, graph_name: str):
     Build output path from dataset name and run suffix.
 
     Example:
-    data/datasets/msmarco_valid_filtered.json + best_v2
+    data/datasets/msmarco_valid_filtered.json + v3
     ->
-    data/evaluation/causenet/msmarco_valid/best_v2/visited_nodes_analysis.json
+    data/evaluation/causenet/msmarco_valid/v3/visited_nodes_analysis.json
     """
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
@@ -266,7 +266,7 @@ def parse_args():
         "--run-suffix",
         type=str,
         required=True,
-        help="Final-training run suffix, e.g. best_v2.",
+        help="Final-training run suffix, e.g. v3.",
     )
     parser.add_argument(
         "--graph",

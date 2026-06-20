@@ -141,8 +141,8 @@ def parse_args():
         "--run-suffix",
         default=None,
         help=(
-            "Run suffix used in evaluation and plot paths, e.g. best_v2. "
-            "Defaults to best_v2 for single-dataset mode. In --all mode, "
+            "Run suffix used in evaluation and plot paths, e.g. v3. "
+            "Defaults to v3 for single-dataset mode. In --all mode, "
             "omitting this includes every run suffix."
         ),
     )
@@ -2602,7 +2602,7 @@ if __name__ == "__main__":
     else:
         dataset_name = dataset_name_from_arg(args.dataset)
         graph_name = args.graph or DEFAULT_GRAPH_NAME
-        run_suffix = args.run_suffix or "best_v2"
+        run_suffix = args.run_suffix or "v3"
         eval_results_path, visited_nodes_path = build_input_paths(
             dataset_name,
             run_suffix,

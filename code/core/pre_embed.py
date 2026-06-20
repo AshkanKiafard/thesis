@@ -54,8 +54,8 @@ def parse_args():
     parser.add_argument(
         "--run-suffix",
         type=str,
-        default="best_v2",
-        help="Only include fine-tuned models with this suffix, e.g. best_v2.",
+        default="v3",
+        help="Only include fine-tuned models with this suffix, e.g. v3.",
     )
     parser.add_argument(
         "--batch-size",

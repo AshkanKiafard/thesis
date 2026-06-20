@@ -36,11 +36,11 @@ const els = {
 
 const colors = {
   normal: "#8fb6d9",
-  source: "#1b9e77",
-  target: "#d95f02",
-  path: "#e7298a",
+  source: "#2f80ed",
+  target: "#e53935",
+  path: "#8b5cf6",
   link: "rgba(190, 205, 220, 0.38)",
-  pathLink: "#ffcc33",
+  pathLink: "#c084fc",
 };
 
 const graph = ForceGraph3D()(els.graphContainer)
@@ -70,6 +70,11 @@ window.addEventListener("resize", () => {
   graph.height(els.graphContainer.clientHeight);
 });
 
+const debouncedUpdateSuggestions = {
+  source: debounce(() => updateSuggestions("source"), 180),
+  target: debounce(() => updateSuggestions("target"), 180),
+};
+
 document.addEventListener("DOMContentLoaded", init);
 els.modelSelect.addEventListener("change", async () => {
   renderDimensionOptions();
@@ -81,8 +86,8 @@ els.pickSource.addEventListener("click", () => setPickMode("source"));
 els.pickTarget.addEventListener("click", () => setPickMode("target"));
 els.reloadSubgraph.addEventListener("click", () => loadSubgraph());
 els.controls.addEventListener("submit", runAStar);
-els.sourceInput.addEventListener("input", debounce(() => updateSuggestions("source"), 180));
-els.targetInput.addEventListener("input", debounce(() => updateSuggestions("target"), 180));
+els.sourceInput.addEventListener("input", () => handleEndpointInput("source"));
+els.targetInput.addEventListener("input", () => handleEndpointInput("target"));
 
 async function init() {
   setBusy(true, "Loading options...");
@@ -168,6 +173,7 @@ async function handleNodeClick(node) {
     setPickMode("source");
   }
 
+  clearPath();
   updateLocalNodeStatuses();
   await loadSubgraph(node.id);
   updateLocalNodeStatuses();
@@ -209,13 +215,35 @@ function updateLocalNodeStatuses() {
       node.status = "normal";
     }
   }
+  for (const link of data.links) {
+    link.path = false;
+  }
   graph.nodeColor(nodeColor);
+  graph.linkColor((link) => link.path ? colors.pathLink : colors.link);
+  graph.linkWidth((link) => link.path ? 4 : 0.7);
+  graph.linkDirectionalArrowLength((link) => link.path ? 5 : 2.5);
+  graph.linkDirectionalParticles((link) => link.path ? 4 : 0);
+  graph.linkDirectionalParticleWidth((link) => link.path ? 3 : 0);
 }
 
 function setPickMode(mode) {
   state.pickMode = mode;
   els.pickSource.classList.toggle("active", mode === "source");
   els.pickTarget.classList.toggle("active", mode === "target");
+}
+
+function handleEndpointInput(kind) {
+  const input = kind === "source" ? els.sourceInput : els.targetInput;
+  if (kind === "source") {
+    state.selectedSource = input.value.trim();
+  } else {
+    state.selectedTarget = input.value.trim();
+  }
+
+  clearPath();
+  setStatus("Ready", "idle");
+  updateLocalNodeStatuses();
+  debouncedUpdateSuggestions[kind]();
 }
 
 async function updateSuggestions(kind) {
@@ -264,7 +292,7 @@ async function runAStar(event) {
   };
 
   if (!body.source || !body.target) {
-    showError("Select both a start and target concept.");
+    showError("Select both a cause and effect concept.");
     return;
   }
 

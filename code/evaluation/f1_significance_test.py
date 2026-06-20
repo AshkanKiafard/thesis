@@ -10,12 +10,12 @@ from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_NAME = "msmarco_test"
-DEFAULT_RUN_SUFFIX = "best_v2"
+DEFAULT_RUN_SUFFIX = "v3"
 DEFAULT_REFERENCE_CONTAINS = [
-    "Qwen3-Embedding-0.6B",
+    "granite-embedding-english-r2",
     "finetuned",
 ]
-DEFAULT_REFERENCE_DIMENSION = 128
+DEFAULT_REFERENCE_DIMENSION = 32
 DEFAULT_REFERENCE_ALGORITHM = "A*"
 DEFAULT_COMPARISONS = [
     "model=BFS_Uncapped_Baseline,algorithm=BFS",
@@ -505,7 +505,7 @@ def parse_args():
         default=DEFAULT_RUN_SUFFIX,
         help=(
             "Run suffix used when dataset_name is not a direct path, "
-            "e.g. best_v2."
+            "e.g. v3."
         ),
     )
     parser.add_argument(
