@@ -11,11 +11,100 @@ import networkx as nx
 from core.constants import ActivationFunc, DistanceMetric, LIGHTNING_DIR
 
 
+MERGED_NODE_UNIVERSE = "merged_causenet_causalbank"
+CAUSENET_FULL_NODE_UNIVERSE = "causenet_full"
+
+NODE_UNIVERSE_FILENAMES = {
+    MERGED_NODE_UNIVERSE: "merged_causenet_causalbank_nodes.jsonl",
+    CAUSENET_FULL_NODE_UNIVERSE: "causenet_full_nodes.jsonl",
+}
+
+GRAPH_NODE_UNIVERSES = {
+    None: MERGED_NODE_UNIVERSE,
+    "causenet": MERGED_NODE_UNIVERSE,
+    "causalbank": MERGED_NODE_UNIVERSE,
+    "causenet_full": CAUSENET_FULL_NODE_UNIVERSE,
+}
+
+CACHE_SUFFIX_NODE_UNIVERSES = {
+    None: MERGED_NODE_UNIVERSE,
+    "": MERGED_NODE_UNIVERSE,
+    "causenet_full": CAUSENET_FULL_NODE_UNIVERSE,
+}
+
+
 def get_embedding_cache_suffix(graph_name):
     if graph_name in {"causenet_full", "causalbank_full"}:
         return graph_name
 
     return None
+
+
+def normalize_node_universe(node_universe: str | None) -> str:
+    if node_universe is None:
+        return MERGED_NODE_UNIVERSE
+
+    if node_universe not in NODE_UNIVERSE_FILENAMES:
+        choices = ", ".join(sorted(NODE_UNIVERSE_FILENAMES))
+        raise ValueError(
+            f"Unknown embedding node universe '{node_universe}'. "
+            f"Choices: {choices}"
+        )
+
+    return node_universe
+
+
+def get_node_universe_for_graph(graph_name: str | None) -> str:
+    try:
+        return GRAPH_NODE_UNIVERSES[graph_name]
+    except KeyError as exc:
+        choices = ", ".join(str(name) for name in GRAPH_NODE_UNIVERSES if name)
+        raise ValueError(
+            f"No embedding node universe is configured for graph "
+            f"'{graph_name}'. Choices: {choices}"
+        ) from exc
+
+
+def get_node_universe_for_cache_suffix(cache_suffix: str | None) -> str:
+    try:
+        return CACHE_SUFFIX_NODE_UNIVERSES[cache_suffix]
+    except KeyError as exc:
+        choices = ", ".join(
+            str(suffix)
+            for suffix in CACHE_SUFFIX_NODE_UNIVERSES
+            if suffix not in {None, ""}
+        )
+        raise ValueError(
+            f"No embedding node universe is configured for cache suffix "
+            f"'{cache_suffix}'. Choices: default, {choices}"
+        ) from exc
+
+
+def get_node_universe_path(embeddings_dir, node_universe: str | None) -> Path:
+    node_universe = normalize_node_universe(node_universe)
+    return Path(embeddings_dir) / NODE_UNIVERSE_FILENAMES[node_universe]
+
+
+def read_node_universe(path) -> list[str]:
+    with open(path, encoding="utf-8") as file:
+        return [json.loads(line) for line in file]
+
+
+def write_node_universe(path, nodes) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as file:
+            for node in nodes:
+                file.write(json.dumps(node, ensure_ascii=False))
+                file.write("\n")
+
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            os.remove(tmp_path)
 
 
 @dataclass

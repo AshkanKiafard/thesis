@@ -10,20 +10,33 @@ from nltk.tokenize import word_tokenize
 from sentence_transformers import SentenceTransformer
 
 from core.constants import DistanceMetric
+from core.utils import (
+    get_node_universe_for_cache_suffix,
+    get_node_universe_path,
+    normalize_node_universe,
+    read_node_universe,
+    write_node_universe,
+)
 
-# Split embedding caches are NumPy .npy files plus JSONL row labels, so they can
-# be read lazily with np.load(..., mmap_mode=...) without a custom binary layout.
+# Embedding caches are NumPy .npy vector matrices plus one shared JSONL row-label
+# file per node universe. The JSONL is deliberately not model-specific: vectors
+# differ by model/dimension, but node ordering does not.
 # code/core/embeddings.py -> repo root is two levels above this file.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "code" / "data"
 
 
-def _embedding_cache_paths(cache_file):
+class EmbeddingCacheValidationError(ValueError):
+    pass
+
+
+def _embedding_cache_paths(cache_file, node_universe=None):
     cache_file = Path(cache_file)
     cache_stem = cache_file.with_suffix("")
+    node_universe = normalize_node_universe(node_universe)
 
     return {
-        "texts": cache_stem.with_name(f"{cache_stem.name}_texts.jsonl"),
+        "texts": get_node_universe_path(cache_file.parent, node_universe),
         "vectors": cache_stem.with_name(f"{cache_stem.name}_vectors.npy"),
     }
 
@@ -33,8 +46,8 @@ def _embedding_checkpoint_paths(cache_file):
     cache_stem = cache_file.with_suffix("")
 
     return {
-        "texts": cache_stem.with_name(
-            f"{cache_stem.name}_checkpoint_texts.jsonl"
+        "meta": cache_stem.with_name(
+            f"{cache_stem.name}_checkpoint_meta.json"
         ),
         "vectors": cache_stem.with_name(
             f"{cache_stem.name}_checkpoint_vectors.npy"
@@ -63,8 +76,24 @@ def _close_memmap(array):
         mmap.close()
 
 
-def _load_embedding_cache_files(paths):
-    if not paths["texts"].exists() or not paths["vectors"].exists():
+def _load_embedding_cache_files(paths, node_universe=None, strict=False):
+    if not paths["vectors"].exists():
+        if paths["texts"].exists():
+            print(
+                "Embedding vectors missing for node universe "
+                f"'{node_universe}': {paths['vectors']}"
+            )
+        return None
+
+    if not paths["texts"].exists():
+        message = (
+            "Embedding node-order JSONL missing for node universe "
+            f"'{node_universe}': {paths['texts']}"
+        )
+        if strict:
+            raise FileNotFoundError(message)
+
+        print(message)
         return None
 
     try:
@@ -77,10 +106,19 @@ def _load_embedding_cache_files(paths):
             texts = [json.loads(line) for line in file]
 
         if len(texts) != vectors.shape[0]:
-            raise ValueError(
-                "Cache text/vector length mismatch: "
-                f"{len(texts)} texts, {vectors.shape[0]} vectors"
+            vector_rows = vectors.shape[0]
+            _close_memmap(vectors)
+            message = (
+                "Embedding cache row-count mismatch for node universe "
+                f"'{node_universe}': {paths['texts']} has "
+                f"{len(texts):,} rows, but {paths['vectors']} has "
+                f"{vector_rows:,} rows."
             )
+            if strict:
+                raise EmbeddingCacheValidationError(message)
+
+            print(f"Ignoring invalid embedding cache. {message}")
+            return None
 
         print(
             "Loaded cached embeddings from "
@@ -88,24 +126,32 @@ def _load_embedding_cache_files(paths):
         )
         return texts, vectors
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        print(
+        message = (
             "Ignoring corrupt JSONL/mmap embedding cache "
             f"{paths['texts']} / {paths['vectors']}: {exc}."
         )
-        for path in (paths["texts"], paths["vectors"]):
-            try:
-                moved_path = _move_corrupt_file(path)
-                if moved_path is not None:
-                    print(f"Moved corrupt cache file to {moved_path}.")
-            except OSError:
-                print(f"Could not move corrupt cache file {path}.")
+        if strict:
+            raise EmbeddingCacheValidationError(message) from exc
+
+        print(message)
+        try:
+            moved_path = _move_corrupt_file(paths["vectors"])
+            if moved_path is not None:
+                print(f"Moved corrupt vector cache file to {moved_path}.")
+        except OSError:
+            print(f"Could not move corrupt vector cache file {paths['vectors']}.")
 
     return None
 
 
-def load_st_embedding_cache(cache_file):
-    paths = _embedding_cache_paths(cache_file)
-    cache_files = _load_embedding_cache_files(paths)
+def load_st_embedding_cache(cache_file, node_universe=None, strict=False):
+    node_universe = normalize_node_universe(node_universe)
+    paths = _embedding_cache_paths(cache_file, node_universe)
+    cache_files = _load_embedding_cache_files(
+        paths,
+        node_universe=node_universe,
+        strict=strict,
+    )
 
     if cache_files is not None:
         texts, vectors = cache_files
@@ -120,9 +166,14 @@ def load_st_embedding_cache(cache_file):
     return {}
 
 
-def load_st_embedding_cache_index(cache_file):
-    paths = _embedding_cache_paths(cache_file)
-    cache_files = _load_embedding_cache_files(paths)
+def load_st_embedding_cache_index(cache_file, node_universe=None, strict=False):
+    node_universe = normalize_node_universe(node_universe)
+    paths = _embedding_cache_paths(cache_file, node_universe)
+    cache_files = _load_embedding_cache_files(
+        paths,
+        node_universe=node_universe,
+        strict=strict,
+    )
 
     if cache_files is not None:
         texts, vectors = cache_files
@@ -135,35 +186,125 @@ def load_st_embedding_cache_index(cache_file):
     return {}, {}, None
 
 
+def get_embedding_cache_status(cache_file, node_universe=None):
+    node_universe = normalize_node_universe(node_universe)
+    paths = _embedding_cache_paths(cache_file, node_universe)
+    status = {
+        "node_universe": node_universe,
+        "nodes_path": paths["texts"],
+        "vectors_path": paths["vectors"],
+        "nodes_exists": paths["texts"].exists(),
+        "vectors_exists": paths["vectors"].exists(),
+        "nodes_count": None,
+        "vectors_shape": None,
+        "covered": False,
+        "reason": None,
+    }
+
+    if status["nodes_exists"]:
+        with open(paths["texts"], encoding="utf-8") as file:
+            status["nodes_count"] = sum(1 for _ in file)
+    else:
+        status["reason"] = f"missing universal node JSONL: {paths['texts']}"
+
+    if status["vectors_exists"]:
+        vectors = np.load(paths["vectors"], allow_pickle=False, mmap_mode="r")
+        try:
+            status["vectors_shape"] = tuple(vectors.shape)
+        finally:
+            _close_memmap(vectors)
+    elif status["reason"] is None:
+        status["reason"] = f"missing embedding vectors: {paths['vectors']}"
+
+    if status["nodes_count"] is not None and status["vectors_shape"] is not None:
+        if status["nodes_count"] == status["vectors_shape"][0]:
+            status["covered"] = True
+            status["reason"] = None
+        else:
+            status["reason"] = (
+                "row-count mismatch: "
+                f"{status['nodes_count']:,} node rows vs "
+                f"{status['vectors_shape'][0]:,} vector rows"
+            )
+
+    return status
+
+
 def save_st_embedding_cache(
     cache_file,
     cache,
     existing_text_to_idx=None,
     existing_vectors=None,
+    node_universe=None,
+    node_order=None,
 ):
-    paths = _embedding_cache_paths(cache_file)
+    node_universe = normalize_node_universe(node_universe)
+    paths = _embedding_cache_paths(cache_file, node_universe)
     existing_text_to_idx = existing_text_to_idx or {}
-    existing_texts = sorted(
-        existing_text_to_idx,
-        key=existing_text_to_idx.__getitem__,
-    )
-    new_texts = [
+
+    if node_order is None:
+        if not paths["texts"].exists():
+            raise FileNotFoundError(
+                "Cannot save embedding cache without a node-order JSONL. "
+                f"Missing {paths['texts']}. Pass node_order when creating "
+                "a new node universe."
+            )
+        node_order = read_node_universe(paths["texts"])
+    else:
+        node_order = list(node_order)
+        if paths["texts"].exists():
+            existing_order = read_node_universe(paths["texts"])
+            if existing_order != node_order:
+                raise EmbeddingCacheValidationError(
+                    "Refusing to overwrite embedding node-order JSONL with "
+                    f"a different order: {paths['texts']}"
+                )
+        else:
+            write_node_universe(paths["texts"], node_order)
+
+    node_to_idx = {
+        text: index
+        for index, text in enumerate(node_order)
+    }
+    unknown_texts = [
         text
         for text in cache
-        if text not in existing_text_to_idx
+        if text not in node_to_idx
     ]
-    texts = existing_texts + new_texts
+    if unknown_texts:
+        raise EmbeddingCacheValidationError(
+            "Embedding cache contains texts outside node universe "
+            f"'{node_universe}'. First unknown text: {unknown_texts[0]!r}"
+        )
+
+    if existing_vectors is not None:
+        if existing_vectors.shape[0] != len(node_order):
+            raise EmbeddingCacheValidationError(
+                "Existing embedding vector row count does not match node "
+                f"universe '{node_universe}': {existing_vectors.shape[0]:,} "
+                f"vectors for {len(node_order):,} nodes."
+            )
 
     if existing_vectors is not None and existing_vectors.shape[0] > 0:
         embedding_dim = existing_vectors.shape[1]
-    elif new_texts:
-        embedding_dim = np.asarray(cache[new_texts[0]], dtype="float32").size
+    elif cache:
+        first_text = next(iter(cache))
+        embedding_dim = np.asarray(cache[first_text], dtype="float32").size
     else:
         embedding_dim = 0
 
-    tmp_texts = paths["texts"].with_name(
-        f"{paths['texts'].name}.tmp.{os.getpid()}"
-    )
+    missing_texts = [
+        text
+        for text in node_order
+        if text not in existing_text_to_idx and text not in cache
+    ]
+    if missing_texts:
+        raise EmbeddingCacheValidationError(
+            "Cannot save partial embedding cache for node universe "
+            f"'{node_universe}'. Missing {len(missing_texts):,} vectors; "
+            f"first missing text: {missing_texts[0]!r}"
+        )
+
     tmp_vectors = paths["vectors"].with_name(
         f"{paths['vectors'].name}.tmp.{os.getpid()}"
     )
@@ -173,77 +314,35 @@ def save_st_embedding_cache(
             tmp_vectors,
             mode="w+",
             dtype="float32",
-            shape=(len(texts), embedding_dim),
+            shape=(len(node_order), embedding_dim),
         )
 
-        write_start = 0
-
-        if existing_vectors is not None and existing_texts:
+        if existing_vectors is not None and len(node_order):
             chunk_size = 100_000
-            for start in range(0, len(existing_texts), chunk_size):
-                end = min(start + chunk_size, len(existing_texts))
+            for start in range(0, len(node_order), chunk_size):
+                end = min(start + chunk_size, len(node_order))
                 vectors[start:end] = existing_vectors[start:end]
 
-            write_start = len(existing_texts)
-
-        if new_texts:
+        if cache:
             chunk_size = 100_000
-            for start in range(0, len(new_texts), chunk_size):
-                batch_texts = new_texts[start:start + chunk_size]
+            cache_texts = sorted(cache, key=node_to_idx.__getitem__)
+            for start in range(0, len(cache_texts), chunk_size):
+                batch_texts = cache_texts[start:start + chunk_size]
                 batch_vectors = np.stack([
                     np.asarray(cache[text], dtype="float32")
                     for text in batch_texts
                 ])
-                target_start = write_start + start
-                vectors[target_start:target_start + len(batch_texts)] = (
-                    batch_vectors
-                )
+                target_indices = [node_to_idx[text] for text in batch_texts]
+                vectors[target_indices] = batch_vectors
 
         vectors.flush()
         del vectors
         _close_memmap(existing_vectors)
 
-        with open(tmp_texts, "w", encoding="utf-8") as file:
-            for text in texts:
-                file.write(json.dumps(text, ensure_ascii=False))
-                file.write("\n")
-
         os.replace(tmp_vectors, paths["vectors"])
-        os.replace(tmp_texts, paths["texts"])
     finally:
-        for path in (tmp_texts, tmp_vectors):
-            if path.exists():
-                os.remove(path)
-
-
-def _write_cache_texts(path, texts):
-    with open(path, "w", encoding="utf-8") as file:
-        for text in texts:
-            file.write(json.dumps(text, ensure_ascii=False))
-            file.write("\n")
-
-
-def _checkpoint_texts_match(path, texts):
-    with open(path, encoding="utf-8") as file:
-        for index, expected_text in enumerate(texts):
-            line = file.readline()
-
-            if not line:
-                return (
-                    False,
-                    f"checkpoint has only {index:,} text rows",
-                )
-
-            if json.loads(line) != expected_text:
-                return (
-                    False,
-                    f"checkpoint text mismatch at row {index:,}",
-                )
-
-        if file.readline():
-            return False, "checkpoint has extra text rows"
-
-    return True, None
+        if tmp_vectors.exists():
+            os.remove(tmp_vectors)
 
 
 def _move_checkpoint_as_corrupt(paths):
@@ -256,7 +355,7 @@ def _move_checkpoint_as_corrupt(paths):
             print(f"Could not move stale embedding checkpoint file {path}.")
 
 
-def _load_embedding_checkpoint(cache_file, texts, dim):
+def _load_embedding_checkpoint(cache_file, texts, dim, node_universe):
     paths = _embedding_checkpoint_paths(cache_file)
     required_paths = tuple(paths.values())
 
@@ -266,7 +365,7 @@ def _load_embedding_checkpoint(cache_file, texts, dim):
     if not all(path.exists() for path in required_paths):
         print(
             "Ignoring incomplete embedding checkpoint "
-            f"{paths['texts']} / {paths['vectors']} / {paths['mask']}."
+            f"{paths['meta']} / {paths['vectors']} / {paths['mask']}."
         )
         _move_checkpoint_as_corrupt(paths)
         return None
@@ -302,12 +401,22 @@ def _load_embedding_checkpoint(cache_file, texts, dim):
         if mask.dtype != np.dtype("bool"):
             raise ValueError(f"checkpoint mask dtype is {mask.dtype}, not bool")
 
-        texts_match, mismatch_reason = _checkpoint_texts_match(
-            paths["texts"],
-            texts,
-        )
-        if not texts_match:
-            raise ValueError(mismatch_reason)
+        with open(paths["meta"], encoding="utf-8") as file:
+            metadata = json.load(file)
+        if metadata.get("node_universe") != node_universe:
+            raise ValueError(
+                "checkpoint node universe mismatch: "
+                f"{metadata.get('node_universe')} != {node_universe}"
+            )
+        if metadata.get("num_texts") != len(texts):
+            raise ValueError(
+                "checkpoint node count mismatch: "
+                f"{metadata.get('num_texts')} != {len(texts)}"
+            )
+        if metadata.get("dim") != dim:
+            raise ValueError(
+                f"checkpoint dim mismatch: {metadata.get('dim')} != {dim}"
+            )
 
         filled_rows = int(np.count_nonzero(mask))
         print(
@@ -320,7 +429,7 @@ def _load_embedding_checkpoint(cache_file, texts, dim):
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(
             "Ignoring stale embedding checkpoint "
-            f"{paths['texts']} / {paths['vectors']} / {paths['mask']}: {exc}."
+            f"{paths['meta']} / {paths['vectors']} / {paths['mask']}: {exc}."
         )
         if vectors is not None:
             _close_memmap(vectors)
@@ -331,15 +440,24 @@ def _load_embedding_checkpoint(cache_file, texts, dim):
     return None
 
 
-def _create_embedding_checkpoint(cache_file, texts, dim):
+def _create_embedding_checkpoint(cache_file, texts, dim, node_universe):
     paths = _embedding_checkpoint_paths(cache_file)
-    tmp_texts = paths["texts"].with_name(
-        f"{paths['texts'].name}.tmp.{os.getpid()}"
+    tmp_meta = paths["meta"].with_name(
+        f"{paths['meta'].name}.tmp.{os.getpid()}"
     )
 
     try:
-        _write_cache_texts(tmp_texts, texts)
-        os.replace(tmp_texts, paths["texts"])
+        with open(tmp_meta, "w", encoding="utf-8") as file:
+            json.dump(
+                {
+                    "node_universe": node_universe,
+                    "num_texts": len(texts),
+                    "dim": dim,
+                },
+                file,
+                indent=2,
+            )
+        os.replace(tmp_meta, paths["meta"])
 
         vectors = np.lib.format.open_memmap(
             paths["vectors"],
@@ -364,26 +482,32 @@ def _create_embedding_checkpoint(cache_file, texts, dim):
         )
         return paths, vectors, mask
     finally:
-        if tmp_texts.exists():
-            os.remove(tmp_texts)
+        if tmp_meta.exists():
+            os.remove(tmp_meta)
 
 
-def _open_embedding_checkpoint(cache_file, texts, dim):
-    loaded_checkpoint = _load_embedding_checkpoint(cache_file, texts, dim)
+def _open_embedding_checkpoint(cache_file, texts, dim, node_universe):
+    loaded_checkpoint = _load_embedding_checkpoint(
+        cache_file,
+        texts,
+        dim,
+        node_universe,
+    )
 
     if loaded_checkpoint is not None:
         return loaded_checkpoint
 
-    return _create_embedding_checkpoint(cache_file, texts, dim)
+    return _create_embedding_checkpoint(cache_file, texts, dim, node_universe)
 
 
-def _promote_embedding_checkpoint(cache_file, checkpoint_paths):
-    cache_paths = _embedding_cache_paths(cache_file)
+def _promote_embedding_checkpoint(cache_file, checkpoint_paths, node_universe):
+    cache_paths = _embedding_cache_paths(cache_file, node_universe)
     os.replace(checkpoint_paths["vectors"], cache_paths["vectors"])
-    os.replace(checkpoint_paths["texts"], cache_paths["texts"])
 
     if checkpoint_paths["mask"].exists():
         os.remove(checkpoint_paths["mask"])
+    if checkpoint_paths["meta"].exists():
+        os.remove(checkpoint_paths["meta"])
 
     return cache_paths
 
@@ -410,8 +534,12 @@ class STEmbedder:
         distance_metric: DistanceMetric,
         device=None,
         cache_suffix: str = None,
+        node_universe: str = None,
     ):
         self.device = _resolve_device(device)
+        if node_universe is None:
+            node_universe = get_node_universe_for_cache_suffix(cache_suffix)
+        self.node_universe = normalize_node_universe(node_universe)
 
         # Store only the last path component as a readable model name.
         self.model_name = os.path.basename(model_path.rstrip('/'))
@@ -445,7 +573,10 @@ class STEmbedder:
             self.cache,
             self.cache_text_to_idx,
             self.cache_vectors,
-        ) = load_st_embedding_cache_index(self.cache_file)
+        ) = load_st_embedding_cache_index(
+            self.cache_file,
+            node_universe=self.node_universe,
+        )
 
         tokenizer_kwargs = {}
         # Fix known tokenizer regex issue for Mistral/Qwen-style tokenizers.
@@ -620,6 +751,16 @@ class STEmbedder:
 
         return self.cache_file.with_name(f"{self.cache_file.stem}_dim{dim}.npy")
 
+    def get_node_universe_file(self) -> Path:
+        return get_node_universe_path(self.cache_file.parent, self.node_universe)
+
+    def _get_saved_node_order(self):
+        node_file = self.get_node_universe_file()
+        if not node_file.exists():
+            return None
+
+        return read_node_universe(node_file)
+
     def embed(self, text: str) -> torch.Tensor:
         self._ensure_tensor_cache_dim()
 
@@ -726,15 +867,46 @@ class STEmbedder:
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than 0")
 
-        unique_texts = list(texts) if texts_are_unique else list(dict.fromkeys(texts))
+        requested_texts = (
+            list(texts) if texts_are_unique else list(dict.fromkeys(texts))
+        )
+        unique_texts = requested_texts
         self._ensure_tensor_cache_dim()
-        total_texts = len(unique_texts)
         active_dim = self._active_tensor_dim() or self.get_model_dim()
         progress_start_time = time.time()
+
+        saved_node_order = self._get_saved_node_order()
+        if saved_node_order is not None:
+            saved_node_set = set(saved_node_order)
+            missing_from_universe = [
+                text
+                for text in requested_texts
+                if text not in saved_node_set
+            ]
+            if missing_from_universe:
+                raise EmbeddingCacheValidationError(
+                    "Embedding index request contains text outside node "
+                    f"universe '{self.node_universe}'. First unknown text: "
+                    f"{missing_from_universe[0]!r}"
+                )
+
+            if save:
+                unique_texts = saved_node_order
+                texts_are_unique = True
+        elif save:
+            raise FileNotFoundError(
+                "Cannot save embedding vectors without the universal "
+                f"node-order JSONL for '{self.node_universe}'. Missing "
+                f"{self.get_node_universe_file()}. Run pre-embedding to "
+                "create the node universe first."
+            )
+
+        total_texts = len(unique_texts)
 
         print(
             "Preparing embedding index: "
             f"{total_texts:,} texts, active dim {active_dim}, "
+            f"node universe {self.node_universe}, "
             f"batch size {batch_size}, "
             f"populate tensor cache {populate_tensor_cache}.",
             flush=True,
@@ -809,6 +981,7 @@ class STEmbedder:
                     dimension_cache_vectors,
                 ) = load_st_embedding_cache_index(
                     dimension_cache_file,
+                    node_universe=self.node_universe,
                 )
 
                 has_complete_dimension_cache = all(
@@ -825,6 +998,7 @@ class STEmbedder:
                         dimension_cache_file,
                         unique_texts,
                         dim,
+                        self.node_universe,
                     )
 
             dimension_cache_total = 0
@@ -1062,6 +1236,7 @@ class STEmbedder:
                     cache_paths = _promote_embedding_checkpoint(
                         dimension_cache_file,
                         checkpoint_paths,
+                        self.node_universe,
                     )
                     print(
                         "Saved sliced embedding cache for dim "
@@ -1174,6 +1349,7 @@ class STEmbedder:
             serializable_cache,
             existing_text_to_idx=self.cache_text_to_idx,
             existing_vectors=self.cache_vectors,
+            node_universe=self.node_universe,
         )
         (
             self.cache,
@@ -1181,6 +1357,7 @@ class STEmbedder:
             self.cache_vectors,
         ) = load_st_embedding_cache_index(
             self.cache_file,
+            node_universe=self.node_universe,
         )
 
     def get_distance(self, embed1, embed2):

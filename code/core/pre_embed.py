@@ -16,7 +16,14 @@ if str(CODE_ROOT) not in sys.path:
 
 from core.graph_config import get_graph_label, get_graph_path, graph_choices
 from core.indexed_graph import build_indexed_graph
-from core.utils import get_embedding_cache_suffix, get_fine_tuned_models
+from core.utils import (
+    MERGED_NODE_UNIVERSE,
+    get_embedding_cache_suffix,
+    get_fine_tuned_models,
+    get_node_universe_for_graph,
+    get_node_universe_path,
+    write_node_universe,
+)
 
 
 BASE_MODELS = [
@@ -163,10 +170,13 @@ def load_graph_nodes_for_pre_embed(graph_name, graph_path):
     raise ValueError(f"Could not infer graph format for {graph_name}: {graph_path}")
 
 
-def load_embedding_cache(save_path):
+def load_embedding_cache(save_path, node_universe):
     from core.embeddings import load_st_embedding_cache_index
 
-    embeddings, text_to_idx, vectors = load_st_embedding_cache_index(save_path)
+    embeddings, text_to_idx, vectors = load_st_embedding_cache_index(
+        save_path,
+        node_universe=node_universe,
+    )
     num_embeddings = len(embeddings) + len(text_to_idx)
 
     if num_embeddings:
@@ -301,6 +311,7 @@ def pre_embed_model(
     batch_size,
     embedding_device,
     cache_suffix=None,
+    node_universe=None,
     dim=None,
     build_index=True,
 ):
@@ -323,6 +334,7 @@ def pre_embed_model(
         distance_metric=distance_metric,
         device=embedding_device,
         cache_suffix=cache_suffix,
+        node_universe=node_universe,
     )
 
     model_dim = embeder.get_model_dim()
@@ -375,7 +387,10 @@ def pre_embed_model(
         cache_suffix=cache_suffix,
     )
 
-    embeddings, text_to_idx, vectors = load_embedding_cache(save_path)
+    embeddings, text_to_idx, vectors = load_embedding_cache(
+        save_path,
+        node_universe,
+    )
 
     uncached_nodes = [
         node
@@ -420,6 +435,8 @@ def pre_embed_model(
         embeddings,
         existing_text_to_idx=text_to_idx,
         existing_vectors=vectors,
+        node_universe=node_universe,
+        node_order=graph_nodes,
     )
     print("Save complete.")
 
@@ -451,10 +468,11 @@ def main():
         print(f"Matryoshka dim: {args.dim}")
     print(f"Build runtime embedding index: {not args.no_index}")
 
+    node_universe = get_node_universe_for_graph(args.graph)
     selected_graphs = (
-        (args.graph,)
-        if args.graph is not None
-        else ("causenet", "causalbank")
+        ("causenet", "causalbank")
+        if node_universe == MERGED_NODE_UNIVERSE
+        else (args.graph,)
     )
     cache_suffix = get_embedding_cache_suffix(args.graph)
 
@@ -470,10 +488,20 @@ def main():
         print(f"Loaded {len(current_nodes)} {graph_name} nodes.")
 
     graph_nodes = sorted(graph_nodes)
-    if args.graph is None:
-        print(f"Combined graph nodes: {len(graph_nodes)}")
+    if node_universe == MERGED_NODE_UNIVERSE:
+        print(
+            "Merged CauseNet precision + CausalBank graph nodes: "
+            f"{len(graph_nodes)}"
+        )
     else:
         print(f"{args.graph} graph nodes: {len(graph_nodes)}")
+
+    node_universe_path = get_node_universe_path(embeddings_dir, node_universe)
+    write_node_universe(node_universe_path, graph_nodes)
+    print(
+        "Wrote universal node-order JSONL for "
+        f"{node_universe}: {node_universe_path}"
+    )
 
     if cache_suffix:
         print(f"Using graph-specific embedding cache suffix: {cache_suffix}")
@@ -504,6 +532,7 @@ def main():
             batch_size=args.batch_size,
             embedding_device=args.embedding_device,
             cache_suffix=cache_suffix,
+            node_universe=node_universe,
             dim=args.dim,
             build_index=not args.no_index,
         )

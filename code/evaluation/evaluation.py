@@ -31,6 +31,7 @@ from core.utils import (
     get_fine_tuned_models,
     get_model_distance_metric,
     get_matryoshka_dims,
+    get_node_universe_for_graph,
     sort_model_queue,
     load_causal_graph,
     load_rl_graph,
@@ -838,8 +839,10 @@ if __name__ == "__main__":
     print(f"Graph path: {graph_path}")
     print(f"Embedding device: {args.embedding_device}")
     embedding_cache_suffix = get_embedding_cache_suffix(graph_name)
+    node_universe = get_node_universe_for_graph(graph_name)
     if embedding_cache_suffix:
         print(f"Embedding cache suffix: {embedding_cache_suffix}")
+    print(f"Embedding node universe: {node_universe}")
 
     dataset_name, output_dir, output_json_file, output_csv_file = build_output_paths(
         dataset_path,
@@ -1220,6 +1223,7 @@ if __name__ == "__main__":
                 distance_metric=distance_metric,
                 device=args.embedding_device,
                 cache_suffix=embedding_cache_suffix,
+                node_universe=node_universe,
             )
 
             full_dim = main_embeder.get_model_dim()

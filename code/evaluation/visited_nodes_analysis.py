@@ -20,6 +20,7 @@ from core.graph_config import (
 from core.pre_embed import preload_graph_embeddings, preload_rl_embeddings
 from core.utils import (
     get_embedding_cache_suffix,
+    get_node_universe_for_graph,
     traverse_graph,
     get_fine_tuned_models,
     get_model_distance_metric,
@@ -302,8 +303,10 @@ if __name__ == "__main__":
     print(f"Graph path: {graph_path}")
     print(f"Embedding device: {args.embedding_device}")
     embedding_cache_suffix = get_embedding_cache_suffix(graph_name)
+    node_universe = get_node_universe_for_graph(graph_name)
     if embedding_cache_suffix:
         print(f"Embedding cache suffix: {embedding_cache_suffix}")
+    print(f"Embedding node universe: {node_universe}")
     print("Model queue:", model_queue)
 
     # RL still needs these parameters
@@ -448,6 +451,7 @@ if __name__ == "__main__":
                 distance_metric=distance_metric,
                 device=args.embedding_device,
                 cache_suffix=embedding_cache_suffix,
+                node_universe=node_universe,
             )
 
             # Collect one uncapped distribution per Matryoshka dimension.

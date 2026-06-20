@@ -27,6 +27,8 @@ from core.utils import (
     get_model_config_labels,
     get_matryoshka_dims,
     get_model_distance_metric,
+    get_node_universe_for_graph,
+    get_node_universe_path,
     load_causal_graph,
     traverse_graph,
 )
@@ -112,6 +114,7 @@ class GraphBundle:
 class ModelRuntime:
     model_path: str
     cache_suffix: str | None
+    node_universe: str
     embedder: Any
     indexed_graphs: dict[str, Any]
     lock: Any = field(default_factory=threading.RLock)
@@ -366,6 +369,7 @@ def astar(request: AStarRequest):
         model_option["id"],
         request.dim,
         get_embedding_cache_suffix(bundle.name),
+        get_node_universe_for_graph(bundle.name),
     )
     with runtime.lock:
         try:
@@ -583,6 +587,7 @@ def preload_demo_model_runtimes() -> None:
                 model_option["id"],
                 dim,
                 get_embedding_cache_suffix(DEFAULT_GRAPH_NAME),
+                get_node_universe_for_graph(DEFAULT_GRAPH_NAME),
             )
             prepare_runtime_indexes(runtime, graph_names)
             warm_runtime_dimensions(runtime, model_option["dims"])
@@ -1129,8 +1134,9 @@ def get_model_runtime(
     model_id: str,
     dim: int,
     cache_suffix: str | None,
+    node_universe: str,
 ) -> ModelRuntime:
-    key = (model_id, cache_suffix)
+    key = (model_id, cache_suffix, node_universe)
 
     with _model_lock:
         runtime = _model_cache.get(key)
@@ -1154,6 +1160,7 @@ def get_model_runtime(
                 distance_metric,
                 device=EMBEDDING_DEVICE,
                 cache_suffix=cache_suffix,
+                node_universe=node_universe,
             )
             if dim > embedder.get_model_dim():
                 raise ValueError(
@@ -1167,7 +1174,7 @@ def get_model_runtime(
                 detail=f"Could not load model '{model_id}': {exc}",
             ) from exc
 
-        runtime = ModelRuntime(model_id, cache_suffix, embedder, {})
+        runtime = ModelRuntime(model_id, cache_suffix, node_universe, embedder, {})
         _model_cache[key] = runtime
         return runtime
 
@@ -1304,8 +1311,12 @@ def read_p95_astar_cap_index(p95_file: Path) -> dict[tuple[str, int], int]:
 
 def embedding_cache_exists(model_path: str) -> bool:
     cache_name = f"{Path(model_path).name}_embeddings"
+    node_file = get_node_universe_path(
+        EMBEDDINGS_DIR,
+        get_node_universe_for_graph(DEFAULT_GRAPH_NAME),
+    )
     return (
-        (EMBEDDINGS_DIR / f"{cache_name}_texts.jsonl").exists()
+        node_file.exists()
         and (EMBEDDINGS_DIR / f"{cache_name}_vectors.npy").exists()
     )
 
