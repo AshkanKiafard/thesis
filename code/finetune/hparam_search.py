@@ -8,7 +8,6 @@ from pathlib import Path
 import optuna
 import pytorch_lightning as pl
 import torch
-from datasets import load_from_disk
 from optuna.integration import PyTorchLightningPruningCallback
 from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
@@ -28,12 +27,17 @@ sys.path.append(str(REPO_ROOT / "code"))
 from finetune.astar_training_core import (
     LitAStar,
     cleanup_zombie_trials,
-    create_dataset,
     find_latest_hparam_study,
+    load_or_create_datasets,
     str_to_bool,
 )
-from core.embeddings import STEmbedder
-from core.utils import load_causal_graph, parse_activation_func, parse_distance_metric
+from core.utils import (
+    canonical_activation,
+    canonical_distance,
+    load_causal_graph,
+    parse_activation_func,
+    parse_distance_metric,
+)
 
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
 torch.set_float32_matmul_precision("medium")
@@ -132,28 +136,6 @@ def parse_args():
     )
 
     return parser.parse_args()
-
-
-def canonical_activation(value):
-    if value is None:
-        return None
-
-    value = value.strip().lower()
-    parse_activation_func(value)
-    return value
-
-
-def canonical_distance(value):
-    if value is None:
-        return None
-
-    value = value.strip().lower()
-    parse_distance_metric(value)
-
-    if value == "euclidean":
-        return "euclid"
-
-    return value
 
 
 def format_lr_slug(value):
@@ -399,45 +381,15 @@ if __name__ == "__main__":
     distance_search_space = [fixed_distance] if fixed_distance is not None else ["cosine", "euclid"]
 
     for curr_distance_metric_str in distance_search_space:
-        curr_distance_metric = parse_distance_metric(curr_distance_metric_str)
-
-        dataset_suffix = f"{curr_model_name.replace('/', '_')}_{curr_distance_metric_str}"
-        train_ds_path = datasets_dir / f"train_{dataset_suffix}"
-        valid_ds_path = datasets_dir / f"valid_{dataset_suffix}"
-
-        train_exists = train_ds_path.exists()
-        valid_exists = valid_ds_path.exists()
-
-        main_embedder = None
-        if not train_exists or not valid_exists:
-            print(f"Initializing Embedder for {curr_model_name} with {curr_distance_metric_str} distance ...")
-            main_embedder = STEmbedder(model_path, curr_distance_metric)
-
-        if train_exists:
-            print(f"Loading cached TRAIN dataset: {train_ds_path}")
-            train_dataset = load_from_disk(str(train_ds_path))
-        else:
-            print(f"Creating TRAIN dataset: {train_ds_path}")
-            train_dataset = create_dataset(train_data, causal_graph, main_embedder)
-            train_dataset.save_to_disk(str(train_ds_path))
-            print(f"TRAIN Dataset saved to: {train_ds_path}")
-
-        if valid_exists:
-            print(f"Loading cached VAL dataset: {valid_ds_path}")
-            valid_dataset = load_from_disk(str(valid_ds_path))
-        else:
-            print(f"Creating VAL dataset: {valid_ds_path}")
-            valid_dataset = create_dataset(valid_data, causal_graph, main_embedder)
-            valid_dataset.save_to_disk(str(valid_ds_path))
-            print(f"VAL Dataset saved to: {valid_ds_path}")
-
-        if main_embedder:
-            del main_embedder
-            gc.collect()
-            torch.cuda.empty_cache()
-
-        print(f"Total Train examples for {curr_distance_metric_str}: {len(train_dataset)}")
-        print(f"Total Val examples for {curr_distance_metric_str}: {len(valid_dataset)}")
+        train_dataset, valid_dataset = load_or_create_datasets(
+            model_path=model_path,
+            curr_model_name=curr_model_name,
+            distance_metric_str=curr_distance_metric_str,
+            train_data=train_data,
+            valid_data=valid_data,
+            causal_graph=causal_graph,
+            datasets_dir=datasets_dir,
+        )
 
         datasets_by_distance[curr_distance_metric_str] = {
             "train": train_dataset,

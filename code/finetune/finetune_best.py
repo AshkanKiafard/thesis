@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytorch_lightning as pl
 import torch
-from datasets import load_from_disk
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
@@ -23,11 +22,12 @@ sys.path.append(str(REPO_ROOT / "code"))
 
 from finetune.astar_training_core import (
     LitAStar,
-    create_dataset,
+    TARGET_EFFECTIVE_BATCH_SIZE,
+    load_or_create_datasets,
     load_hparams,
     str_to_bool,
+    validate_training_args,
 )
-from core.embeddings import STEmbedder
 from core.utils import load_causal_graph, parse_activation_func, parse_distance_metric
 
 # "medium" is usually a decent trade-off here and can speed up training on newer GPUs.
@@ -285,17 +285,10 @@ if __name__ == "__main__":
     patience = args.patience
     run_suffix = args.run_suffix
 
-    if batch_size > 128:
-        raise ValueError("batch_size must be <= 128")
-    if 128 % batch_size != 0:
-        raise ValueError("batch_size must divide 128 (e.g. 128, 64, 32, 16, 8)")
-    if patience < 0:
-        raise ValueError("patience must be >= 0")
-    if patience >= epochs:
-        print("Warning: patience >= epochs, so early stopping will probably not trigger.")
+    validate_training_args(batch_size, epochs, patience)
 
     # Keep the effective batch size fixed across models for fair comparison.
-    accumulate_grad_batches = 128 // batch_size
+    accumulate_grad_batches = TARGET_EFFECTIVE_BATCH_SIZE // batch_size
 
     print(f"Batch size: {batch_size}")
     print(f"Accumulate grad batches: {accumulate_grad_batches}")
@@ -331,47 +324,16 @@ if __name__ == "__main__":
     distance_metric_str = best_params["distance"]
     lr = best_params["lr"]
 
-    distance_metric = parse_distance_metric(distance_metric_str)
-
     datasets_dir = DATA_DIR / "datasets"
-    dataset_suffix = f"{curr_model_name.replace('/', '_')}_{distance_metric_str}"
-
-    train_ds_path = datasets_dir / f"train_{dataset_suffix}"
-    valid_ds_path = datasets_dir / f"valid_{dataset_suffix}"
-
-    train_exists = train_ds_path.exists()
-    valid_exists = valid_ds_path.exists()
-
-    main_embedder = None
-    if not train_exists or not valid_exists:
-        print(f"Initializing Embedder for {curr_model_name} with {distance_metric_str} distance ...")
-        main_embedder = STEmbedder(model_path, distance_metric)
-
-    if train_exists:
-        print(f"Loading cached TRAIN dataset: {train_ds_path}")
-        train_dataset = load_from_disk(str(train_ds_path))
-    else:
-        print(f"Creating TRAIN dataset: {train_ds_path}")
-        train_dataset = create_dataset(train_data, causal_graph, main_embedder)
-        train_dataset.save_to_disk(str(train_ds_path))
-        print(f"TRAIN Dataset saved to: {train_ds_path}")
-
-    if valid_exists:
-        print(f"Loading cached VAL dataset: {valid_ds_path}")
-        valid_dataset = load_from_disk(str(valid_ds_path))
-    else:
-        print(f"Creating VAL dataset: {valid_ds_path}")
-        valid_dataset = create_dataset(valid_data, causal_graph, main_embedder)
-        valid_dataset.save_to_disk(str(valid_ds_path))
-        print(f"VAL Dataset saved to: {valid_ds_path}")
-
-    if main_embedder:
-        del main_embedder
-        gc.collect()
-        torch.cuda.empty_cache()
-
-    print(f"Total Train examples: {len(train_dataset)}")
-    print(f"Total Val examples: {len(valid_dataset)}")
+    train_dataset, valid_dataset = load_or_create_datasets(
+        model_path=model_path,
+        curr_model_name=curr_model_name,
+        distance_metric_str=distance_metric_str,
+        train_data=train_data,
+        valid_data=valid_data,
+        causal_graph=causal_graph,
+        datasets_dir=datasets_dir,
+    )
 
     train(
         f_model_path=model_path,

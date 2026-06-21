@@ -666,6 +666,28 @@ def parse_distance_metric(value: str) -> DistanceMetric:
     raise ValueError(f"Unsupported distance metric: {value}")
 
 
+def canonical_activation(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    value = value.strip().lower()
+    parse_activation_func(value)
+    return value
+
+
+def canonical_distance(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    value = value.strip().lower()
+    parse_distance_metric(value)
+
+    if value == "euclidean":
+        return "euclid"
+
+    return value
+
+
 def get_model_distance_metric(model_path: str) -> DistanceMetric:
     # Fine-tuned models exported by finetune_best.py contain training_metadata.json.
     # That file records whether the model was trained/evaluated with cosine or Euclidean distance.

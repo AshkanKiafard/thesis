@@ -1,17 +1,21 @@
 import argparse
+import gc
 
 import optuna
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-from datasets import Dataset
+from datasets import Dataset, load_from_disk
 from sentence_transformers import SentenceTransformer
 from torch import nn
 
 import traverse_strategies as ts
 from core.constants import ActivationFunc
-from core.embeddings import DistanceMetric
-from core.utils import get_concept, traverse_graph, get_matryoshka_dims
+from core.embeddings import DistanceMetric, STEmbedder
+from core.utils import get_concept, traverse_graph, get_matryoshka_dims, parse_distance_metric
+
+TARGET_EFFECTIVE_BATCH_SIZE = 128
+MAX_TRAINING_BATCH_SIZE = 128
 
 
 def str_to_bool(value: str) -> bool:
@@ -25,6 +29,30 @@ def str_to_bool(value: str) -> bool:
         return False
     else:
         raise argparse.ArgumentTypeError(f"Boolean value expected, got: {value}")
+
+
+def validate_training_args(
+        batch_size,
+        epochs,
+        patience,
+        target_effective_batch_size=TARGET_EFFECTIVE_BATCH_SIZE,
+        max_batch_size=MAX_TRAINING_BATCH_SIZE,
+):
+    if batch_size <= 0:
+        raise ValueError("batch_size must be > 0")
+    if batch_size > max_batch_size:
+        raise ValueError(f"batch_size must be <= {max_batch_size}")
+    if target_effective_batch_size % batch_size != 0:
+        raise ValueError(
+            f"batch_size must divide {target_effective_batch_size} "
+            "(e.g. 128, 64, 32, 16, 8)"
+        )
+    if epochs <= 0:
+        raise ValueError("epochs must be > 0")
+    if patience < 0:
+        raise ValueError("patience must be >= 0")
+    if patience >= epochs:
+        print("Warning: patience >= epochs, so early stopping will probably not trigger.")
 
 
 class MatryoshkaAStarLoss(nn.Module):
@@ -410,6 +438,59 @@ def create_dataset(data, graph, embedder):
         "positives": positives,
         "negatives": negatives
     })
+
+
+def load_or_create_datasets(
+        model_path,
+        curr_model_name,
+        distance_metric_str,
+        train_data,
+        valid_data,
+        causal_graph,
+        datasets_dir,
+):
+    distance_metric = parse_distance_metric(distance_metric_str)
+    dataset_suffix = f"{curr_model_name.replace('/', '_')}_{distance_metric_str}"
+
+    train_ds_path = datasets_dir / f"train_{dataset_suffix}"
+    valid_ds_path = datasets_dir / f"valid_{dataset_suffix}"
+
+    train_exists = train_ds_path.exists()
+    valid_exists = valid_ds_path.exists()
+
+    main_embedder = None
+    try:
+        if not train_exists or not valid_exists:
+            print(f"Initializing Embedder for {curr_model_name} with {distance_metric_str} distance ...")
+            main_embedder = STEmbedder(model_path, distance_metric)
+
+        if train_exists:
+            print(f"Loading cached TRAIN dataset: {train_ds_path}")
+            train_dataset = load_from_disk(str(train_ds_path))
+        else:
+            print(f"Creating TRAIN dataset: {train_ds_path}")
+            train_dataset = create_dataset(train_data, causal_graph, main_embedder)
+            train_dataset.save_to_disk(str(train_ds_path))
+            print(f"TRAIN Dataset saved to: {train_ds_path}")
+
+        if valid_exists:
+            print(f"Loading cached VAL dataset: {valid_ds_path}")
+            valid_dataset = load_from_disk(str(valid_ds_path))
+        else:
+            print(f"Creating VAL dataset: {valid_ds_path}")
+            valid_dataset = create_dataset(valid_data, causal_graph, main_embedder)
+            valid_dataset.save_to_disk(str(valid_ds_path))
+            print(f"VAL Dataset saved to: {valid_ds_path}")
+
+        print(f"Total Train examples for {distance_metric_str}: {len(train_dataset)}")
+        print(f"Total Val examples for {distance_metric_str}: {len(valid_dataset)}")
+
+        return train_dataset, valid_dataset
+    finally:
+        if main_embedder is not None:
+            del main_embedder
+            gc.collect()
+            torch.cuda.empty_cache()
 
 
 def cleanup_zombie_trials(study, label: str = ""):
