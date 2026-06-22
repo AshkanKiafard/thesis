@@ -11,6 +11,8 @@ import pandas as pd
 from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
 from core.utils import (
     format_model_display_name,
+    get_ablation_model_names,
+    get_ablation_reference_model_name,
     get_model_base_name,
     is_finetuned_model_name,
 )
@@ -164,6 +166,21 @@ def parse_args():
             "Can be filtered with --graph and/or --run-suffix."
         ),
     )
+    parser.add_argument(
+        "--ablation",
+        action="store_true",
+        help=(
+            "Visualize ablation results from data/evaluation/ablation and "
+            "compare them with the original ReLU+Euclid result from the "
+            "standard evaluation directory. Baselines are omitted."
+        ),
+    )
+    parser.add_argument(
+        "--dim",
+        type=int,
+        default=32,
+        help="Matryoshka dimension to compare in --ablation mode (default: 32).",
+    )
     args = parser.parse_args()
 
     if not args.all and not args.dataset:
@@ -194,22 +211,36 @@ def detect_split(dataset_name: str):
     return "unknown"
 
 
-def build_input_paths(dataset_name: str, run_suffix: str, graph_name: str):
-    eval_dir = EVALUATION_INPUT_ROOT / graph_name / dataset_name / run_suffix
+def build_input_paths(
+    dataset_name: str,
+    run_suffix: str,
+    graph_name: str,
+    ablation: bool = False,
+):
+    input_root = EVALUATION_INPUT_ROOT / "ablation" if ablation else EVALUATION_INPUT_ROOT
+    eval_dir = input_root / graph_name / dataset_name / run_suffix
     eval_results_path = eval_dir / "evaluation_results.json"
     visited_nodes_path = eval_dir / "visited_nodes_analysis.json"
 
     return eval_results_path, visited_nodes_path
 
 
-def build_plot_output_dir(dataset_name: str, run_suffix: str, graph_name: str):
-    return PLOT_OUTPUT_DIR / graph_name / dataset_name / run_suffix
+def build_plot_output_dir(
+    dataset_name: str,
+    run_suffix: str,
+    graph_name: str,
+    ablation: bool = False,
+):
+    plot_root = PLOT_OUTPUT_DIR / "ablation" if ablation else PLOT_OUTPUT_DIR
+    return plot_root / graph_name / dataset_name / run_suffix
 
 
-def discover_result_sets(graph_name=None, run_suffix=None):
+def discover_result_sets(graph_name=None, run_suffix=None, ablation=False):
     result_sets = []
 
-    if not EVALUATION_INPUT_ROOT.exists():
+    input_root = EVALUATION_INPUT_ROOT / "ablation" if ablation else EVALUATION_INPUT_ROOT
+
+    if not input_root.exists():
         return result_sets
 
     graph_dirs = []
@@ -217,11 +248,11 @@ def discover_result_sets(graph_name=None, run_suffix=None):
     if graph_name is None:
         graph_dirs = [
             path
-            for path in EVALUATION_INPUT_ROOT.iterdir()
+            for path in input_root.iterdir()
             if path.is_dir()
         ]
     else:
-        graph_dirs = [EVALUATION_INPUT_ROOT / graph_name]
+        graph_dirs = [input_root / graph_name]
 
     for graph_dir in sorted(graph_dirs):
         if not graph_dir.is_dir():
@@ -299,6 +330,98 @@ def load_json(path):
 
     with open(path, "r", encoding="utf-8") as file:
         return json.load(file)
+
+
+def dimension_matches(value, expected_dim):
+    if value is None or pd.isna(value):
+        return expected_dim is None
+
+    try:
+        return int(value) == int(expected_dim)
+    except (TypeError, ValueError):
+        return False
+
+
+def filter_entries_by_model_and_dim(entries, model_names, dim):
+    model_names = set(model_names)
+
+    return [
+        entry for entry in entries
+        if entry.get("model") in model_names
+        and dimension_matches(entry.get("dimension"), dim)
+    ]
+
+
+def load_optional_json(path):
+    if not path.exists():
+        print(f"Optional file missing: {path}")
+        return []
+
+    return load_json(path)
+
+
+def get_ablation_variant_label(model_name):
+    name = Path(str(model_name)).name
+    parts = name.removesuffix("_finetuned").split("_")
+
+    activation = "ReLU" if "relu" in parts else "GELU" if "gelu" in parts else "?"
+    distance = "Euclid" if "euclid" in parts else "Cosine" if "cosine" in parts else "?"
+    suffix = "main" if "ablation" not in parts else "ablation"
+
+    return f"{activation} + {distance}\n{suffix}"
+
+
+def load_ablation_comparison_entries(
+    dataset_name,
+    run_suffix,
+    graph_name,
+    dim,
+    filename,
+):
+    ablation_path = (
+        EVALUATION_INPUT_ROOT
+        / "ablation"
+        / graph_name
+        / dataset_name
+        / run_suffix
+        / filename
+    )
+    reference_path = (
+        EVALUATION_INPUT_ROOT
+        / graph_name
+        / dataset_name
+        / run_suffix
+        / filename
+    )
+
+    ablation_model_names = get_ablation_model_names(run_suffix)
+    reference_model_name = get_ablation_reference_model_name(run_suffix)
+
+    ablation_entries = filter_entries_by_model_and_dim(
+        load_optional_json(ablation_path),
+        ablation_model_names,
+        dim,
+    )
+    reference_entries = filter_entries_by_model_and_dim(
+        load_optional_json(reference_path),
+        [reference_model_name],
+        dim,
+    )
+
+    found_models = {
+        entry.get("model")
+        for entry in reference_entries + ablation_entries
+    }
+    expected_models = {reference_model_name, *ablation_model_names}
+    missing_models = sorted(expected_models - found_models, key=model_sort_key)
+
+    if missing_models:
+        print(
+            "Warning: missing ablation comparison rows for "
+            f"dim {dim}: {missing_models}"
+        )
+
+    return reference_entries + ablation_entries, reference_path, ablation_path
 
 
 def sanitize_path_component(value):
@@ -1832,6 +1955,64 @@ def plot_all_standard_metrics(df, baselines, plot_root):
     )
 
 
+def plot_ablation_metric_summary_bars(df, output_path):
+    if df.empty:
+        print("No ablation semantic data. Skipping ablation bar summary.")
+        return
+
+    metrics = [
+        ("f1_score", "F1 Score"),
+        ("accuracy", "Accuracy"),
+        ("precision", "Precision"),
+        ("recall", "Recall"),
+        ("avg_nodes_visited", "Avg Visited Nodes"),
+        ("avg_time_ms", "Avg Runtime (ms)"),
+    ]
+
+    plot_df = df.copy()
+    plot_df["sort_key"] = plot_df["model"].astype(str).map(model_sort_key)
+    plot_df = plot_df.sort_values("sort_key").drop(columns=["sort_key"])
+
+    labels = [
+        get_ablation_variant_label(model)
+        for model in plot_df["model"].astype(str).tolist()
+    ]
+
+    fig, axes = plt.subplots(2, 3, figsize=(14, 7.2), constrained_layout=True)
+    axes = axes.flatten()
+
+    colors = ["#4C78A8", "#F58518", "#54A24B", "#B279A2"]
+
+    for ax, (metric_key, metric_label) in zip(axes, metrics):
+        if metric_key not in plot_df.columns:
+            ax.axis("off")
+            continue
+
+        values = plot_df[metric_key].astype(float).tolist()
+        ax.bar(range(len(values)), values, color=colors[:len(values)])
+        ax.set_title(metric_label)
+        ax.set_xticks(range(len(values)))
+        ax.set_xticklabels(labels, rotation=0, ha="center")
+        ax.grid(True, axis="y", alpha=0.3)
+
+        if metric_key in {"f1_score", "accuracy", "precision", "recall"}:
+            ax.set_ylim(0, 1.05)
+
+        for index, value in enumerate(values):
+            ax.text(
+                index,
+                value,
+                f"{value:.3f}" if metric_key in {"f1_score", "accuracy", "precision", "recall"} else f"{value:.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+    fig.suptitle("Granite Activation/Distance Ablation", fontsize=14, fontweight="bold")
+    save_plot(fig, output_path)
+    plt.close(fig)
+
+
 # -------------------------------------------------------------------------
 # One normalized confusion matrix grid from evaluation_results.json
 # -------------------------------------------------------------------------
@@ -2564,6 +2745,96 @@ def plot_result_set(dataset_name, run_suffix, graph_name, eval_results_path, vis
     print("\nAll available plots created.")
 
 
+def plot_ablation_result_set(dataset_name, run_suffix, graph_name, dim):
+    current_split = detect_split(dataset_name)
+    plot_root = build_plot_output_dir(
+        dataset_name,
+        run_suffix,
+        graph_name,
+        ablation=True,
+    )
+    ensure_directory(plot_root)
+
+    print(f"Dataset: {dataset_name}")
+    print(f"Split: {current_split}")
+    print(f"Graph: {graph_name}")
+    print(f"Run suffix: {run_suffix}")
+    print(f"Ablation dim: {dim}")
+    print(f"Plot output dir: {plot_root}")
+    print(f"Plot formats: {PLOT_FORMATS}")
+
+    eval_data, reference_eval_path, ablation_eval_path = load_ablation_comparison_entries(
+        dataset_name=dataset_name,
+        run_suffix=run_suffix,
+        graph_name=graph_name,
+        dim=dim,
+        filename="evaluation_results.json",
+    )
+
+    print(f"Reference evaluation results: {reference_eval_path}")
+    print(f"Ablation evaluation results: {ablation_eval_path}")
+
+    if eval_data:
+        df = extract_semantic_data(eval_data)
+        baselines = {}
+        per_example_df = extract_per_example_rows(eval_data)
+        if not per_example_df.empty:
+            per_example_df = per_example_df[per_example_df["algorithm"] == "A*"]
+
+        plot_all_standard_metrics(
+            df=df,
+            baselines=baselines,
+            plot_root=plot_root,
+        )
+
+        plot_ablation_metric_summary_bars(
+            df=df,
+            output_path=get_plot_path(
+                plot_root,
+                "ablation_summary",
+                "activation_distance_ablation.png",
+            ),
+        )
+
+        plot_normalized_confusion_matrices_all_models(
+            per_example_df=per_example_df,
+            output_path=get_plot_path(
+                plot_root,
+                "confusion_matrix",
+                "confusion_matrices_ablation_models_normalized.png",
+            ),
+        )
+    else:
+        print("No ablation comparison evaluation rows found. Skipping metric plots.")
+
+    visited_nodes_data, reference_visited_path, ablation_visited_path = (
+        load_ablation_comparison_entries(
+            dataset_name=dataset_name,
+            run_suffix=run_suffix,
+            graph_name=graph_name,
+            dim=dim,
+            filename="visited_nodes_analysis.json",
+        )
+    )
+
+    print(f"Reference visited nodes analysis: {reference_visited_path}")
+    print(f"Ablation visited nodes analysis: {ablation_visited_path}")
+
+    if visited_nodes_data:
+        p95_df = extract_p95_data(visited_nodes_data)
+        if not p95_df.empty:
+            p95_df = p95_df[p95_df["algorithm"] == "A*"]
+
+        plot_all_p95_analysis(
+            p95_df=p95_df,
+            plot_root=plot_root,
+        )
+    else:
+        print("No ablation comparison visited-node rows found. Skipping p95 plots.")
+
+    print("\nAll available ablation plots created.")
+
+
 # -------------------------------------------------------------------------
 # Main
 # -------------------------------------------------------------------------
@@ -2571,10 +2842,14 @@ def plot_result_set(dataset_name, run_suffix, graph_name, eval_results_path, vis
 if __name__ == "__main__":
     args = parse_args()
 
+    if args.dim <= 0:
+        raise ValueError("--dim must be greater than 0")
+
     if args.all:
         result_sets = discover_result_sets(
             graph_name=args.graph,
             run_suffix=args.run_suffix,
+            ablation=args.ablation,
         )
 
         if not result_sets:
@@ -2590,19 +2865,37 @@ if __name__ == "__main__":
                 f"{result_set['graph']}/{result_set['dataset']}/"
                 f"{result_set['run_suffix']}"
             )
-            plot_result_set(
-                dataset_name=result_set["dataset"],
-                run_suffix=result_set["run_suffix"],
-                graph_name=result_set["graph"],
-                eval_results_path=result_set["eval_results_path"],
-                visited_nodes_path=result_set["visited_nodes_path"],
-            )
+            if args.ablation:
+                plot_ablation_result_set(
+                    dataset_name=result_set["dataset"],
+                    run_suffix=result_set["run_suffix"],
+                    graph_name=result_set["graph"],
+                    dim=args.dim,
+                )
+            else:
+                plot_result_set(
+                    dataset_name=result_set["dataset"],
+                    run_suffix=result_set["run_suffix"],
+                    graph_name=result_set["graph"],
+                    eval_results_path=result_set["eval_results_path"],
+                    visited_nodes_path=result_set["visited_nodes_path"],
+                )
 
         print("\nAll result directories processed.")
     else:
         dataset_name = dataset_name_from_arg(args.dataset)
         graph_name = args.graph or DEFAULT_GRAPH_NAME
         run_suffix = args.run_suffix or "v3"
+
+        if args.ablation:
+            plot_ablation_result_set(
+                dataset_name=dataset_name,
+                run_suffix=run_suffix,
+                graph_name=graph_name,
+                dim=args.dim,
+            )
+            raise SystemExit(0)
+
         eval_results_path, visited_nodes_path = build_input_paths(
             dataset_name,
             run_suffix,

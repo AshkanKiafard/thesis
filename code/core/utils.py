@@ -8,7 +8,16 @@ from typing import Any, Callable, Dict, List, Tuple
 
 import networkx as nx
 
-from core.constants import ActivationFunc, DistanceMetric, LIGHTNING_DIR
+from core.constants import (
+    ActivationFunc,
+    DEFAULT_ABLATION_BASE_MODEL_NAME,
+    DEFAULT_ABLATION_COMBOS,
+    DEFAULT_ABLATION_MRL_STR,
+    DEFAULT_ABLATION_NORMALIZE_STR,
+    DEFAULT_ABLATION_REFERENCE_COMBO,
+    DistanceMetric,
+    LIGHTNING_DIR,
+)
 
 
 MERGED_NODE_UNIVERSE = "merged_causenet_causalbank"
@@ -576,7 +585,6 @@ MODEL_CONFIG_TOKEN_LABELS = {
     "single": "Single",
 }
 
-
 def get_model_base_name(model_name: str) -> str:
     name = Path(str(model_name)).name
     name = name.removesuffix("_finetuned")
@@ -728,6 +736,88 @@ def get_fine_tuned_models(run_suffix: str):
         if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
         and name != "old"
         and name.endswith(expected_suffix)
+    ]
+
+
+def build_finetuned_model_name(
+    base_model_name: str,
+    activation: str,
+    distance: str,
+    normalize_str: str,
+    mrl_str: str,
+    run_suffix: str,
+    ablation: bool = False,
+) -> str:
+    suffix = f"{run_suffix}_ablation" if ablation else run_suffix
+
+    return (
+        f"{base_model_name}_{activation}_{distance}_"
+        f"{normalize_str}_{mrl_str}_{suffix}_finetuned"
+    )
+
+
+def get_ablation_reference_model_name(
+    run_suffix: str,
+    base_model_name: str = DEFAULT_ABLATION_BASE_MODEL_NAME,
+    normalize_str: str = DEFAULT_ABLATION_NORMALIZE_STR,
+    mrl_str: str = DEFAULT_ABLATION_MRL_STR,
+) -> str:
+    activation, distance = DEFAULT_ABLATION_REFERENCE_COMBO
+
+    return build_finetuned_model_name(
+        base_model_name=base_model_name,
+        activation=activation,
+        distance=distance,
+        normalize_str=normalize_str,
+        mrl_str=mrl_str,
+        run_suffix=run_suffix,
+        ablation=False,
+    )
+
+
+def get_ablation_model_names(
+    run_suffix: str,
+    base_model_name: str = DEFAULT_ABLATION_BASE_MODEL_NAME,
+    normalize_str: str = DEFAULT_ABLATION_NORMALIZE_STR,
+    mrl_str: str = DEFAULT_ABLATION_MRL_STR,
+) -> list[str]:
+    return [
+        build_finetuned_model_name(
+            base_model_name=base_model_name,
+            activation=activation,
+            distance=distance,
+            normalize_str=normalize_str,
+            mrl_str=mrl_str,
+            run_suffix=run_suffix,
+            ablation=True,
+        )
+        for activation, distance in DEFAULT_ABLATION_COMBOS
+    ]
+
+
+def get_ablation_fine_tuned_models(
+    run_suffix: str,
+    base_model_name: str = DEFAULT_ABLATION_BASE_MODEL_NAME,
+    normalize_str: str = DEFAULT_ABLATION_NORMALIZE_STR,
+    mrl_str: str = DEFAULT_ABLATION_MRL_STR,
+):
+    """
+    Return the three activation/distance ablation model directories.
+
+    The order is fixed for stable tables and plots:
+    relu+cosine, gelu+euclid, gelu+cosine.
+    """
+    expected_names = get_ablation_model_names(
+        run_suffix=run_suffix,
+        base_model_name=base_model_name,
+        normalize_str=normalize_str,
+        mrl_str=mrl_str,
+    )
+
+    return [
+        os.path.join(LIGHTNING_DIR, name).replace("\\", "/")
+        for name in expected_names
+        if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
     ]
 
 

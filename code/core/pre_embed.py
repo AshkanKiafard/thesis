@@ -18,6 +18,7 @@ from core.graph_config import get_graph_label, get_graph_path, graph_choices
 from core.indexed_graph import build_indexed_graph
 from core.utils import (
     MERGED_NODE_UNIVERSE,
+    get_ablation_fine_tuned_models,
     get_embedding_cache_suffix,
     get_fine_tuned_models,
     get_node_universe_for_graph,
@@ -91,6 +92,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--ablation",
+        action="store_true",
+        help=(
+            "Pre-embed only the activation/distance ablation models for "
+            "--run-suffix. Ignores the normal base+fine-tuned queue."
+        ),
+    )
+    parser.add_argument(
         "--dim",
         type=int,
         default=None,
@@ -116,6 +125,9 @@ def parse_args():
         parser.error("Pass either positional model or --model/--model-path, not both.")
 
     args.single_model = args.model_path or args.model
+
+    if args.ablation and args.single_model is not None:
+        parser.error("--ablation cannot be combined with an explicit model path.")
 
     return args
 
@@ -511,6 +523,14 @@ def main():
     if args.single_model is not None:
         model_queue = [args.single_model]
         print("Single model provided. Ignoring base+fine-tuned model queue.")
+    elif args.ablation:
+        model_queue = get_ablation_fine_tuned_models(args.run_suffix)
+        if not model_queue:
+            raise FileNotFoundError(
+                "No ablation fine-tuned models found for run suffix "
+                f"'{args.run_suffix}' in {DATA_DIR / 'models' / 'lightning'}"
+            )
+        print("Ablation mode enabled. Ignoring base+standard fine-tuned models.")
     else:
         fine_tuned_models = get_fine_tuned_models(args.run_suffix)
         print(

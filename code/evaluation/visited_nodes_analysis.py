@@ -19,6 +19,7 @@ from core.graph_config import (
 )
 from core.pre_embed import preload_graph_embeddings, preload_rl_embeddings
 from core.utils import (
+    get_ablation_fine_tuned_models,
     get_embedding_cache_suffix,
     get_node_universe_for_graph,
     traverse_graph,
@@ -51,7 +52,12 @@ base_models = [
 ]
 
 
-def build_output_paths(dataset_path: str, run_suffix: str, graph_name: str):
+def build_output_paths(
+    dataset_path: str,
+    run_suffix: str,
+    graph_name: str,
+    ablation: bool = False,
+):
     """
     Build output path from dataset name and run suffix.
 
@@ -73,7 +79,8 @@ def build_output_paths(dataset_path: str, run_suffix: str, graph_name: str):
     else:
         split = "unknown"
 
-    output_dir = EVALUATION_OUTPUT_ROOT / graph_name / dataset_name / run_suffix
+    output_root = EVALUATION_OUTPUT_ROOT / "ablation" if ablation else EVALUATION_OUTPUT_ROOT
+    output_dir = output_root / graph_name / dataset_name / run_suffix
     output_json_file = output_dir / "visited_nodes_analysis.json"
 
     return dataset_name, split, output_dir, str(output_json_file)
@@ -284,6 +291,29 @@ def parse_args():
             "synchronization overhead. Default: auto."
         ),
     )
+    parser.add_argument(
+        "--embedding-batch-size",
+        type=int,
+        default=64,
+        help="Batch size used when loading or backfilling the ST embedding index.",
+    )
+    parser.add_argument(
+        "--dim",
+        type=int,
+        default=None,
+        help=(
+            "Only collect visited-node distributions for this Matryoshka "
+            "dimension. Required in --ablation mode."
+        ),
+    )
+    parser.add_argument(
+        "--ablation",
+        action="store_true",
+        help=(
+            "Analyze only the activation/distance ablation models, skip "
+            "baselines, and write under data/evaluation/ablation."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -295,13 +325,32 @@ if __name__ == "__main__":
     graph_label = get_graph_label(graph_name)
     graph_path = get_graph_path(graph_name)
 
-    fine_tuned_models = get_fine_tuned_models(run_suffix)
-    model_queue = base_models + fine_tuned_models
+    if args.dim is not None and args.dim <= 0:
+        raise ValueError("--dim must be greater than 0")
+    if args.embedding_batch_size <= 0:
+        raise ValueError("--embedding-batch-size must be greater than 0")
+    if args.ablation and args.dim is None:
+        raise ValueError("--ablation requires --dim, e.g. --dim 32")
+
+    if args.ablation:
+        model_queue = get_ablation_fine_tuned_models(run_suffix)
+        if not model_queue:
+            raise FileNotFoundError(
+                "No ablation fine-tuned models found for run suffix "
+                f"'{run_suffix}' in data/models/lightning"
+            )
+    else:
+        fine_tuned_models = get_fine_tuned_models(run_suffix)
+        model_queue = base_models + fine_tuned_models
 
     print(f"Run suffix: {run_suffix}")
+    print(f"Ablation mode: {args.ablation}")
     print(f"Graph: {graph_label} ({graph_name})")
     print(f"Graph path: {graph_path}")
     print(f"Embedding device: {args.embedding_device}")
+    print(f"Embedding batch size: {args.embedding_batch_size}")
+    if args.dim is not None:
+        print(f"Restricted Matryoshka dim: {args.dim}")
     embedding_cache_suffix = get_embedding_cache_suffix(graph_name)
     node_universe = get_node_universe_for_graph(graph_name)
     if embedding_cache_suffix:
@@ -322,6 +371,7 @@ if __name__ == "__main__":
         dataset_path,
         run_suffix,
         graph_name,
+        ablation=args.ablation,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -338,10 +388,12 @@ if __name__ == "__main__":
         graph_path,
         use_inverse=False,
     )
-    rl_graph = load_rl_graph(
-        graph_path,
-        use_inverse=False,
-    )
+    rl_graph = None
+    if not args.ablation:
+        rl_graph = load_rl_graph(
+            graph_path,
+            use_inverse=False,
+        )
 
     existing_results = load_results_file(output_json_file)
 
@@ -353,7 +405,9 @@ if __name__ == "__main__":
         for model in (BFS_UNCAPPED_BASELINE_MODEL, BFS_LEGACY_BASELINE_MODEL)
     )
 
-    if not has_bfs_uncapped_result:
+    if args.ablation:
+        print("\n=== skipping baselines in ablation mode ===")
+    elif not has_bfs_uncapped_result:
         print("\n=== Running BFS Uncapped Baseline ===")
 
         bfs_result = run_visited_nodes_loop(
@@ -386,7 +440,9 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     # RL baseline
     # -------------------------------------------------------------------------
-    if not already_done(existing_results, RL_BASELINE_MODEL):
+    if args.ablation:
+        pass
+    elif not already_done(existing_results, RL_BASELINE_MODEL):
         print("\n=== Running RL Baseline ===")
 
         try:
@@ -456,7 +512,15 @@ if __name__ == "__main__":
 
             # Collect one uncapped distribution per Matryoshka dimension.
             model_dim = main_embeder.get_model_dim()
-            matryoshka_dims = get_matryoshka_dims(model_dim)
+            if args.dim is not None:
+                if args.dim > model_dim:
+                    raise ValueError(
+                        f"Requested dim {args.dim}, but {model_path} only "
+                        f"has {model_dim} embedding dimensions."
+                    )
+                matryoshka_dims = [args.dim]
+            else:
+                matryoshka_dims = get_matryoshka_dims(model_dim)
 
             print(f"Model dim: {model_dim}")
             print(f"Matryoshka dims: {matryoshka_dims}")
@@ -494,7 +558,7 @@ if __name__ == "__main__":
                 indexed_graph = preload_graph_embeddings(
                     main_embeder,
                     causal_graph,
-                    batch_size=64,
+                    batch_size=args.embedding_batch_size,
                     save_cache=True,
                 )
                 runtime_config = dict(semantic_config)
@@ -525,6 +589,7 @@ if __name__ == "__main__":
                             "dataset": dataset_name,
                             "split": split,
                             "run_suffix": run_suffix,
+                            "ablation": args.ablation,
                             "embedding_device": args.embedding_device,
                             "used_config": semantic_config,
                             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),

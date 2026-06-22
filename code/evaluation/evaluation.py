@@ -27,6 +27,7 @@ from core.graph_config import (
 )
 from core.pre_embed import preload_graph_embeddings, preload_rl_embeddings
 from core.utils import (
+    get_ablation_fine_tuned_models,
     get_embedding_cache_suffix,
     get_fine_tuned_models,
     get_model_distance_metric,
@@ -93,7 +94,16 @@ def get_config_source_dataset_name(dataset_name: str):
     )
 
 
-def build_output_paths(dataset_path: str, run_suffix: str, graph_name: str):
+def get_evaluation_output_root(ablation: bool = False):
+    return EVALUATION_OUTPUT_ROOT / "ablation" if ablation else EVALUATION_OUTPUT_ROOT
+
+
+def build_output_paths(
+    dataset_path: str,
+    run_suffix: str,
+    graph_name: str,
+    ablation: bool = False,
+):
     """
     Build evaluation output paths from dataset name and run suffix.
 
@@ -106,7 +116,7 @@ def build_output_paths(dataset_path: str, run_suffix: str, graph_name: str):
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
 
-    output_dir = EVALUATION_OUTPUT_ROOT / graph_name / dataset_name / run_suffix
+    output_dir = get_evaluation_output_root(ablation) / graph_name / dataset_name / run_suffix
     output_json_file = output_dir / "evaluation_results.json"
     output_csv_file = output_dir / "evaluation_results.csv"
 
@@ -117,9 +127,14 @@ def get_model_name(model_path: str):
     return Path(model_path).name
 
 
-def get_p95_analysis_file(dataset_name: str, run_suffix: str, graph_name: str):
+def get_p95_analysis_file(
+    dataset_name: str,
+    run_suffix: str,
+    graph_name: str,
+    ablation: bool = False,
+):
     return (
-        EVALUATION_OUTPUT_ROOT
+        get_evaluation_output_root(ablation)
         / graph_name
         / dataset_name
         / run_suffix
@@ -127,9 +142,14 @@ def get_p95_analysis_file(dataset_name: str, run_suffix: str, graph_name: str):
     )
 
 
-def get_evaluation_results_file(dataset_name: str, run_suffix: str, graph_name: str):
+def get_evaluation_results_file(
+    dataset_name: str,
+    run_suffix: str,
+    graph_name: str,
+    ablation: bool = False,
+):
     return (
-        EVALUATION_OUTPUT_ROOT
+        get_evaluation_output_root(ablation)
         / graph_name
         / dataset_name
         / run_suffix
@@ -145,6 +165,7 @@ def load_p95_configs(
     config_source_graph_name: str = None,
     fallback_config_source_dataset_name: str = None,
     fallback_config_source_graph_name: str = DEFAULT_GRAPH_NAME,
+    ablation: bool = False,
 ):
     """
     Load per-model traversal caps from visited_nodes_analysis.json.
@@ -209,6 +230,7 @@ def load_p95_configs(
             candidate_source_dataset_name,
             run_suffix,
             candidate_source_graph_name,
+            ablation=ablation,
         )
 
         if candidate_file.exists():
@@ -821,6 +843,23 @@ def parse_args():
             "select_best_model.py."
         ),
     )
+    parser.add_argument(
+        "--dim",
+        type=int,
+        default=None,
+        help=(
+            "Only evaluate this Matryoshka dimension in --ablation mode, "
+            "e.g. 32."
+        ),
+    )
+    parser.add_argument(
+        "--ablation",
+        action="store_true",
+        help=(
+            "Evaluate only the activation/distance ablation models, skip "
+            "baselines, and write under data/evaluation/ablation."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -834,10 +873,20 @@ if __name__ == "__main__":
     graph_label = get_graph_label(graph_name)
     graph_path = get_graph_path(graph_name)
 
+    if args.dim is not None and args.dim <= 0:
+        raise ValueError("--dim must be greater than 0")
+    if args.ablation and args.dim is None:
+        raise ValueError("--ablation requires --dim, e.g. --dim 32")
+    if args.ablation and (args.best_model_path is not None or args.best_model_dim is not None):
+        raise ValueError("--ablation cannot be combined with --best-model-path/--best-model-dim")
+
     print(f"Run suffix: {run_suffix}")
+    print(f"Ablation mode: {args.ablation}")
     print(f"Graph: {graph_label} ({graph_name})")
     print(f"Graph path: {graph_path}")
     print(f"Embedding device: {args.embedding_device}")
+    if args.dim is not None:
+        print(f"Restricted Matryoshka dim: {args.dim}")
     embedding_cache_suffix = get_embedding_cache_suffix(graph_name)
     node_universe = get_node_universe_for_graph(graph_name)
     if embedding_cache_suffix:
@@ -848,6 +897,7 @@ if __name__ == "__main__":
         dataset_path,
         run_suffix,
         graph_name,
+        ablation=args.ablation,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -864,6 +914,16 @@ if __name__ == "__main__":
     if args.baselines_only:
         print("\nBaselines-only mode enabled.")
         print("Skipping embedding-guided model selection and model queue.")
+    elif args.ablation:
+        print("\nAblation mode enabled.")
+        print("Evaluating all ablation models at the requested dimension.")
+        model_queue = get_ablation_fine_tuned_models(run_suffix)
+        if not model_queue:
+            raise FileNotFoundError(
+                "No ablation fine-tuned models found for run suffix "
+                f"'{run_suffix}' in data/models/lightning"
+            )
+        print("Ablation model queue:", model_queue)
     elif current_split == "test":
         print("\nTest split detected.")
         print("Ignoring full model queue for embedding-guided strategies.")
@@ -925,6 +985,7 @@ if __name__ == "__main__":
         config_source_graph_name=args.config_source_graph,
         fallback_config_source_dataset_name=args.fallback_config_source_dataset,
         fallback_config_source_graph_name=args.fallback_config_source_graph,
+        ablation=args.ablation,
     )
 
     print(
@@ -957,16 +1018,22 @@ if __name__ == "__main__":
     )
     should_run_bfs_uncapped_baseline = (
         not args.skip_bfs_uncapped_baseline
+        and not args.ablation
         and (force_bfs_uncapped_baseline or not has_bfs_uncapped_baseline)
     )
     should_run_bfs_baseline = (
         not args.skip_bfs_baseline
+        and not args.ablation
         and (force_bfs_baseline or not has_bfs_baseline)
     )
     should_run_rl_baseline = (
         not args.skip_rl_baseline
+        and not args.ablation
         and (force_rl_baseline or not has_rl_baseline)
     )
+
+    if args.ablation:
+        print("Skipping all baselines in ablation mode.")
 
     if (
         force_bfs_uncapped_baseline
@@ -1204,7 +1271,7 @@ if __name__ == "__main__":
     if args.skip_dijkstra:
         print("Skipping Dijkstra model evaluation because --skip-dijkstra was set.")
 
-    if current_split == "test":
+    if current_split == "test" and not args.ablation:
         semantic_model_queue = [selected_test_model_path]
     else:
         semantic_model_queue = model_queue
@@ -1228,7 +1295,14 @@ if __name__ == "__main__":
 
             full_dim = main_embeder.get_model_dim()
 
-            if current_split == "test":
+            if args.ablation:
+                if args.dim > full_dim:
+                    raise ValueError(
+                        f"Requested dim {args.dim}, but {model_path} only "
+                        f"has {full_dim} embedding dimensions."
+                    )
+                dims = [args.dim]
+            elif current_split == "test":
                 dims = [selected_test_dimension]
             else:
                 dims = get_matryoshka_dims(full_dim)
@@ -1337,6 +1411,7 @@ if __name__ == "__main__":
                         "dimension": dim,
                         "split": current_split,
                         "run_suffix": run_suffix,
+                        "ablation": args.ablation,
                         "config_source_dataset": config_source_dataset_name,
                         "embedding_device": args.embedding_device,
                         "used_config": strip_runtime_config(used_config),
