@@ -466,8 +466,8 @@ def main():
         raise ValueError("--batch-size must be greater than 0")
     if args.dim is not None and args.dim <= 0:
         raise ValueError("--dim must be greater than 0")
-    if args.dim is not None and args.single_model is None:
-        raise ValueError("--dim requires a single positional model or --model-path")
+    if args.dim is not None and args.single_model is None and not args.ablation:
+        raise ValueError("--dim requires a single model path or --ablation")
     if args.dim is not None and args.no_index:
         raise ValueError("--dim-specific preembedding requires index mode")
 
