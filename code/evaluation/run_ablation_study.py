@@ -1,6 +1,7 @@
 import argparse
 import subprocess
 import sys
+from pathlib import Path
 
 from core.graph_config import graph_choices
 from core.utils import get_ablation_model_names, get_ablation_reference_model_name
@@ -11,7 +12,9 @@ DEFAULT_TEST_DATASETS = [
     "data/datasets/filtered/msmarco_test_filtered.json",
     "data/datasets/filtered/sem_test_filtered.json",
 ]
-DEFAULT_P95_DATASET = "data/datasets/filtered/msmarco_train_filtered.json"
+DEFAULT_P95_DATASET = "data/datasets/filtered/msmarco_valid_filtered.json"
+DEFAULT_ABLATION_CAP_SOURCE_DATASET = "msmarco_valid"
+DEFAULT_ABLATION_CAP_SOURCE_GRAPH = "causenet"
 
 
 def parse_args():
@@ -39,7 +42,27 @@ def parse_args():
     parser.add_argument(
         "--p95-dataset",
         default=DEFAULT_P95_DATASET,
-        help="Training split used to collect uncapped visited-node p95 caps.",
+        help=(
+            "Dataset used only when --run-ablation-visited-analysis is set. "
+            "Ablation evaluation itself uses the main-model shared cap source."
+        ),
+    )
+    parser.add_argument(
+        "--ablation-cap-source-dataset",
+        default=DEFAULT_ABLATION_CAP_SOURCE_DATASET,
+        help=(
+            "Normal evaluation dataset whose main-model p95 caps are shared "
+            "by all ablation models."
+        ),
+    )
+    parser.add_argument(
+        "--ablation-cap-source-graph",
+        choices=graph_choices(),
+        default=DEFAULT_ABLATION_CAP_SOURCE_GRAPH,
+        help=(
+            "Normal evaluation graph namespace whose main-model p95 caps are "
+            "shared by all ablation models."
+        ),
     )
     parser.add_argument(
         "--embedding-device",
@@ -53,7 +76,19 @@ def parse_args():
         help="Python executable used for subprocess calls.",
     )
     parser.add_argument("--skip-preembed", action="store_true")
-    parser.add_argument("--skip-visited", action="store_true")
+    parser.add_argument(
+        "--run-ablation-visited-analysis",
+        action="store_true",
+        help=(
+            "Optionally run visited-node analysis for the ablation models. "
+            "Not needed for the default fixed-budget thesis comparison."
+        ),
+    )
+    parser.add_argument(
+        "--skip-visited",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--skip-eval", action="store_true")
     parser.add_argument("--skip-viz", action="store_true")
     parser.add_argument(
@@ -93,6 +128,66 @@ def run_command(command, dry_run=False):
     subprocess.run(command, check=True)
 
 
+def dataset_name_from_path(dataset_path):
+    return Path(dataset_path).stem.replace("_filtered", "")
+
+
+def get_ablation_p95_file(graph, p95_dataset, run_suffix):
+    return (
+        Path("data/evaluation")
+        / "ablation"
+        / graph
+        / dataset_name_from_path(p95_dataset)
+        / run_suffix
+        / "visited_nodes_analysis.json"
+    )
+
+
+def build_visited_command(args, graph):
+    return [
+        args.python,
+        "-m",
+        "evaluation.visited_nodes_analysis",
+        args.p95_dataset,
+        "--run-suffix",
+        args.run_suffix,
+        "--graph",
+        graph,
+        "--ablation",
+        "--dim",
+        str(args.dim),
+        "--embedding-device",
+        args.embedding_device,
+        "--embedding-batch-size",
+        str(args.embedding_batch_size),
+    ]
+
+
+def ensure_ablation_p95_file(args, graph):
+    p95_file = get_ablation_p95_file(graph, args.p95_dataset, args.run_suffix)
+
+    if p95_file.exists():
+        print(f"Found p95 config for {graph}: {p95_file}")
+        return
+
+    if args.skip_visited:
+        command = build_visited_command(args, graph)
+        command_text = " ".join(command)
+        raise FileNotFoundError(
+            f"Missing ablation p95 config for graph '{graph}': {p95_file}\n"
+            "Run visited-node analysis first, or remove --skip-visited.\n"
+            f"Command: {command_text}"
+        )
+
+    print(f"Missing p95 config for {graph}; running visited-node analysis now.")
+    run_command(build_visited_command(args, graph), dry_run=args.dry_run)
+
+    if not args.dry_run and not p95_file.exists():
+        raise FileNotFoundError(
+            f"Visited-node analysis finished but did not create expected file: {p95_file}"
+        )
+
+
 def main():
     args = parse_args()
 
@@ -104,7 +199,12 @@ def main():
     print(f"Dim: {args.dim}")
     print(f"Graphs: {args.graphs}")
     print(f"Datasets: {args.datasets}")
-    print(f"P95 dataset: {args.p95_dataset}")
+    print(
+        "Shared cap source: "
+        f"{args.ablation_cap_source_graph}/"
+        f"{args.ablation_cap_source_dataset}/{args.run_suffix}"
+    )
+    print(f"Optional ablation visited-analysis dataset: {args.p95_dataset}")
     print(f"Embedding device: {args.embedding_device}")
     print(f"Embedding batch size: {args.embedding_batch_size}")
     print(f"Reference model: {reference_model}")
@@ -136,26 +236,9 @@ def main():
             ]
             run_command(command, dry_run=args.dry_run)
 
-    if not args.skip_visited:
+    if args.run_ablation_visited_analysis and not args.skip_visited:
         for graph in args.graphs:
-            command = [
-                args.python,
-                "-m",
-                "evaluation.visited_nodes_analysis",
-                args.p95_dataset,
-                "--run-suffix",
-                args.run_suffix,
-                "--graph",
-                graph,
-                "--ablation",
-                "--dim",
-                str(args.dim),
-                "--embedding-device",
-                args.embedding_device,
-                "--embedding-batch-size",
-                str(args.embedding_batch_size),
-            ]
-            run_command(command, dry_run=args.dry_run)
+            ensure_ablation_p95_file(args, graph)
 
     if not args.skip_eval:
         for graph in args.graphs:
@@ -176,10 +259,10 @@ def main():
                     args.embedding_device,
                     "--embedding-batch-size",
                     str(args.embedding_batch_size),
-                    "--fallback-config-source-dataset",
-                    "msmarco_train",
-                    "--fallback-config-source-graph",
-                    graph,
+                    "--ablation-cap-source-dataset",
+                    args.ablation_cap_source_dataset,
+                    "--ablation-cap-source-graph",
+                    args.ablation_cap_source_graph,
                 ]
 
                 if args.skip_dijkstra:

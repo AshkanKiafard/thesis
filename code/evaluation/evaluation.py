@@ -28,6 +28,7 @@ from core.graph_config import (
 from core.pre_embed import preload_graph_embeddings, preload_rl_embeddings
 from core.utils import (
     get_ablation_fine_tuned_models,
+    get_ablation_reference_model_name,
     get_embedding_cache_suffix,
     get_fine_tuned_models,
     get_model_distance_metric,
@@ -299,6 +300,45 @@ def get_p95_cap(p95_configs, model, dimension, strategy):
         return p95_configs[strategy_key]
 
     raise KeyError(f"Missing p95 config for {strategy_key}")
+
+
+def use_shared_ablation_caps(
+    p95_configs,
+    reference_model_name,
+    ablation_model_paths,
+    dimension,
+    include_dijkstra=True,
+):
+    """
+    Apply the selected main model's traversal budget to every ablation model.
+
+    This keeps the ablation comparison fixed-budget: activation/distance changes,
+    but the search budget stays the same as the selected reference model.
+    """
+    strategies = ["A*"]
+    if include_dijkstra:
+        strategies.append("Dijkstra")
+
+    shared_configs = {}
+    ablation_model_names = [get_model_name(path) for path in ablation_model_paths]
+
+    print("\nUsing shared ablation traversal caps:")
+    print(f"Reference model: {reference_model_name}")
+    print(f"Reference dim: {dimension}")
+
+    for strategy in strategies:
+        reference_cap = get_p95_cap(
+            p95_configs,
+            reference_model_name,
+            dimension,
+            strategy,
+        )
+        print(f"{strategy}: {reference_cap}")
+
+        for model_name in ablation_model_names:
+            shared_configs[(model_name, dimension, strategy)] = reference_cap
+
+    return shared_configs
 
 
 def get_bfs_max_visits_cap(p95_configs):
@@ -713,6 +753,34 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--ablation-cap-source-dataset",
+        type=str,
+        default="msmarco_valid",
+        help=(
+            "In --ablation mode, use this normal evaluation dataset's "
+            "visited-node caps from the reference model. Default: msmarco_valid."
+        ),
+    )
+    parser.add_argument(
+        "--ablation-cap-source-graph",
+        choices=graph_choices(),
+        default=DEFAULT_GRAPH_NAME,
+        help=(
+            "In --ablation mode, use this normal evaluation graph namespace "
+            "for reference-model visited-node caps. Default: causenet."
+        ),
+    )
+    parser.add_argument(
+        "--ablation-cap-reference-model",
+        type=str,
+        default=None,
+        help=(
+            "Reference model name whose p95 caps are shared by all ablation "
+            "models. Defaults to the main Granite relu/euclid finetuned model "
+            "for --run-suffix."
+        ),
+    )
+    parser.add_argument(
         "--skip-embedding-preload",
         action="store_true",
         help=(
@@ -981,12 +1049,35 @@ if __name__ == "__main__":
         dataset_name,
         run_suffix,
         graph_name,
-        config_source_dataset_name=args.config_source_dataset,
-        config_source_graph_name=args.config_source_graph,
+        config_source_dataset_name=(
+            args.ablation_cap_source_dataset
+            if args.ablation
+            else args.config_source_dataset
+        ),
+        config_source_graph_name=(
+            args.ablation_cap_source_graph
+            if args.ablation
+            else args.config_source_graph
+        ),
         fallback_config_source_dataset_name=args.fallback_config_source_dataset,
         fallback_config_source_graph_name=args.fallback_config_source_graph,
-        ablation=args.ablation,
+        ablation=False if args.ablation else args.ablation,
     )
+
+    if args.ablation:
+        ablation_reference_model = (
+            args.ablation_cap_reference_model
+            or get_ablation_reference_model_name(run_suffix)
+        )
+        p95_configs = use_shared_ablation_caps(
+            p95_configs,
+            ablation_reference_model,
+            model_queue,
+            args.dim,
+            include_dijkstra=not args.skip_dijkstra,
+        )
+    else:
+        ablation_reference_model = None
 
     print(
         "Using traversal caps from: "
@@ -1413,6 +1504,9 @@ if __name__ == "__main__":
                         "run_suffix": run_suffix,
                         "ablation": args.ablation,
                         "config_source_dataset": config_source_dataset_name,
+                        "config_source_graph": config_source_graph_name,
+                        "ablation_shared_max_visits": args.ablation,
+                        "ablation_cap_reference_model": ablation_reference_model,
                         "embedding_device": args.embedding_device,
                         "used_config": strip_runtime_config(used_config),
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
