@@ -1,6 +1,8 @@
 import argparse
+import json
 import subprocess
 import sys
+from pathlib import Path
 
 from core.graph_config import graph_choices
 from core.utils import get_ablation_model_names, get_ablation_reference_model_name
@@ -11,7 +13,7 @@ DEFAULT_TEST_DATASETS = [
     "data/datasets/filtered/msmarco_test_filtered.json",
     "data/datasets/filtered/sem_test_filtered.json",
 ]
-DEFAULT_ABLATION_CAP_SOURCE_DATASET = "msmarco_valid"
+DEFAULT_ABLATION_CAP_SOURCE_DATASET = "msmarco_train"
 DEFAULT_ABLATION_CAP_SOURCE_GRAPH = "causenet"
 
 
@@ -100,6 +102,69 @@ def run_command(command, dry_run=False):
     subprocess.run(command, check=True)
 
 
+def get_shared_cap_source_file(args):
+    return (
+        Path("data/evaluation")
+        / args.ablation_cap_source_graph
+        / args.ablation_cap_source_dataset
+        / args.run_suffix
+        / "visited_nodes_analysis.json"
+    )
+
+
+def validate_shared_cap_source(args, reference_model):
+    cap_file = get_shared_cap_source_file(args)
+
+    if args.dry_run:
+        print(f"Expected shared cap source: {cap_file}")
+        return
+
+    if not cap_file.exists():
+        dataset_path = (
+            f"data/datasets/filtered/"
+            f"{args.ablation_cap_source_dataset}_filtered.json"
+        )
+        command = " ".join(
+            [
+                args.python,
+                "-m",
+                "evaluation.visited_nodes_analysis",
+                dataset_path,
+                "--run-suffix",
+                args.run_suffix,
+                "--graph",
+                args.ablation_cap_source_graph,
+            ]
+        )
+        raise FileNotFoundError(
+            "Missing shared main-model cap source for ablation evaluation:\n"
+            f"{cap_file}\n\n"
+            "This is not an ablation visited-node file. It is the normal "
+            "reference cap file used to keep the ablation comparison fixed-budget.\n"
+            "Create it once with:\n"
+            f"{command}"
+        )
+
+    with open(cap_file, "r", encoding="utf-8") as file:
+        analysis_results = json.load(file)
+
+    has_reference_cap = any(
+        entry.get("model") == reference_model
+        and entry.get("dimension") == args.dim
+        and entry.get("analysis", {}).get("strategy") == "A*"
+        and entry.get("analysis", {}).get("p95_visited_successful_only") is not None
+        for entry in analysis_results
+    )
+
+    if not has_reference_cap:
+        raise KeyError(
+            "Shared cap source exists, but it does not contain the required "
+            f"A* cap for {reference_model} dim {args.dim}:\n{cap_file}"
+        )
+
+    print(f"Found shared main-model A* cap source: {cap_file}")
+
+
 def main():
     args = parse_args()
 
@@ -122,6 +187,9 @@ def main():
     print("Ablation models:")
     for model_name in ablation_models:
         print(f"  - {model_name}")
+
+    if not args.skip_eval:
+        validate_shared_cap_source(args, reference_model)
 
     if not args.skip_preembed:
         preembed_targets = [

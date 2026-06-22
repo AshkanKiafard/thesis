@@ -755,10 +755,10 @@ def parse_args():
     parser.add_argument(
         "--ablation-cap-source-dataset",
         type=str,
-        default="msmarco_valid",
+        default="msmarco_train",
         help=(
             "In --ablation mode, use this normal evaluation dataset's "
-            "visited-node caps from the reference model. Default: msmarco_valid."
+            "visited-node caps from the reference model. Default: msmarco_train."
         ),
     )
     parser.add_argument(
