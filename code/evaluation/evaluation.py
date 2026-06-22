@@ -947,6 +947,8 @@ if __name__ == "__main__":
         raise ValueError("--ablation requires --dim, e.g. --dim 32")
     if args.ablation and (args.best_model_path is not None or args.best_model_dim is not None):
         raise ValueError("--ablation cannot be combined with --best-model-path/--best-model-dim")
+    if args.ablation:
+        args.skip_dijkstra = True
 
     print(f"Run suffix: {run_suffix}")
     print(f"Ablation mode: {args.ablation}")

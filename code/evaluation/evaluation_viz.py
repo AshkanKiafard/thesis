@@ -2807,31 +2807,6 @@ def plot_ablation_result_set(dataset_name, run_suffix, graph_name, dim):
     else:
         print("No ablation comparison evaluation rows found. Skipping metric plots.")
 
-    visited_nodes_data, reference_visited_path, ablation_visited_path = (
-        load_ablation_comparison_entries(
-            dataset_name=dataset_name,
-            run_suffix=run_suffix,
-            graph_name=graph_name,
-            dim=dim,
-            filename="visited_nodes_analysis.json",
-        )
-    )
-
-    print(f"Reference visited nodes analysis: {reference_visited_path}")
-    print(f"Ablation visited nodes analysis: {ablation_visited_path}")
-
-    if visited_nodes_data:
-        p95_df = extract_p95_data(visited_nodes_data)
-        if not p95_df.empty:
-            p95_df = p95_df[p95_df["algorithm"] == "A*"]
-
-        plot_all_p95_analysis(
-            p95_df=p95_df,
-            plot_root=plot_root,
-        )
-    else:
-        print("No ablation comparison visited-node rows found. Skipping p95 plots.")
-
     print("\nAll available ablation plots created.")
 
 
