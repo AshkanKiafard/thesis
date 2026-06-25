@@ -260,6 +260,9 @@ def _iter_causenet_edges(file_path, remove_self_loops=True):
                 d["causal_relation"]["effect"]["concept"]
             )
 
+            if not cause or not effect:
+                continue
+
             if remove_self_loops and cause == effect:
                 continue
 
