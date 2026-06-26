@@ -11,6 +11,7 @@ import torch
 import traverse_strategies as ts
 from core.config import (
     BASE_MODELS,
+    DEFAULT_EMBEDDING_BATCH_SIZE,
     EMBEDDING_INDEX_MIN_SUCCESSORS,
     GLOVE_300D_PATH,
     LIGHTNING_DIR,
@@ -27,7 +28,7 @@ from core.graph_config import (
     get_graph_path,
     graph_choices,
 )
-from core.pre_embed import preload_graph_embeddings, preload_rl_embeddings
+from core.embedding_preload import preload_graph_embeddings, preload_rl_embeddings
 from core.utils import (
     get_ablation_fine_tuned_models,
     get_embedding_cache_suffix,
@@ -289,7 +290,7 @@ def parse_args():
     parser.add_argument(
         "--embedding-batch-size",
         type=int,
-        default=64,
+        default=DEFAULT_EMBEDDING_BATCH_SIZE,
         help="Batch size used when loading or backfilling the ST embedding index.",
     )
     parser.add_argument(

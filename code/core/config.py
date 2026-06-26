@@ -11,6 +11,7 @@ GLOVE_300D_PATH = EMBEDDINGS_DIR / "glove.6B" / "glove.6B.300d.txt"
 DEFAULT_RUN_SUFFIX = "v3"
 
 EMBEDDING_INDEX_MIN_SUCCESSORS = 16
+DEFAULT_EMBEDDING_BATCH_SIZE = 128
 
 BASE_MODELS = (
     "sentence-transformers/all-mpnet-base-v2",

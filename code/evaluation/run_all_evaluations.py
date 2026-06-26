@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from core.config import (
+    DEFAULT_EMBEDDING_BATCH_SIZE,
     DEFAULT_RUN_SUFFIX,
     DEFAULT_TEST_DATASETS,
     DEFAULT_TEST_GRAPHS,
@@ -52,7 +53,11 @@ def parse_args():
         choices=("auto", "cpu", "cuda"),
         default="cuda",
     )
-    parser.add_argument("--embedding-batch-size", type=int, default=64)
+    parser.add_argument(
+        "--embedding-batch-size",
+        type=int,
+        default=DEFAULT_EMBEDDING_BATCH_SIZE,
+    )
     parser.add_argument(
         "--python",
         default=sys.executable,

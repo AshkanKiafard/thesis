@@ -9,7 +9,7 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from sentence_transformers import SentenceTransformer
 
-from core.config import EMBEDDINGS_DIR
+from core.config import DEFAULT_EMBEDDING_BATCH_SIZE, EMBEDDINGS_DIR
 from core.constants import DistanceMetric
 from core.utils import (
     get_node_universe_for_cache_suffix,
@@ -799,7 +799,12 @@ class STEmbedder:
 
         return self._as_numpy(cached_embedding)
 
-    def preload(self, texts, batch_size: int = 64, save: bool = True) -> int:
+    def preload(
+        self,
+        texts,
+        batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
+        save: bool = True,
+    ) -> int:
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than 0")
 
@@ -849,7 +854,7 @@ class STEmbedder:
     def prepare_embedding_index(
         self,
         texts,
-        batch_size: int = 64,
+        batch_size: int = DEFAULT_EMBEDDING_BATCH_SIZE,
         save: bool = True,
         discard_tensor_cache: bool = False,
         populate_tensor_cache: bool = True,
