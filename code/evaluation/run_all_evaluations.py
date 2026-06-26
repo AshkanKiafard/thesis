@@ -5,6 +5,8 @@ from pathlib import Path
 
 from core.config import (
     DEFAULT_EMBEDDING_BATCH_SIZE,
+    DEFAULT_P95_CONFIG_SOURCE_DATASET,
+    DEFAULT_P95_CONFIG_SOURCE_GRAPH,
     DEFAULT_RUN_SUFFIX,
     DEFAULT_TEST_DATASETS,
     DEFAULT_TEST_GRAPHS,
@@ -47,6 +49,23 @@ def parse_args():
         nargs="+",
         default=DEFAULT_TEST_DATASETS,
         help="Datasets used for the best-model test evaluations.",
+    )
+    parser.add_argument(
+        "--test-config-source-dataset",
+        default=DEFAULT_P95_CONFIG_SOURCE_DATASET,
+        help=(
+            "Visited-node p95 dataset source forced for best-model test "
+            "evaluations."
+        ),
+    )
+    parser.add_argument(
+        "--test-config-source-graph",
+        choices=graph_choices(),
+        default=DEFAULT_P95_CONFIG_SOURCE_GRAPH,
+        help=(
+            "Visited-node p95 graph source forced for best-model test "
+            "evaluations."
+        ),
     )
     parser.add_argument(
         "--embedding-device",
@@ -185,6 +204,11 @@ def main():
     print(f"Validation dataset: {args.validation_dataset}")
     print(f"Test graphs: {args.test_graphs}")
     print(f"Test datasets: {args.test_datasets}")
+    print(
+        "Test p95 source: "
+        f"{args.test_config_source_graph}/"
+        f"{args.test_config_source_dataset}/{args.run_suffix}"
+    )
     print(f"Embedding device: {args.embedding_device}")
     print(f"Embedding batch size: {args.embedding_batch_size}")
     print(f"Force results: {not args.no_force}")
@@ -207,6 +231,10 @@ def main():
         best_model["model_path"],
         "--best-model-dim",
         str(best_model["dimension"]),
+        "--config-source-dataset",
+        args.test_config_source_dataset,
+        "--config-source-graph",
+        args.test_config_source_graph,
     ]
 
     for graph in args.test_graphs:
