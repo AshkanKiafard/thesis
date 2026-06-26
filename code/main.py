@@ -1,5 +1,6 @@
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
+from core.config import GLOVE_300D_PATH
 from core.graph_config import get_graph_path
 from core.utils import load_causal_graph, load_rl_graph, traverse_graph
 
@@ -10,7 +11,7 @@ if __name__ == "__main__":
         "sentence-transformers/all-mpnet-base-v2", DistanceMetric.COSINE
     )
     glove_embeder = GloveEmbeder(
-        "data/embeddings/glove.6B/glove.6B.300d.txt", DistanceMetric.COSINE
+        GLOVE_300D_PATH, DistanceMetric.COSINE
     )
     print("Embeders initialized.")
 

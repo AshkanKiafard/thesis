@@ -17,7 +17,18 @@ from sklearn.metrics import (
 )
 
 import traverse_strategies as ts
-from core.constants import EMBEDDING_INDEX_MIN_SUCCESSORS, GLOVE_300D_PATH
+from core.config import (
+    BASE_MODELS,
+    EMBEDDINGS_DIR,
+    EMBEDDING_INDEX_MIN_SUCCESSORS,
+    GLOVE_300D_PATH,
+    LIGHTNING_DIR,
+)
+from core.constants import (
+    BFS_CAPPED_BASELINE_MODEL,
+    BFS_UNCAPPED_BASELINE_MODEL,
+    RL_BASELINE_MODEL,
+)
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.graph_config import (
     DEFAULT_GRAPH_NAME,
@@ -42,20 +53,6 @@ from core.utils import (
 from evaluation.select_best_model import select_best_astar_model, print_selection
 
 EVALUATION_OUTPUT_ROOT = Path("data/evaluation")
-BFS_CAPPED_BASELINE_MODEL = "BFS_Baseline"
-BFS_UNCAPPED_BASELINE_MODEL = "BFS_Uncapped_Baseline"
-RL_BASELINE_MODEL = "RL_Baseline"
-
-base_models = [
-    "sentence-transformers/all-mpnet-base-v2",
-    # "BAAI/bge-base-en-v1.5",
-    # "ibm-granite/granite-embedding-small-english-r2",
-    "BAAI/bge-large-en-v1.5",
-    "ibm-granite/granite-embedding-english-r2",
-    "mixedbread-ai/mxbai-embed-large-v1",
-    "Qwen/Qwen3-Embedding-0.6B",
-    # "Qwen/Qwen3-Embedding-4B",
-]
 
 
 def detect_split(dataset_name: str):
@@ -807,7 +804,7 @@ def parse_args():
     parser.add_argument(
         "--no-save-embedding-cache",
         action="store_true",
-        help="Do not persist newly preloaded ST embeddings to data/embeddings.",
+        help=f"Do not persist newly preloaded ST embeddings to {EMBEDDINGS_DIR}.",
     )
     parser.add_argument(
         "--skip-bfs-baseline",
@@ -991,7 +988,7 @@ if __name__ == "__main__":
         if not model_queue:
             raise FileNotFoundError(
                 "No ablation fine-tuned models found for run suffix "
-                f"'{run_suffix}' in data/models/lightning"
+                f"'{run_suffix}' in {LIGHTNING_DIR}"
             )
         print("Ablation model queue:", model_queue)
     elif current_split == "test":
@@ -1040,7 +1037,7 @@ if __name__ == "__main__":
             )
     else:
         fine_tuned_models = get_fine_tuned_models(run_suffix)
-        model_queue = sort_model_queue(base_models + fine_tuned_models, run_suffix)
+        model_queue = sort_model_queue(list(BASE_MODELS) + fine_tuned_models, run_suffix)
         print("Model queue:", model_queue)
 
     (

@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 import networkx as nx
 
-from core.constants import EMBEDDING_INDEX_MIN_SUCCESSORS
+from core.config import EMBEDDING_INDEX_MIN_SUCCESSORS
 from core.embeddings import STEmbedder
 
 

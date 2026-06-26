@@ -9,7 +9,17 @@ import numpy as np
 import torch
 
 import traverse_strategies as ts
-from core.constants import EMBEDDING_INDEX_MIN_SUCCESSORS, GLOVE_300D_PATH
+from core.config import (
+    BASE_MODELS,
+    EMBEDDING_INDEX_MIN_SUCCESSORS,
+    GLOVE_300D_PATH,
+    LIGHTNING_DIR,
+)
+from core.constants import (
+    BFS_CAPPED_BASELINE_MODEL,
+    BFS_UNCAPPED_BASELINE_MODEL,
+    RL_BASELINE_MODEL,
+)
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.graph_config import (
     DEFAULT_GRAPH_NAME,
@@ -35,21 +45,6 @@ from core.utils import (
 # -------------------------------------------------------------------------
 
 EVALUATION_OUTPUT_ROOT = Path("data/evaluation")
-BFS_LEGACY_BASELINE_MODEL = "BFS_Baseline"
-BFS_UNCAPPED_BASELINE_MODEL = "BFS_Uncapped_Baseline"
-RL_BASELINE_MODEL = "RL_Baseline"
-
-# Base models evaluated with embedding-guided graph strategies.
-base_models = [
-    "sentence-transformers/all-mpnet-base-v2",
-    # "BAAI/bge-base-en-v1.5",
-    # "ibm-granite/granite-embedding-small-english-r2",
-    "BAAI/bge-large-en-v1.5",
-    "ibm-granite/granite-embedding-english-r2",
-    "mixedbread-ai/mxbai-embed-large-v1",
-    "Qwen/Qwen3-Embedding-0.6B",
-    # "Qwen/Qwen3-Embedding-4B",
-]
 
 
 def build_output_paths(
@@ -337,11 +332,11 @@ if __name__ == "__main__":
         if not model_queue:
             raise FileNotFoundError(
                 "No ablation fine-tuned models found for run suffix "
-                f"'{run_suffix}' in data/models/lightning"
+                f"'{run_suffix}' in {LIGHTNING_DIR}"
             )
     else:
         fine_tuned_models = get_fine_tuned_models(run_suffix)
-        model_queue = base_models + fine_tuned_models
+        model_queue = list(BASE_MODELS) + fine_tuned_models
 
     print(f"Run suffix: {run_suffix}")
     print(f"Ablation mode: {args.ablation}")
@@ -402,7 +397,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     has_bfs_uncapped_result = any(
         already_done(existing_results, model)
-        for model in (BFS_UNCAPPED_BASELINE_MODEL, BFS_LEGACY_BASELINE_MODEL)
+        for model in (BFS_UNCAPPED_BASELINE_MODEL, BFS_CAPPED_BASELINE_MODEL)
     )
 
     if args.ablation:

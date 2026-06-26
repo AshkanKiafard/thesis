@@ -4,17 +4,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.config import (
+    DEFAULT_ABLATION_CAP_SOURCE_DATASET,
+    DEFAULT_ABLATION_CAP_SOURCE_GRAPH,
+    DEFAULT_RUN_SUFFIX,
+    DEFAULT_TEST_DATASETS,
+    DEFAULT_TEST_GRAPHS,
+)
 from core.graph_config import graph_choices
 from core.utils import get_ablation_model_names, get_ablation_reference_model_name
-
-
-DEFAULT_GRAPHS = ["causenet", "causalbank", "causenet_full"]
-DEFAULT_TEST_DATASETS = [
-    "data/datasets/filtered/msmarco_test_filtered.json",
-    "data/datasets/filtered/sem_test_filtered.json",
-]
-DEFAULT_ABLATION_CAP_SOURCE_DATASET = "msmarco_train"
-DEFAULT_ABLATION_CAP_SOURCE_GRAPH = "causenet"
 
 
 def parse_args():
@@ -25,13 +23,13 @@ def parse_args():
             "and generate ablation plots."
         )
     )
-    parser.add_argument("--run-suffix", default="v3")
+    parser.add_argument("--run-suffix", default=DEFAULT_RUN_SUFFIX)
     parser.add_argument("--dim", type=int, default=32)
     parser.add_argument(
         "--graphs",
         nargs="+",
         choices=graph_choices(),
-        default=DEFAULT_GRAPHS,
+        default=DEFAULT_TEST_GRAPHS,
     )
     parser.add_argument(
         "--datasets",

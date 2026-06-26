@@ -9,6 +9,7 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from sentence_transformers import SentenceTransformer
 
+from core.config import EMBEDDINGS_DIR
 from core.constants import DistanceMetric
 from core.utils import (
     get_node_universe_for_cache_suffix,
@@ -21,9 +22,6 @@ from core.utils import (
 # Embedding caches are NumPy .npy vector matrices plus one shared JSONL row-label
 # file per node universe. The JSONL is deliberately not model-specific: vectors
 # differ by model/dimension, but node ordering does not.
-# code/core/embeddings.py -> repo root is two levels above this file.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = REPO_ROOT / "code" / "data"
 
 
 class EmbeddingCacheValidationError(ValueError):
@@ -560,9 +558,8 @@ class STEmbedder:
         self.embedding_table = None
         self.embedding_table_dim = None
 
-        # Store embedding caches inside the mounted project directory.
-        # This avoids writing to ../data, which resolves outside /app inside the Slurm container.
-        cache_dir = DATA_DIR / "embeddings"
+        # Store embedding caches inside the configured project data directory.
+        cache_dir = EMBEDDINGS_DIR
         os.makedirs(cache_dir, exist_ok=True)
         cache_name = self.model_name
         if cache_suffix:

@@ -22,9 +22,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from core.constants import EMBEDDING_INDEX_MIN_SUCCESSORS
+from core.config import (
+    BASE_MODELS,
+    DEFAULT_RUN_SUFFIX as CONFIG_DEFAULT_RUN_SUFFIX,
+    EMBEDDINGS_DIR,
+    EMBEDDING_INDEX_MIN_SUCCESSORS,
+    LIGHTNING_DIR,
+)
 from core.graph_config import DEFAULT_GRAPH_NAME, GRAPH_CONFIGS, get_graph_label
-from core.pre_embed import BASE_MODELS
 from core.utils import (
     format_model_display_name,
     get_embedding_cache_suffix,
@@ -41,12 +46,10 @@ from core.utils import (
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-LIGHTNING_DIR = CODE_ROOT / "data" / "models" / "lightning"
-EMBEDDINGS_DIR = CODE_ROOT / "data" / "embeddings"
 GRAPH_CACHE_DIR = CODE_ROOT / "data" / "cache" / "web_demo_graphs"
 VISUAL_CACHE_DIR = CODE_ROOT / "data" / "cache" / "web_demo_graph_previews"
 
-DEFAULT_RUN_SUFFIX = os.environ.get("WEB_DEMO_RUN_SUFFIX", "v3")
+DEFAULT_RUN_SUFFIX = os.environ.get("WEB_DEMO_RUN_SUFFIX", CONFIG_DEFAULT_RUN_SUFFIX)
 EMBEDDING_DEVICE = os.environ.get("WEB_DEMO_EMBEDDING_DEVICE", "auto")
 ASTAR_MAX_VISITS = int(os.environ.get("WEB_DEMO_ASTAR_MAX_VISITS", "-1"))
 SUBGRAPH_LIMIT = int(os.environ.get("WEB_DEMO_SUBGRAPH_LIMIT", "240"))

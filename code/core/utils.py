@@ -8,20 +8,20 @@ from typing import Any, Callable, Dict, List, Tuple
 
 import networkx as nx
 
-from core.constants import (
-    ActivationFunc,
+from core.config import (
     DEFAULT_ABLATION_BASE_MODEL_NAME,
     DEFAULT_ABLATION_COMBOS,
     DEFAULT_ABLATION_MRL_STR,
     DEFAULT_ABLATION_NORMALIZE_STR,
     DEFAULT_ABLATION_REFERENCE_COMBO,
-    DistanceMetric,
     LIGHTNING_DIR,
 )
-
-
-MERGED_NODE_UNIVERSE = "merged_causenet_causalbank"
-CAUSENET_FULL_NODE_UNIVERSE = "causenet_full"
+from core.constants import (
+    ActivationFunc,
+    CAUSENET_FULL_NODE_UNIVERSE,
+    DistanceMetric,
+    MERGED_NODE_UNIVERSE,
+)
 
 NODE_UNIVERSE_FILENAMES = {
     MERGED_NODE_UNIVERSE: "merged_causenet_causalbank_nodes.jsonl",

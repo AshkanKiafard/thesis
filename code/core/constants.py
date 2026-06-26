@@ -11,16 +11,17 @@ class DistanceMetric(Enum):
     EUCLIDEAN = 2
 
 
-LIGHTNING_DIR = "data/models/lightning"
-GLOVE_300D_PATH = "data/embeddings/glove.6B/glove.6B.300d.txt"
-EMBEDDING_INDEX_MIN_SUCCESSORS = 16
+BFS_CAPPED_BASELINE_MODEL = "BFS_Baseline"
+BFS_UNCAPPED_BASELINE_MODEL = "BFS_Uncapped_Baseline"
+RL_BASELINE_MODEL = "RL_Baseline"
 
-DEFAULT_ABLATION_BASE_MODEL_NAME = "granite-embedding-english-r2"
-DEFAULT_ABLATION_NORMALIZE_STR = "nonorm"
-DEFAULT_ABLATION_MRL_STR = "matryoshka"
-DEFAULT_ABLATION_REFERENCE_COMBO = ("relu", "euclid")
-DEFAULT_ABLATION_COMBOS = (
-    ("relu", "cosine"),
-    ("gelu", "euclid"),
-    ("gelu", "cosine"),
+BASELINE_MODEL_NAMES = frozenset(
+    {
+        BFS_CAPPED_BASELINE_MODEL,
+        BFS_UNCAPPED_BASELINE_MODEL,
+        RL_BASELINE_MODEL,
+    }
 )
+
+MERGED_NODE_UNIVERSE = "merged_causenet_causalbank"
+CAUSENET_FULL_NODE_UNIVERSE = "causenet_full"

@@ -3,12 +3,11 @@ import csv
 import json
 from pathlib import Path
 
+from core.config import GLOVE_300D_PATH
 from core.graph_config import get_graph_label, get_graph_path, graph_choices
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_GLOVE_PATH = (
-    REPO_ROOT / "data" / "embeddings" / "glove.6B" / "glove.6B.300d.txt"
-)
+DEFAULT_GLOVE_PATH = GLOVE_300D_PATH
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "data" / "reports" / "coverage"
 DEFAULT_DATASET_DIR = REPO_ROOT / "data" / "datasets" / "filtered"
 DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank")

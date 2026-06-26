@@ -8,6 +8,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from core.constants import (
+    BASELINE_MODEL_NAMES,
+    BFS_CAPPED_BASELINE_MODEL,
+    BFS_UNCAPPED_BASELINE_MODEL,
+    RL_BASELINE_MODEL,
+)
 from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
 from core.utils import (
     format_model_display_name,
@@ -28,15 +34,6 @@ EVALUATION_INPUT_ROOT = Path("data/evaluation")
 # "pdf" is best for LaTeX. Add "png" too if you want preview images.
 PLOT_FORMATS = ["pdf", "png"]
 PNG_DPI = 300
-
-BFS_CAPPED_BASELINE_MODEL = "BFS_Baseline"
-BFS_UNCAPPED_BASELINE_MODEL = "BFS_Uncapped_Baseline"
-RL_BASELINE_MODEL = "RL_Baseline"
-BASELINE_MODEL_NAMES = {
-    BFS_UNCAPPED_BASELINE_MODEL,
-    BFS_CAPPED_BASELINE_MODEL,
-    RL_BASELINE_MODEL,
-}
 
 BASE_MODEL_LABELS = {
     "all-mpnet-base-v2": format_model_display_name("all-mpnet-base-v2"),

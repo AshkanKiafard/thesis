@@ -8,12 +8,12 @@ from pathlib import Path
 
 # code/core/pre_embed.py -> code root is one level above this file.
 CODE_ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = CODE_ROOT / "data"
 
 # Make code/ importable when this script is executed directly.
 if str(CODE_ROOT) not in sys.path:
     sys.path.insert(0, str(CODE_ROOT))
 
+from core.config import BASE_MODELS, DATA_DIR, EMBEDDINGS_DIR
 from core.graph_config import get_graph_label, get_graph_path, graph_choices
 from core.indexed_graph import build_indexed_graph
 from core.utils import (
@@ -25,18 +25,6 @@ from core.utils import (
     get_node_universe_path,
     write_node_universe,
 )
-
-
-BASE_MODELS = [
-    "sentence-transformers/all-mpnet-base-v2",
-    # "BAAI/bge-base-en-v1.5",
-    # "ibm-granite/granite-embedding-small-english-r2",
-    "BAAI/bge-large-en-v1.5",
-    "ibm-granite/granite-embedding-english-r2",
-    "mixedbread-ai/mxbai-embed-large-v1",
-    "Qwen/Qwen3-Embedding-0.6B",
-    # "Qwen/Qwen3-Embedding-4B",
-]
 
 
 def parse_args():
@@ -471,7 +459,7 @@ def main():
     if args.dim is not None and args.no_index:
         raise ValueError("--dim-specific preembedding requires index mode")
 
-    embeddings_dir = DATA_DIR / "embeddings"
+    embeddings_dir = EMBEDDINGS_DIR
     embeddings_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Run suffix: {args.run_suffix}")
@@ -538,7 +526,7 @@ def main():
             f"'{args.run_suffix}'."
         )
 
-        model_queue = BASE_MODELS + fine_tuned_models
+        model_queue = list(BASE_MODELS) + fine_tuned_models
 
     print("Model queue:")
     for model_path in model_queue:

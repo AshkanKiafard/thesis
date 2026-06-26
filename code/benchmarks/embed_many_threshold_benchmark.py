@@ -17,7 +17,7 @@ if str(CODE_ROOT) not in sys.path:
 
 from traverse_strategies.astar import astar_traverse
 from traverse_strategies.dijkstra import dijkstra_traverse
-from core.constants import EMBEDDING_INDEX_MIN_SUCCESSORS
+from core.config import EMBEDDING_INDEX_MIN_SUCCESSORS
 
 
 CURRENT_THRESHOLD = 128

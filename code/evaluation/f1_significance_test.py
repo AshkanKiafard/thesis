@@ -5,12 +5,12 @@ from pathlib import Path
 
 import numpy as np
 
+from core.config import DEFAULT_RUN_SUFFIX
 from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_NAME = "msmarco_test"
-DEFAULT_RUN_SUFFIX = "v3"
 DEFAULT_REFERENCE_CONTAINS = [
     "granite-embedding-english-r2",
     "finetuned",
