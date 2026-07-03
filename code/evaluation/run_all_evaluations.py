@@ -104,6 +104,14 @@ def parse_args():
         help="Reuse existing validation results instead of rerunning validation.",
     )
     parser.add_argument(
+        "--skip-dijkstra",
+        action="store_true",
+        help=(
+            "Skip Dijkstra in every evaluation command. A* model results and "
+            "baselines can still be forced normally."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print commands without running them.",
@@ -153,6 +161,9 @@ def evaluation_command(args, dataset, graph, extra_args=None):
         str(args.embedding_batch_size),
         *force_args(args),
     ]
+
+    if args.skip_dijkstra:
+        command.append("--skip-dijkstra")
 
     if extra_args:
         command.extend(extra_args)
@@ -212,6 +223,7 @@ def main():
     print(f"Embedding device: {args.embedding_device}")
     print(f"Embedding batch size: {args.embedding_batch_size}")
     print(f"Force results: {not args.no_force}")
+    print(f"Skip Dijkstra: {args.skip_dijkstra}")
 
     if not args.skip_validation:
         run_command(
