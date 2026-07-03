@@ -86,6 +86,48 @@ def _get_distances(embeder, source_embed, target_embeds, assume_normalized):
     return embeder.get_distances(source_embed, target_embeds)
 
 
+def _get_distances_pair(
+    embeder,
+    source_embed1,
+    source_embed2,
+    target_embeds,
+    assume_normalized,
+):
+    # STEmbedder keeps both rows on the accelerator until one host transfer.
+    # Other embedders retain the previous two-call behavior through the fallback.
+    get_distances_pair = getattr(embeder, "get_distances_pair", None)
+
+    if callable(get_distances_pair):
+        if assume_normalized:
+            return get_distances_pair(
+                source_embed1,
+                source_embed2,
+                target_embeds,
+                assume_normalized=True,
+            )
+
+        return get_distances_pair(
+            source_embed1,
+            source_embed2,
+            target_embeds,
+        )
+
+    return (
+        _get_distances(
+            embeder,
+            source_embed1,
+            target_embeds,
+            assume_normalized,
+        ),
+        _get_distances(
+            embeder,
+            source_embed2,
+            target_embeds,
+            assume_normalized,
+        ),
+    )
+
+
 def _astar_traverse_indexed(
     indexed_graph,
     start_node: str,
@@ -138,14 +180,9 @@ def _astar_traverse_indexed(
             continue
 
         successor_embeds = embeder.embed_indices(successors)
-        edge_costs = _get_distances(
+        edge_costs, heuristic_costs = _get_distances_pair(
             embeder,
             current_node_embed,
-            successor_embeds,
-            assume_normalized,
-        )
-        heuristic_costs = _get_distances(
-            embeder,
             end_node_embed,
             successor_embeds,
             assume_normalized,
@@ -254,14 +291,9 @@ def astar_traverse(
             continue
 
         successor_embeds = _embed_many(embeder, successors, config)
-        edge_costs = _get_distances(
+        edge_costs, heuristic_costs = _get_distances_pair(
             embeder,
             current_node_embed,
-            successor_embeds,
-            assume_normalized,
-        )
-        heuristic_costs = _get_distances(
-            embeder,
             end_node_embed,
             successor_embeds,
             assume_normalized,

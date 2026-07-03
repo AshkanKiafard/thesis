@@ -1373,12 +1373,11 @@ class STEmbedder:
 
         return float(torch.linalg.vector_norm(e1 - e2).item())
 
-    def get_distances(self, embed1, embeddings, assume_normalized=False):
-        e1 = self._trim_to_active_dim(self._as_tensor(embed1))
+    def _prepare_distance_matrix(self, embeddings):
         embeddings_is_tensor = isinstance(embeddings, torch.Tensor)
         if embeddings_is_tensor:
             if embeddings.numel() == 0:
-                return []
+                return None
 
             matrix = embeddings.to(device=self.device, dtype=torch.float32)
 
@@ -1390,14 +1389,21 @@ class STEmbedder:
             embeddings = list(embeddings)
 
             if not embeddings:
-                return []
+                return None
 
             matrix = torch.stack([
                 self._as_tensor(embedding)
                 for embedding in embeddings
             ])
 
-        matrix = self._trim_matrix_to_active_dim(matrix)
+        return self._trim_matrix_to_active_dim(matrix)
+
+    def get_distances(self, embed1, embeddings, assume_normalized=False):
+        e1 = self._trim_to_active_dim(self._as_tensor(embed1))
+        matrix = self._prepare_distance_matrix(embeddings)
+
+        if matrix is None:
+            return []
 
         if self.distance_metric == DistanceMetric.COSINE:
             if not assume_normalized:
@@ -1409,6 +1415,63 @@ class STEmbedder:
             distances = torch.linalg.vector_norm(matrix - e1, dim=1)
 
         return distances.detach().cpu().tolist()
+
+    def get_distances_pair(
+        self,
+        embed1,
+        embed2,
+        embeddings,
+        assume_normalized=False,
+    ):
+        """
+        Compute two source-to-matrix distance rows with one CUDA-to-host copy.
+
+        The metric definitions are identical to two independent get_distances()
+        calls. Euclidean CUDA batches with at least two targets evaluate both
+        source rows in one vector_norm launch; single-target and CPU calls keep
+        the lower-overhead independent operations.
+        """
+        e1 = self._trim_to_active_dim(self._as_tensor(embed1))
+        e2 = self._trim_to_active_dim(self._as_tensor(embed2))
+        matrix = self._prepare_distance_matrix(embeddings)
+
+        if matrix is None:
+            return [], []
+
+        if self.distance_metric == DistanceMetric.COSINE:
+            if not assume_normalized:
+                e1 = self._normalize_vector_for_cosine(e1)
+                e2 = self._normalize_vector_for_cosine(e2)
+                matrix = self._normalize_matrix_for_cosine(matrix)
+
+            distances1 = 1 - (matrix @ e1)
+            distances2 = 1 - (matrix @ e2)
+        else:
+            if matrix.is_cuda and matrix.shape[0] >= 2:
+                sources = torch.stack((e1, e2))
+                distance_rows = torch.linalg.vector_norm(
+                    matrix.unsqueeze(0) - sources.unsqueeze(1),
+                    dim=2,
+                )
+                rows = distance_rows.detach().cpu().tolist()
+                return rows[0], rows[1]
+
+            distances1 = torch.linalg.vector_norm(matrix - e1, dim=1)
+            distances2 = torch.linalg.vector_norm(matrix - e2, dim=1)
+
+        if not distances1.is_cuda:
+            return (
+                distances1.detach().tolist(),
+                distances2.detach().tolist(),
+            )
+
+        distance_rows = (
+            torch.stack((distances1, distances2))
+            .detach()
+            .cpu()
+            .tolist()
+        )
+        return distance_rows[0], distance_rows[1]
 
     def get_model_name(self):
         return self.model_name
