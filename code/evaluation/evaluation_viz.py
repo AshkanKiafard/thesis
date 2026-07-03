@@ -18,7 +18,6 @@ from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
 from core.utils import (
     format_model_display_name,
     get_ablation_model_names,
-    get_ablation_reference_model_name,
     get_model_base_name,
     is_finetuned_model_name,
 )
@@ -383,33 +382,18 @@ def load_ablation_comparison_entries(
         / run_suffix
         / filename
     )
-    reference_path = (
-        EVALUATION_INPUT_ROOT
-        / graph_name
-        / dataset_name
-        / run_suffix
-        / filename
-    )
-
-    ablation_model_names = get_ablation_model_names(run_suffix)
-    reference_model_name = get_ablation_reference_model_name(run_suffix)
-
-    ablation_entries = filter_entries_by_model_and_dim(
+    comparison_model_names = get_ablation_model_names(run_suffix)
+    comparison_entries = filter_entries_by_model_and_dim(
         load_optional_json(ablation_path),
-        ablation_model_names,
-        dim,
-    )
-    reference_entries = filter_entries_by_model_and_dim(
-        load_optional_json(reference_path),
-        [reference_model_name],
+        comparison_model_names,
         dim,
     )
 
     found_models = {
         entry.get("model")
-        for entry in reference_entries + ablation_entries
+        for entry in comparison_entries
     }
-    expected_models = {reference_model_name, *ablation_model_names}
+    expected_models = set(comparison_model_names)
     missing_models = sorted(expected_models - found_models, key=model_sort_key)
 
     if missing_models:
@@ -418,7 +402,7 @@ def load_ablation_comparison_entries(
             f"dim {dim}: {missing_models}"
         )
 
-    return reference_entries + ablation_entries, reference_path, ablation_path
+    return comparison_entries, ablation_path
 
 
 def sanitize_path_component(value):
@@ -2760,7 +2744,7 @@ def plot_ablation_result_set(dataset_name, run_suffix, graph_name, dim):
     print(f"Plot output dir: {plot_root}")
     print(f"Plot formats: {PLOT_FORMATS}")
 
-    eval_data, reference_eval_path, ablation_eval_path = load_ablation_comparison_entries(
+    eval_data, ablation_eval_path = load_ablation_comparison_entries(
         dataset_name=dataset_name,
         run_suffix=run_suffix,
         graph_name=graph_name,
@@ -2768,8 +2752,7 @@ def plot_ablation_result_set(dataset_name, run_suffix, graph_name, dim):
         filename="evaluation_results.json",
     )
 
-    print(f"Reference evaluation results: {reference_eval_path}")
-    print(f"Ablation evaluation results: {ablation_eval_path}")
+    print(f"Joint four-model ablation results: {ablation_eval_path}")
 
     if eval_data:
         df = extract_semantic_data(eval_data)

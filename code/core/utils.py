@@ -526,7 +526,7 @@ def get_matryoshka_dims(model_dim: int) -> list[int]:
     #
     # The resulting list includes:
     # - the full embedding dimension (model_dim)
-    # - powers of two (64 → ... → <= model_dim)
+    # - powers of two (2 → ... → <= model_dim)
     # - a fixed anchor dimension (768) for cross-model comparison
 
     # Use a set to avoid duplicate dimensions.
@@ -784,7 +784,8 @@ def get_ablation_model_names(
     normalize_str: str = DEFAULT_ABLATION_NORMALIZE_STR,
     mrl_str: str = DEFAULT_ABLATION_MRL_STR,
 ) -> list[str]:
-    return [
+    """Return all four models in the fixed-order ablation comparison."""
+    variant_names = [
         build_finetuned_model_name(
             base_model_name=base_model_name,
             activation=activation,
@@ -797,6 +798,16 @@ def get_ablation_model_names(
         for activation, distance in DEFAULT_ABLATION_COMBOS
     ]
 
+    return [
+        get_ablation_reference_model_name(
+            run_suffix=run_suffix,
+            base_model_name=base_model_name,
+            normalize_str=normalize_str,
+            mrl_str=mrl_str,
+        ),
+        *variant_names,
+    ]
+
 
 def get_ablation_fine_tuned_models(
     run_suffix: str,
@@ -805,10 +816,10 @@ def get_ablation_fine_tuned_models(
     mrl_str: str = DEFAULT_ABLATION_MRL_STR,
 ):
     """
-    Return the three activation/distance ablation model directories.
+    Return all four activation/distance comparison model directories.
 
     The order is fixed for stable tables and plots:
-    relu+cosine, gelu+euclid, gelu+cosine.
+    relu+euclid (main reference), relu+cosine, gelu+euclid, gelu+cosine.
     """
     expected_names = get_ablation_model_names(
         run_suffix=run_suffix,

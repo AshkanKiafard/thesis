@@ -31,6 +31,7 @@ from core.graph_config import (
 from core.embedding_preload import preload_graph_embeddings, preload_rl_embeddings
 from core.utils import (
     get_ablation_fine_tuned_models,
+    get_ablation_model_names,
     get_embedding_cache_suffix,
     get_node_universe_for_graph,
     traverse_graph,
@@ -306,8 +307,9 @@ def parse_args():
         "--ablation",
         action="store_true",
         help=(
-            "Analyze only the activation/distance ablation models, skip "
-            "baselines, and write under data/evaluation/ablation."
+            "Analyze the main Granite reference and all three "
+            "activation/distance variants, skip baselines, and write under "
+            "data/evaluation/ablation."
         ),
     )
     return parser.parse_args()
@@ -330,10 +332,14 @@ if __name__ == "__main__":
 
     if args.ablation:
         model_queue = get_ablation_fine_tuned_models(run_suffix)
-        if not model_queue:
+        expected_model_names = set(get_ablation_model_names(run_suffix))
+        found_model_names = {Path(model_path).name for model_path in model_queue}
+        missing_model_names = sorted(expected_model_names - found_model_names)
+        if missing_model_names:
             raise FileNotFoundError(
-                "No ablation fine-tuned models found for run suffix "
-                f"'{run_suffix}' in {LIGHTNING_DIR}"
+                "The four-model ablation comparison is incomplete for run "
+                f"suffix '{run_suffix}' in {LIGHTNING_DIR}. Missing: "
+                f"{missing_model_names}"
             )
     else:
         fine_tuned_models = get_fine_tuned_models(run_suffix)

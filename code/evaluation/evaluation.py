@@ -40,6 +40,7 @@ from core.graph_config import (
 from core.embedding_preload import preload_graph_embeddings, preload_rl_embeddings
 from core.utils import (
     get_ablation_fine_tuned_models,
+    get_ablation_model_names,
     get_ablation_reference_model_name,
     get_embedding_cache_suffix,
     get_fine_tuned_models,
@@ -922,8 +923,10 @@ def parse_args():
         "--ablation",
         action="store_true",
         help=(
-            "Evaluate only the activation/distance ablation models, skip "
-            "baselines, and write under data/evaluation/ablation."
+            "Evaluate the main Granite reference and all three "
+            "activation/distance variants together, skip baselines, and "
+            "write under data/evaluation/ablation. All four model rows are "
+            "refreshed together so runtime results come from one process."
         ),
     )
 
@@ -947,6 +950,7 @@ if __name__ == "__main__":
         raise ValueError("--ablation cannot be combined with --best-model-path/--best-model-dim")
     if args.ablation:
         args.skip_dijkstra = True
+        args.force_model_results = True
 
     print(f"Run suffix: {run_suffix}")
     print(f"Ablation mode: {args.ablation}")
@@ -984,14 +988,25 @@ if __name__ == "__main__":
         print("Skipping embedding-guided model selection and model queue.")
     elif args.ablation:
         print("\nAblation mode enabled.")
-        print("Evaluating all ablation models at the requested dimension.")
+        print(
+            "Evaluating the main reference and all three ablation variants "
+            "at the requested dimension in one process."
+        )
+        print(
+            "Refreshing every comparison row to keep runtime measurements "
+            "from the same evaluation run."
+        )
         model_queue = get_ablation_fine_tuned_models(run_suffix)
-        if not model_queue:
+        expected_model_names = set(get_ablation_model_names(run_suffix))
+        found_model_names = {get_model_name(path) for path in model_queue}
+        missing_model_names = sorted(expected_model_names - found_model_names)
+        if missing_model_names:
             raise FileNotFoundError(
-                "No ablation fine-tuned models found for run suffix "
-                f"'{run_suffix}' in {LIGHTNING_DIR}"
+                "The four-model ablation comparison is incomplete for run "
+                f"suffix '{run_suffix}' in {LIGHTNING_DIR}. Missing: "
+                f"{missing_model_names}"
             )
-        print("Ablation model queue:", model_queue)
+        print("Joint ablation comparison model queue:", model_queue)
     elif current_split == "test":
         print("\nTest split detected.")
         print("Ignoring full model queue for embedding-guided strategies.")
@@ -1367,6 +1382,8 @@ if __name__ == "__main__":
     else:
         semantic_model_queue = model_queue
 
+    evaluation_errors = []
+
     for model_path in semantic_model_queue:
         model_name = get_model_name(model_path)
 
@@ -1532,5 +1549,13 @@ if __name__ == "__main__":
 
         except Exception as e:
             print(f"Error for {model_path}: {e}")
+            evaluation_errors.append((model_path, e))
+
+    if args.ablation and evaluation_errors:
+        failed_models = [get_model_name(path) for path, _ in evaluation_errors]
+        raise RuntimeError(
+            "Joint four-model ablation evaluation was incomplete. Failed "
+            f"models: {failed_models}"
+        )
 
     print("\nAll evaluations complete.")

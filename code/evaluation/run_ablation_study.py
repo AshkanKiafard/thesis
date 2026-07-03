@@ -20,8 +20,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "Run the full Granite activation/distance ablation workflow: "
-            "pre-embed, evaluate test sets with a shared main-model A* cap, "
-            "and generate ablation plots."
+            "pre-embed, evaluate the main reference and three variants "
+            "together with a shared A* cap, and generate ablation plots."
         )
     )
     parser.add_argument("--run-suffix", default=DEFAULT_RUN_SUFFIX)
@@ -76,7 +76,10 @@ def parse_args():
     parser.add_argument(
         "--force-model-results",
         action="store_true",
-        help="Forward --force-model-results to evaluation.",
+        help=(
+            "Deprecated compatibility flag. Ablation evaluation now always "
+            "refreshes all four models together for runtime fairness."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -172,7 +175,7 @@ def main():
     args = parse_args()
 
     reference_model = get_ablation_reference_model_name(args.run_suffix)
-    ablation_models = get_ablation_model_names(args.run_suffix)
+    comparison_models = get_ablation_model_names(args.run_suffix)
 
     print("Ablation study configuration")
     print(f"Run suffix: {args.run_suffix}")
@@ -187,8 +190,8 @@ def main():
     print(f"Embedding device: {args.embedding_device}")
     print(f"Embedding batch size: {args.embedding_batch_size}")
     print(f"Reference model: {reference_model}")
-    print("Ablation models:")
-    for model_name in ablation_models:
+    print("Joint four-model comparison:")
+    for model_name in comparison_models:
         print(f"  - {model_name}")
 
     if not args.skip_eval:
@@ -242,10 +245,8 @@ def main():
                     "--ablation-cap-source-graph",
                     args.ablation_cap_source_graph,
                     "--skip-dijkstra",
+                    "--force-model-results",
                 ]
-
-                if args.force_model_results:
-                    command.append("--force-model-results")
 
                 run_command(command, dry_run=args.dry_run)
 
