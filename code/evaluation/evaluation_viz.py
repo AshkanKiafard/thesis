@@ -1,10 +1,13 @@
 import argparse
+from collections import defaultdict
 import json
 import math
 from pathlib import Path
 
 from matplotlib import colors as mcolors
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.ticker import FormatStrFormatter, MultipleLocator
 import numpy as np
 import pandas as pd
 
@@ -12,7 +15,10 @@ from core.constants import (
     BASELINE_MODEL_NAMES,
     BFS_CAPPED_BASELINE_MODEL,
     BFS_UNCAPPED_BASELINE_MODEL,
+    EVALUATION_DIR,
+    PLOTS_DIR,
     RL_BASELINE_MODEL,
+    THESIS_PLOTS_DIR,
 )
 from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
 from core.utils import (
@@ -26,8 +32,8 @@ from core.utils import (
 # Paths / global config
 # -------------------------------------------------------------------------
 
-PLOT_OUTPUT_DIR = Path("data/plots")
-EVALUATION_INPUT_ROOT = Path("data/evaluation")
+PLOT_OUTPUT_DIR = PLOTS_DIR
+EVALUATION_INPUT_ROOT = EVALUATION_DIR
 
 # Save vector plots for thesis.
 # "pdf" is best for LaTeX. Add "png" too if you want preview images.
@@ -172,6 +178,15 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--thesis",
+        action="store_true",
+        help=(
+            "Create the fixed thesis figures for CauseNet/msmarco_valid/v3 "
+            "using only BFS/RL baselines and fine-tuned A* models. Outputs "
+            "are saved under data/plots/thesis."
+        ),
+    )
+    parser.add_argument(
         "--dim",
         type=int,
         default=32,
@@ -179,8 +194,18 @@ def parse_args():
     )
     args = parser.parse_args()
 
-    if not args.all and not args.dataset:
-        parser.error("dataset is required unless --all is set")
+    if not args.all and not args.dataset and not args.thesis:
+        parser.error("dataset is required unless --all or --thesis is set")
+
+    if args.thesis:
+        if args.all or args.ablation:
+            parser.error("--thesis cannot be combined with --all or --ablation")
+        if args.dataset and dataset_name_from_arg(args.dataset) != "msmarco_valid":
+            parser.error("--thesis is fixed to the msmarco_valid dataset")
+        if args.graph and args.graph != "causenet":
+            parser.error("--thesis is fixed to the causenet graph")
+        if args.run_suffix and args.run_suffix != "v3":
+            parser.error("--thesis is fixed to run suffix v3")
 
     return args
 
@@ -2791,11 +2816,504 @@ def plot_ablation_result_set(dataset_name, run_suffix, graph_name, dim):
 
 
 # -------------------------------------------------------------------------
+# Fixed thesis figure: CauseNet / MS MARCO validation / v3
+# -------------------------------------------------------------------------
+
+# This mode deliberately reads one standard evaluation result file only. It
+# never reads data/evaluation/ablation or visited_nodes_analysis.json.
+THESIS_RESULTS_PATH = (
+    EVALUATION_DIR
+    / "causenet"
+    / "msmarco_valid"
+    / "v3"
+    / "evaluation_results.json"
+)
+THESIS_OUTPUT_DIR = THESIS_PLOTS_DIR
+THESIS_OUTPUT_STEM = "causenet_msmarco_valid_thesis"
+THESIS_PNG_DPI = 400
+THESIS_METRIC_KEYS = (
+    "f1_score",
+    "accuracy",
+    "avg_nodes_visited",
+    "avg_time_ms",
+)
+
+# Both BFS configurations are retained because both are present as distinct
+# baselines. RL is included when its row is available.
+THESIS_BASELINE_MODELS = (
+    BFS_UNCAPPED_BASELINE_MODEL,
+    BFS_CAPPED_BASELINE_MODEL,
+    RL_BASELINE_MODEL,
+)
+THESIS_BASELINE_ALGORITHMS = {
+    BFS_UNCAPPED_BASELINE_MODEL: "BFS",
+    BFS_CAPPED_BASELINE_MODEL: "BFS",
+    RL_BASELINE_MODEL: "RL",
+}
+
+# Fixed whitelist: unfine-tuned and unrelated fine-tuned/ablation models can
+# never enter the thesis figure merely because new rows appear in the JSON.
+THESIS_FINETUNED_ASTAR_MODELS = (
+    "all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_v3_finetuned",
+    "bge-large-en-v1.5_relu_euclid_nonorm_matryoshka_v3_finetuned",
+    "mxbai-embed-large-v1_relu_euclid_nonorm_matryoshka_v3_finetuned",
+    "Qwen3-Embedding-0.6B_relu_euclid_nonorm_matryoshka_v3_finetuned",
+    "granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v3_finetuned",
+)
+THESIS_SYSTEM_ORDER = THESIS_BASELINE_MODELS + THESIS_FINETUNED_ASTAR_MODELS
+
+THESIS_DISPLAY_LABELS = {
+    BFS_UNCAPPED_BASELINE_MODEL: "BFS (uncapped)",
+    BFS_CAPPED_BASELINE_MODEL: "BFS (capped)",
+    RL_BASELINE_MODEL: "RL baseline",
+    THESIS_FINETUNED_ASTAR_MODELS[0]: "FT A*: MPNet",
+    THESIS_FINETUNED_ASTAR_MODELS[1]: "FT A*: BGE",
+    THESIS_FINETUNED_ASTAR_MODELS[2]: "FT A*: mxbai",
+    THESIS_FINETUNED_ASTAR_MODELS[3]: "FT A*: Qwen3-0.6B",
+    THESIS_FINETUNED_ASTAR_MODELS[4]: "FT A*: Granite",
+}
+
+THESIS_SYSTEM_STYLES = {
+    BFS_UNCAPPED_BASELINE_MODEL: {
+        "color": "#111111",
+        "linestyle": "--",
+        "linewidth": 1.6,
+    },
+    BFS_CAPPED_BASELINE_MODEL: {
+        "color": "#666666",
+        "linestyle": "-.",
+        "linewidth": 1.6,
+    },
+    RL_BASELINE_MODEL: {
+        "color": "#9A9A9A",
+        "linestyle": ":",
+        "linewidth": 1.9,
+    },
+    THESIS_FINETUNED_ASTAR_MODELS[0]: {
+        "color": "#0072B2",
+        "marker": "o",
+    },
+    THESIS_FINETUNED_ASTAR_MODELS[1]: {
+        "color": "#D55E00",
+        "marker": "s",
+    },
+    THESIS_FINETUNED_ASTAR_MODELS[2]: {
+        "color": "#009E73",
+        "marker": "^",
+    },
+    THESIS_FINETUNED_ASTAR_MODELS[3]: {
+        "color": "#CC7A00",
+        "marker": "D",
+    },
+    THESIS_FINETUNED_ASTAR_MODELS[4]: {
+        "color": "#56B4E9",
+        "marker": "v",
+    },
+}
+
+
+def make_thesis_metric_row(model, dimension, algorithm, result):
+    metrics = result.get("metrics", {})
+    return {
+        "model": model,
+        "dimension": dimension,
+        "algorithm": algorithm,
+        **{key: metrics.get(key) for key in THESIS_METRIC_KEYS},
+    }
+
+
+def thesis_row_sort_key(row):
+    model_position = THESIS_SYSTEM_ORDER.index(row["model"])
+    dimension = row["dimension"] if row["dimension"] is not None else -1
+    return model_position, dimension
+
+
+def load_thesis_selected_rows():
+    """Read the fixed result file and return only approved thesis systems."""
+
+    eval_data = load_json(THESIS_RESULTS_PATH)
+    if not isinstance(eval_data, list):
+        raise ValueError(f"Expected a JSON list in {THESIS_RESULTS_PATH}")
+
+    rows = []
+    excluded_systems = {}
+
+    for entry in eval_data:
+        model = entry.get("model")
+        evaluations = entry.get("evaluation", {})
+
+        if model in THESIS_BASELINE_MODELS:
+            algorithm = THESIS_BASELINE_ALGORITHMS[model]
+            result = evaluations.get(algorithm)
+            if result is None:
+                raise ValueError(
+                    f"{model} has no {algorithm!r} evaluation in "
+                    f"{THESIS_RESULTS_PATH}"
+                )
+            rows.append(make_thesis_metric_row(model, None, algorithm, result))
+            continue
+
+        if model in THESIS_FINETUNED_ASTAR_MODELS:
+            result = evaluations.get("A*")
+            if result is None:
+                raise ValueError(f"Whitelisted model {model} has no A* evaluation")
+            dimension = entry.get("dimension")
+            if dimension is None:
+                raise ValueError(f"Whitelisted model {model} has no dimension")
+            rows.append(make_thesis_metric_row(model, int(dimension), "A*", result))
+            continue
+
+        if model:
+            if is_finetuned_model_name(model):
+                reason = "fine-tuned run outside the thesis whitelist"
+            else:
+                reason = "unfine-tuned or non-target system"
+            excluded_systems[str(model)] = reason
+
+    validate_thesis_rows(rows)
+    rows.sort(key=thesis_row_sort_key)
+    return rows, excluded_systems
+
+
+def validate_thesis_rows(rows):
+    present_models = {row["model"] for row in rows}
+
+    # RL is optional. Both BFS variants and all five fine-tuned A* families
+    # are required to avoid silently producing a partial thesis figure.
+    required_models = (
+        BFS_UNCAPPED_BASELINE_MODEL,
+        BFS_CAPPED_BASELINE_MODEL,
+        *THESIS_FINETUNED_ASTAR_MODELS,
+    )
+    missing_models = [
+        model for model in required_models if model not in present_models
+    ]
+    if missing_models:
+        raise ValueError(f"Missing expected thesis systems: {missing_models}")
+
+    seen_runs = set()
+    for row in rows:
+        run_key = (row["model"], row["dimension"], row["algorithm"])
+        if run_key in seen_runs:
+            raise ValueError(f"Duplicate selected evaluation row: {run_key}")
+        seen_runs.add(run_key)
+
+        missing_metrics = [
+            key for key in THESIS_METRIC_KEYS if row[key] is None
+        ]
+        if missing_metrics:
+            raise ValueError(f"Missing metrics {missing_metrics} for {run_key}")
+
+
+def group_thesis_rows_by_model(rows):
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["model"]].append(row)
+    return grouped
+
+
+def get_thesis_dimensions(rows):
+    return sorted(
+        {
+            int(row["dimension"])
+            for row in rows
+            if row["dimension"] is not None
+        }
+    )
+
+
+def set_zoomed_f1_axis(ax, rows):
+    """Zoom F1 transparently; line charts do not require a zero baseline."""
+
+    values = [float(row["f1_score"]) for row in rows]
+    tick_step = 0.05
+    lower = max(
+        0.0,
+        math.floor((min(values) - 0.01) / tick_step) * tick_step,
+    )
+    upper = min(
+        1.0,
+        math.ceil((max(values) + 0.01) / tick_step) * tick_step,
+    )
+    if lower >= upper:
+        lower = max(0.0, min(values) - tick_step)
+        upper = min(1.0, max(values) + tick_step)
+
+    ax.set_ylim(lower, upper)
+    ax.yaxis.set_major_locator(MultipleLocator(tick_step))
+    ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+
+
+def plot_thesis_metric_panel(
+    ax,
+    rows,
+    metric_key,
+    title,
+    ylabel,
+    panel_label,
+    log_scale=False,
+):
+    grouped = group_thesis_rows_by_model(rows)
+    dimensions = get_thesis_dimensions(rows)
+    x_positions = {dimension: index for index, dimension in enumerate(dimensions)}
+
+    for draw_index, model in enumerate(THESIS_FINETUNED_ASTAR_MODELS):
+        model_rows = grouped[model]
+        style = THESIS_SYSTEM_STYLES[model]
+        ax.plot(
+            [x_positions[row["dimension"]] for row in model_rows],
+            [float(row[metric_key]) for row in model_rows],
+            markerfacecolor=style["color"],
+            markeredgecolor=style["color"],
+            markeredgewidth=0.75,
+            markersize=5.4,
+            linewidth=1.6,
+            zorder=3 + draw_index * 0.05,
+            **style,
+        )
+
+    for model in THESIS_BASELINE_MODELS:
+        if model not in grouped:
+            continue
+        baseline_value = float(grouped[model][0][metric_key])
+        ax.axhline(
+            baseline_value,
+            zorder=2,
+            **THESIS_SYSTEM_STYLES[model],
+        )
+
+    ax.set_title(f"{panel_label}  {title}", loc="left", fontweight="semibold")
+    ax.set_xlabel("Embedding dimension")
+    ax.set_ylabel(ylabel)
+    ax.set_xticks(range(len(dimensions)))
+    ax.set_xticklabels([str(dimension) for dimension in dimensions], rotation=35)
+    ax.grid(axis="y", which="major", color="#D2D2D2", linewidth=0.65)
+    ax.grid(axis="y", which="minor", color="#E8E8E8", linewidth=0.45)
+    ax.set_axisbelow(True)
+
+    if metric_key == "f1_score":
+        set_zoomed_f1_axis(ax, rows)
+    elif metric_key == "accuracy":
+        ax.set_ylim(0.0, 1.0)
+        ax.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+        ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    elif log_scale:
+        ax.set_yscale("log")
+        positive_values = [
+            float(row[metric_key]) for row in rows if row[metric_key] > 0
+        ]
+        ax.set_ylim(min(positive_values) / 1.3, max(positive_values) * 1.5)
+
+def build_thesis_legend_handles(rows):
+    present_models = {row["model"] for row in rows}
+    handles = []
+
+    for model in THESIS_SYSTEM_ORDER:
+        if model not in present_models:
+            continue
+        style = dict(THESIS_SYSTEM_STYLES[model])
+        if model in THESIS_FINETUNED_ASTAR_MODELS:
+            style.update(
+                {
+                    "linestyle": "-",
+                    "linewidth": 1.6,
+                    "markersize": 5.4,
+                    "markeredgecolor": style["color"],
+                    "markeredgewidth": 0.75,
+                }
+            )
+        handles.append(
+            Line2D([0], [0], label=THESIS_DISPLAY_LABELS[model], **style)
+        )
+
+    return handles
+
+
+def save_thesis_figure(fig, stem):
+    THESIS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    saved_paths = []
+
+    for suffix in (".png", ".pdf"):
+        path = THESIS_OUTPUT_DIR / f"{stem}{suffix}"
+        save_options = {"bbox_inches": "tight", "pad_inches": 0.08}
+        if suffix == ".png":
+            save_options["dpi"] = THESIS_PNG_DPI
+        fig.savefig(path, **save_options)
+        saved_paths.append(path)
+
+    return saved_paths
+
+
+def create_thesis_main_figure(rows):
+    fig, axes = plt.subplots(1, 3, figsize=(15.8, 5.25))
+    fig.suptitle(
+        "CauseNet precision graph - MS MARCO validation",
+        fontsize=14,
+        fontweight="semibold",
+    )
+
+    plot_thesis_metric_panel(
+        axes[0],
+        rows,
+        "f1_score",
+        "F1 score",
+        "F1 score",
+        "(a)",
+    )
+    plot_thesis_metric_panel(
+        axes[1],
+        rows,
+        "avg_nodes_visited",
+        "Search effort",
+        "Average visited nodes (log scale)",
+        "(b)",
+        log_scale=True,
+    )
+    plot_thesis_metric_panel(
+        axes[2],
+        rows,
+        "avg_time_ms",
+        "Runtime",
+        "Average runtime in ms (log scale)",
+        "(c)",
+        log_scale=True,
+    )
+
+    fig.legend(
+        handles=build_thesis_legend_handles(rows),
+        loc="lower center",
+        ncol=4,
+        frameon=False,
+        columnspacing=1.8,
+        handlelength=2.8,
+    )
+    fig.tight_layout(rect=(0.0, 0.18, 1.0, 0.93), w_pad=2.0)
+    paths = save_thesis_figure(fig, f"{THESIS_OUTPUT_STEM}_main")
+    plt.close(fig)
+    return paths
+
+
+def create_thesis_appendix_figure(rows):
+    fig, axes = plt.subplots(2, 2, figsize=(12.6, 9.0))
+    fig.suptitle(
+        "CauseNet precision graph - MS MARCO validation",
+        fontsize=14,
+        fontweight="semibold",
+    )
+
+    plot_thesis_metric_panel(
+        axes[0, 0],
+        rows,
+        "f1_score",
+        "F1 score",
+        "F1 score",
+        "(a)",
+    )
+    plot_thesis_metric_panel(
+        axes[0, 1], rows, "accuracy", "Accuracy", "Accuracy", "(b)"
+    )
+    plot_thesis_metric_panel(
+        axes[1, 0],
+        rows,
+        "avg_nodes_visited",
+        "Search effort",
+        "Average visited nodes (log scale)",
+        "(c)",
+        log_scale=True,
+    )
+    plot_thesis_metric_panel(
+        axes[1, 1],
+        rows,
+        "avg_time_ms",
+        "Runtime",
+        "Average runtime in ms (log scale)",
+        "(d)",
+        log_scale=True,
+    )
+
+    fig.legend(
+        handles=build_thesis_legend_handles(rows),
+        loc="lower center",
+        ncol=4,
+        frameon=False,
+        columnspacing=1.8,
+        handlelength=2.8,
+    )
+    fig.tight_layout(rect=(0.0, 0.10, 1.0, 0.95), h_pad=2.1, w_pad=1.9)
+    paths = save_thesis_figure(fig, f"{THESIS_OUTPUT_STEM}_appendix")
+    plt.close(fig)
+    return paths
+
+
+def format_thesis_number(value, decimals):
+    if not math.isfinite(float(value)):
+        return "n/a"
+    return f"{float(value):.{decimals}f}"
+
+
+def print_thesis_selection_report(rows, excluded_systems):
+    print(f"Input evaluation file: {THESIS_RESULTS_PATH}")
+    print("\nIncluded systems (in legend order):")
+    present_models = {row["model"] for row in rows}
+
+    for model in THESIS_SYSTEM_ORDER:
+        if model not in present_models:
+            continue
+        run_type = (
+            "baseline" if model in THESIS_BASELINE_MODELS else "fine-tuned A*"
+        )
+        print(f"  - {THESIS_DISPLAY_LABELS[model]} [{run_type}]\n    {model}")
+
+    print("\nIncluded metric values:")
+    header = (
+        f"{'System':<24} {'Dim':>5} {'Alg.':>5} {'F1':>7} {'Acc.':>7} "
+        f"{'Visited':>10} {'Runtime ms':>11}"
+    )
+    print(header)
+    print("-" * len(header))
+
+    for row in rows:
+        dimension = "-" if row["dimension"] is None else str(row["dimension"])
+        print(
+            f"{THESIS_DISPLAY_LABELS[row['model']]:<24} "
+            f"{dimension:>5} "
+            f"{row['algorithm']:>5} "
+            f"{format_thesis_number(row['f1_score'], 4):>7} "
+            f"{format_thesis_number(row['accuracy'], 4):>7} "
+            f"{format_thesis_number(row['avg_nodes_visited'], 2):>10} "
+            f"{format_thesis_number(row['avg_time_ms'], 3):>11}"
+        )
+
+    print("\nExcluded systems present in the input file:")
+    for model, reason in sorted(excluded_systems.items()):
+        print(f"  - {model}: {reason}")
+
+
+def plot_thesis_causenet_msmarco_valid():
+    """Create the fixed main and appendix thesis figures."""
+
+    apply_thesis_plot_style()
+    rows, excluded_systems = load_thesis_selected_rows()
+    print_thesis_selection_report(rows, excluded_systems)
+
+    output_paths = create_thesis_main_figure(rows)
+    output_paths += create_thesis_appendix_figure(rows)
+
+    print("\nCreated thesis figures:")
+    for path in output_paths:
+        print(f"  - {path}")
+
+
+# -------------------------------------------------------------------------
 # Main
 # -------------------------------------------------------------------------
 
 if __name__ == "__main__":
     args = parse_args()
+
+    if args.thesis:
+        plot_thesis_causenet_msmarco_valid()
+        raise SystemExit(0)
 
     if args.dim <= 0:
         raise ValueError("--dim must be greater than 0")

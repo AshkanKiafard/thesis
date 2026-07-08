@@ -6,10 +6,10 @@ from pathlib import Path
 import numpy as np
 
 from core.config import DEFAULT_RUN_SUFFIX
+from core.constants import EVALUATION_DIR, REPO_ROOT
 from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET_NAME = "msmarco_test"
 DEFAULT_REFERENCE_CONTAINS = [
     "granite-embedding-english-r2",
@@ -49,9 +49,7 @@ def resolve_evaluation_results_path(dataset_name_or_path, run_suffix, graph_name
         ]
     else:
         candidates = [
-            REPO_ROOT
-            / "data"
-            / "evaluation"
+            EVALUATION_DIR
             / graph_name
             / dataset_name_or_path
             / run_suffix

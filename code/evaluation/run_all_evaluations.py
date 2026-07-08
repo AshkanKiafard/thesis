@@ -3,6 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.constants import EVALUATION_DIR
 from core.config import (
     DEFAULT_EMBEDDING_BATCH_SIZE,
     DEFAULT_P95_CONFIG_SOURCE_DATASET,
@@ -174,7 +175,7 @@ def evaluation_command(args, dataset, graph, extra_args=None):
 def validation_results_path(args):
     dataset_name = Path(args.validation_dataset).stem.replace("_filtered", "")
     return (
-        Path("data/evaluation")
+        EVALUATION_DIR
         / args.validation_graph
         / dataset_name
         / args.run_suffix

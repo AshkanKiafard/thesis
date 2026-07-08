@@ -1,12 +1,4 @@
-from pathlib import Path
-
-
-CODE_ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = CODE_ROOT / "data"
-
-EMBEDDINGS_DIR = DATA_DIR / "embeddings"
-LIGHTNING_DIR = DATA_DIR / "models" / "lightning"
-GLOVE_300D_PATH = EMBEDDINGS_DIR / "glove.6B" / "glove.6B.300d.txt"
+from core.constants import FILTERED_DATASETS_DIR
 
 DEFAULT_RUN_SUFFIX = "v3"
 
@@ -37,8 +29,10 @@ DEFAULT_P95_CONFIG_SOURCE_GRAPH = "causenet"
 
 DEFAULT_VALIDATION_GRAPH = "causenet"
 DEFAULT_TEST_GRAPHS = ("causenet", "causalbank", "causenet_full")
-DEFAULT_VALIDATION_DATASET = "data/datasets/filtered/msmarco_valid_filtered.json"
+DEFAULT_VALIDATION_DATASET = str(
+    FILTERED_DATASETS_DIR / "msmarco_valid_filtered.json"
+)
 DEFAULT_TEST_DATASETS = (
-    "data/datasets/filtered/msmarco_test_filtered.json",
-    "data/datasets/filtered/sem_test_filtered.json",
+    str(FILTERED_DATASETS_DIR / "msmarco_test_filtered.json"),
+    str(FILTERED_DATASETS_DIR / "sem_test_filtered.json"),
 )

@@ -1,23 +1,28 @@
-from pathlib import Path
+from core.constants import (
+    CAUSALBANK_FULL_GRAPH_PATH,
+    CAUSALBANK_GRAPH_PATH,
+    CAUSENET_FULL_GRAPH_PATH,
+    CAUSENET_GRAPH_PATH,
+)
 
 DEFAULT_GRAPH_NAME = "causenet"
 
 GRAPH_CONFIGS = {
     "causenet": {
         "label": "CauseNet",
-        "path": Path("data/graphs/causenet-precision.jsonl"),
+        "path": CAUSENET_GRAPH_PATH,
     },
     "causenet_full": {
         "label": "CauseNet full",
-        "path": Path("data/graphs/causenet-full.jsonl"),
+        "path": CAUSENET_FULL_GRAPH_PATH,
     },
     "causalbank": {
         "label": "CausalBank",
-        "path": Path("data/graphs/Lexical_Cause_Effect_Graph.filtered.txt"),
+        "path": CAUSALBANK_GRAPH_PATH,
     },
     "causalbank_full": {
         "label": "CausalBank full",
-        "path": Path("data/graphs/Lexical_Cause_Effect_Graph.txt"),
+        "path": CAUSALBANK_FULL_GRAPH_PATH,
     },
 }
 

@@ -1,31 +1,25 @@
+"""Generate causal-graph size statistics for the thesis."""
+
 import argparse
 import csv
-import json
 import time
 from pathlib import Path
 
+from core.constants import REPORTS_DIR
 from core.graph_config import get_graph_label, get_graph_path, graph_choices
 from core.utils import _iter_graph_edges
+from reports.common import (
+    display_path,
+    latex_escape,
+    latex_number,
+    report_paths,
+    resolve_repo_path,
+    write_json,
+    write_latex,
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank", "causalbank_full")
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "data" / "reports" / "graph_sizes"
-
-
-def resolve_repo_path(path):
-    path = Path(path)
-
-    if path.is_absolute():
-        return path
-
-    return REPO_ROOT / path
-
-
-def display_path(path):
-    try:
-        return str(path.relative_to(REPO_ROOT)).replace("\\", "/")
-    except ValueError:
-        return str(path)
+DEFAULT_OUTPUT_DIR = REPORTS_DIR
 
 
 def count_graph(graph_name, progress_every=None, deduplicate_edges=False):
@@ -80,13 +74,8 @@ def count_graph(graph_name, progress_every=None, deduplicate_edges=False):
 
 
 def write_reports(rows, output_dir):
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    json_path = output_dir / "graph_sizes.json"
-    csv_path = output_dir / "graph_sizes.csv"
-
-    with open(json_path, "w", encoding="utf-8") as file:
-        json.dump(rows, file, indent=2)
+    json_path, csv_path, tex_path = report_paths("graph_statistics", output_dir)
+    write_json(json_path, {"graphs": rows})
 
     with open(csv_path, "w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(
@@ -104,7 +93,37 @@ def write_reports(rows, output_dir):
         writer.writeheader()
         writer.writerows(rows)
 
-    return json_path, csv_path
+    table_rows = [
+        " & ".join(
+            (
+                latex_escape(row["label"]),
+                latex_number(row["nodes"]),
+                latex_number(row["edges"]),
+            )
+        )
+        + r" \\"
+        for row in rows
+    ]
+    latex = "\n".join(
+        [
+            r"\begin{table}[t]",
+            r"  \centering",
+            r"  \small",
+            r"  \begin{tabular}{@{}lrr@{}}",
+            r"    \toprule",
+            r"    \textbf{Graph} & \textbf{Nodes} & \textbf{Edges} \\",
+            r"    \midrule",
+            *(f"    {row}" for row in table_rows),
+            r"    \bottomrule",
+            r"  \end{tabular}",
+            r"  \caption{Number of nodes and directed edges in each causal graph.}",
+            r"  \label{tab:graph-statistics}",
+            r"\end{table}",
+        ]
+    )
+    write_latex(tex_path, latex)
+
+    return json_path, csv_path, tex_path
 
 
 def print_table(rows):
@@ -144,7 +163,7 @@ def parse_args():
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="Directory for graph_sizes.json and graph_sizes.csv.",
+        help="Report root; files are written below graph_statistics/.",
     )
     parser.add_argument(
         "--progress-every",
@@ -179,11 +198,12 @@ def main():
     ]
 
     print_table(rows)
-    json_path, csv_path = write_reports(rows, output_dir)
+    json_path, csv_path, tex_path = write_reports(rows, output_dir)
 
     print()
     print(f"Wrote JSON report: {display_path(json_path)}")
     print(f"Wrote CSV report:  {display_path(csv_path)}")
+    print(f"Wrote LaTeX table: {display_path(tex_path)}")
 
 
 if __name__ == "__main__":

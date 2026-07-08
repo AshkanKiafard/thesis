@@ -14,10 +14,9 @@ if str(CODE_ROOT) not in sys.path:
 
 from core.config import (
     BASE_MODELS,
-    DATA_DIR,
     DEFAULT_EMBEDDING_BATCH_SIZE,
-    EMBEDDINGS_DIR,
 )
+from core.constants import EMBEDDINGS_DIR, LIGHTNING_MODELS_DIR
 from core.embedding_preload import get_embedding_cache_path, load_embedding_cache
 from core.graph_config import get_graph_label, get_graph_path, graph_choices
 from core.utils import (
@@ -392,7 +391,7 @@ def main():
             raise FileNotFoundError(
                 "The four-model ablation comparison is incomplete for run "
                 f"suffix '{args.run_suffix}' in "
-                f"{DATA_DIR / 'models' / 'lightning'}. Missing: "
+                f"{LIGHTNING_MODELS_DIR}. Missing: "
                 f"{missing_model_names}"
             )
         print(

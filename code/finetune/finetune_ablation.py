@@ -9,13 +9,17 @@ import torch
 
 SLURM_JOB_ID = os.environ.get("SLURM_JOB_ID", "local")
 
-# code/finetune/finetune_ablation.py -> repo root is two levels above this file.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = REPO_ROOT / "code" / "data"
-
 # Make code/ importable when this script is executed from code/finetune/.
-sys.path.append(str(REPO_ROOT / "code"))
+CODE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(CODE_ROOT))
 
+from core.constants import (
+    CAUSENET_GRAPH_PATH,
+    CHECKPOINTS_DIR,
+    DATASETS_DIR,
+    HPARAM_SEARCH_STUDIES_DIR,
+    LIGHTNING_MODELS_DIR,
+)
 from finetune.astar_training_core import (
     TARGET_EFFECTIVE_BATCH_SIZE,
     load_or_create_datasets,
@@ -213,19 +217,19 @@ def main():
     print(f"Run suffix: {run_suffix}")
     print(f"SLURM job ID: {SLURM_JOB_ID}")
 
-    causal_graph = load_causal_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
+    causal_graph = load_causal_graph(CAUSENET_GRAPH_PATH)
 
-    with open(DATA_DIR / "datasets" / "msmarco_train.json", encoding="utf-8") as train_file:
+    with open(DATASETS_DIR / "msmarco_train.json", encoding="utf-8") as train_file:
         train_data = json.load(train_file)
 
-    with open(DATA_DIR / "datasets" / "msmarco_valid.json", encoding="utf-8") as valid_file:
+    with open(DATASETS_DIR / "msmarco_valid.json", encoding="utf-8") as valid_file:
         valid_data = json.load(valid_file)
 
     curr_model_name = model_path.split("/")[-1]
     normalize_str = "norm" if normalize else "nonorm"
     mrl_str = "matryoshka" if use_matryoshka else "single"
 
-    optuna_hparam_search_dir = DATA_DIR / "optuna_studies" / "hparam_search"
+    optuna_hparam_search_dir = HPARAM_SEARCH_STUDIES_DIR
 
     best_params, latest_study_path, source_study_name = load_hparams(
         optuna_hparam_search_dir=optuna_hparam_search_dir,
@@ -270,7 +274,7 @@ def main():
             train_data=train_data,
             valid_data=valid_data,
             causal_graph=causal_graph,
-            datasets_dir=DATA_DIR / "datasets",
+            datasets_dir=DATASETS_DIR,
         )
         datasets_by_distance[distance] = {
             "train": train_dataset,
@@ -289,8 +293,8 @@ def main():
                 use_matryoshka=use_matryoshka,
                 run_suffix=ablation_run_suffix,
             )
-            checkpoint_dir = DATA_DIR / "checkpoints" / run_model_str
-            final_model_dir = DATA_DIR / "models" / "lightning" / f"{run_model_str}_finetuned"
+            checkpoint_dir = CHECKPOINTS_DIR / run_model_str
+            final_model_dir = LIGHTNING_MODELS_DIR / f"{run_model_str}_finetuned"
 
             print("=" * 80)
             print(

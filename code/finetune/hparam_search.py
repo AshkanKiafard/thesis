@@ -17,13 +17,16 @@ from torch.utils.data import DataLoader
 
 SLURM_JOB_ID = os.environ.get("SLURM_JOB_ID", "local")
 
-# code/finetune/finetune_hparam_search.py -> repo root is two levels above this file.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = REPO_ROOT / "code" / "data"
-
 # Make code/ importable when this script is executed from code/finetune/.
-sys.path.append(str(REPO_ROOT / "code"))
+CODE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(CODE_ROOT))
 
+from core.constants import (
+    CAUSENET_GRAPH_PATH,
+    DATASETS_DIR,
+    LIGHTNING_LOGS_DIR,
+    OPTUNA_STUDIES_DIR,
+)
 from finetune.astar_training_core import (
     LitAStar,
     cleanup_zombie_trials,
@@ -216,7 +219,7 @@ def run_training_trial(f_trial, f_model_path, f_curr_model_name, f_train_dataset
     )
 
     logger = TensorBoardLogger(
-        save_dir=str(DATA_DIR / "lightning_logs"),
+        save_dir=str(LIGHTNING_LOGS_DIR),
         name=f_log_group,
         version=f_run_model_str,
     )
@@ -357,21 +360,21 @@ if __name__ == "__main__":
     print(f"Distance: {fixed_distance if fixed_distance is not None else 'search'}")
     print(f"LR: {fixed_lr if fixed_lr is not None else 'search'}")
 
-    causal_graph = load_causal_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
+    causal_graph = load_causal_graph(CAUSENET_GRAPH_PATH)
 
-    with open(DATA_DIR / "datasets" / "msmarco_train.json", encoding="utf-8") as train_file:
+    with open(DATASETS_DIR / "msmarco_train.json", encoding="utf-8") as train_file:
         train_data = json.load(train_file)
 
-    with open(DATA_DIR / "datasets" / "msmarco_valid.json", encoding="utf-8") as valid_file:
+    with open(DATASETS_DIR / "msmarco_valid.json", encoding="utf-8") as valid_file:
         valid_data = json.load(valid_file)
 
     curr_model_name = model_path.split("/")[-1]
     normalize_str = "norm" if normalize else "nonorm"
     mrl_str = "matryoshka" if use_matryoshka else "single"
 
-    datasets_dir = DATA_DIR / "datasets"
+    datasets_dir = DATASETS_DIR
 
-    optuna_root_dir = DATA_DIR / "optuna_studies"
+    optuna_root_dir = OPTUNA_STUDIES_DIR
     optuna_hparam_search_dir = optuna_root_dir / "hparam_search"
     optuna_hparam_search_dir.mkdir(parents=True, exist_ok=True)
 

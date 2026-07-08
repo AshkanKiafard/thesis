@@ -5,6 +5,7 @@ from typing import Iterable, List, Tuple, Any, Dict, Optional
 import torch
 import torch.nn.functional as F
 
+from core.constants import DEFAULT_RL_MODEL_PATH
 from core.rl_model import LSTMActorCriticAgent
 
 # Use GPU if available, otherwise run on CPU.
@@ -174,7 +175,7 @@ def rl_traverse(
 
     model_path = config.get(
         "rl_model_path",
-        "data/models/rl/msmarco_no_inverse_state_dict.pt",
+        str(DEFAULT_RL_MODEL_PATH),
     )
 
     # Original evaluation defaults.

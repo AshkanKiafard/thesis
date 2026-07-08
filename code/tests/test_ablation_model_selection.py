@@ -17,7 +17,7 @@ def test_ablation_model_paths_keep_the_comparison_order(tmp_path, monkeypatch):
     for model_name in reversed(expected_names):
         (tmp_path / model_name).mkdir()
 
-    monkeypatch.setattr(utils, "LIGHTNING_DIR", Path(tmp_path))
+    monkeypatch.setattr(utils, "LIGHTNING_MODELS_DIR", Path(tmp_path))
 
     model_paths = utils.get_ablation_fine_tuned_models("v3")
 

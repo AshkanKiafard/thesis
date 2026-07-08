@@ -13,13 +13,18 @@ from torch.utils.data import DataLoader
 
 SLURM_JOB_ID = os.environ.get("SLURM_JOB_ID", "local")
 
-# code/finetune/finetune_best.py -> repo root is two levels above this file.
-REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = REPO_ROOT / "code" / "data"
-
 # Make code/ importable when this script is executed from code/finetune/.
-sys.path.append(str(REPO_ROOT / "code"))
+CODE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(CODE_ROOT))
 
+from core.constants import (
+    CAUSENET_GRAPH_PATH,
+    CHECKPOINTS_DIR,
+    DATASETS_DIR,
+    HPARAM_SEARCH_STUDIES_DIR,
+    LIGHTNING_LOGS_DIR,
+    LIGHTNING_MODELS_DIR,
+)
 from finetune.astar_training_core import (
     LitAStar,
     TARGET_EFFECTIVE_BATCH_SIZE,
@@ -123,7 +128,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
         f"{f_normalize_str}_{f_mrl_str}_{f_run_suffix}"
     )
 
-    checkpoint_dir = DATA_DIR / "checkpoints" / f_run_model_str
+    checkpoint_dir = CHECKPOINTS_DIR / f_run_model_str
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     last_checkpoint_path = checkpoint_dir / "last.ckpt"
@@ -178,7 +183,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
     )
 
     logger = TensorBoardLogger(
-        save_dir=str(DATA_DIR / "lightning_logs"),
+        save_dir=str(LIGHTNING_LOGS_DIR),
         name="final_training",
         version=f_run_model_str,
     )
@@ -201,7 +206,7 @@ def train(f_model_path, f_curr_model_name, f_train_dataset, f_valid_dataset,
         ckpt_path=ckpt_path,
     )
 
-    final_model_dir = DATA_DIR / "models" / "lightning" / f"{f_run_model_str}_finetuned"
+    final_model_dir = LIGHTNING_MODELS_DIR / f"{f_run_model_str}_finetuned"
     final_model_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 80)
@@ -298,19 +303,19 @@ if __name__ == "__main__":
     print(f"Run suffix: {run_suffix}")
     print(f"SLURM job ID: {SLURM_JOB_ID}")
 
-    causal_graph = load_causal_graph(DATA_DIR / "graphs" / "causenet-precision.jsonl")
+    causal_graph = load_causal_graph(CAUSENET_GRAPH_PATH)
 
-    with open(DATA_DIR / "datasets" / "msmarco_train.json", encoding="utf-8") as train_file:
+    with open(DATASETS_DIR / "msmarco_train.json", encoding="utf-8") as train_file:
         train_data = json.load(train_file)
 
-    with open(DATA_DIR / "datasets" / "msmarco_valid.json", encoding="utf-8") as valid_file:
+    with open(DATASETS_DIR / "msmarco_valid.json", encoding="utf-8") as valid_file:
         valid_data = json.load(valid_file)
 
     curr_model_name = model_path.split("/")[-1]
     normalize_str = "norm" if normalize else "nonorm"
     mrl_str = "matryoshka" if use_matryoshka else "single"
 
-    optuna_hparam_search_dir = DATA_DIR / "optuna_studies" / "hparam_search"
+    optuna_hparam_search_dir = HPARAM_SEARCH_STUDIES_DIR
 
     best_params, latest_study_path, source_study_name = load_hparams(
         optuna_hparam_search_dir=optuna_hparam_search_dir,
@@ -324,7 +329,7 @@ if __name__ == "__main__":
     distance_metric_str = best_params["distance"]
     lr = best_params["lr"]
 
-    datasets_dir = DATA_DIR / "datasets"
+    datasets_dir = DATASETS_DIR
     train_dataset, valid_dataset = load_or_create_datasets(
         model_path=model_path,
         curr_model_name=curr_model_name,

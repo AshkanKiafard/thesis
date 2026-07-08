@@ -15,10 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
+from core.constants import DATASETS_DIR, FILTERED_DATASETS_DIR
 from core.utils import get_concept
 
-INPUT_DIR = REPO_ROOT / "data" / "datasets"
-OUTPUT_DIR = INPUT_DIR / "filtered"
+INPUT_DIR = DATASETS_DIR
+OUTPUT_DIR = FILTERED_DATASETS_DIR
 
 
 def is_eval_split(dataset_name: str) -> bool:

@@ -2,8 +2,8 @@ import argparse
 import json
 import subprocess
 import sys
-from pathlib import Path
 
+from core.constants import EVALUATION_DIR, FILTERED_DATASETS_DIR
 from core.config import (
     DEFAULT_ABLATION_CAP_SOURCE_DATASET,
     DEFAULT_ABLATION_CAP_SOURCE_GRAPH,
@@ -110,7 +110,7 @@ def run_command(command, dry_run=False):
 
 def get_shared_cap_source_file(args):
     return (
-        Path("data/evaluation")
+        EVALUATION_DIR
         / args.ablation_cap_source_graph
         / args.ablation_cap_source_dataset
         / args.run_suffix
@@ -126,9 +126,9 @@ def validate_shared_cap_source(args, reference_model):
         return
 
     if not cap_file.exists():
-        dataset_path = (
-            f"data/datasets/filtered/"
-            f"{args.ablation_cap_source_dataset}_filtered.json"
+        dataset_path = str(
+            FILTERED_DATASETS_DIR
+            / f"{args.ablation_cap_source_dataset}_filtered.json"
         )
         command = " ".join(
             [

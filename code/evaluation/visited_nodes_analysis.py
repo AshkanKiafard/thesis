@@ -13,12 +13,14 @@ from core.config import (
     BASE_MODELS,
     DEFAULT_EMBEDDING_BATCH_SIZE,
     EMBEDDING_INDEX_MIN_SUCCESSORS,
-    GLOVE_300D_PATH,
-    LIGHTNING_DIR,
 )
 from core.constants import (
     BFS_CAPPED_BASELINE_MODEL,
     BFS_UNCAPPED_BASELINE_MODEL,
+    DEFAULT_RL_MODEL_PATH,
+    EVALUATION_DIR,
+    GLOVE_300D_PATH,
+    LIGHTNING_MODELS_DIR,
     RL_BASELINE_MODEL,
 )
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
@@ -46,7 +48,7 @@ from core.utils import (
 # Global paths
 # -------------------------------------------------------------------------
 
-EVALUATION_OUTPUT_ROOT = Path("data/evaluation")
+EVALUATION_OUTPUT_ROOT = EVALUATION_DIR
 
 
 def build_output_paths(
@@ -338,7 +340,7 @@ if __name__ == "__main__":
         if missing_model_names:
             raise FileNotFoundError(
                 "The four-model ablation comparison is incomplete for run "
-                f"suffix '{run_suffix}' in {LIGHTNING_DIR}. Missing: "
+                f"suffix '{run_suffix}' in {LIGHTNING_MODELS_DIR}. Missing: "
                 f"{missing_model_names}"
             )
     else:
@@ -362,7 +364,7 @@ if __name__ == "__main__":
 
     # RL still needs these parameters
     RL_ANALYSIS_CONFIG = {
-        "rl_model_path": "data/models/rl/msmarco_no_inverse_state_dict.pt",
+        "rl_model_path": str(DEFAULT_RL_MODEL_PATH),
         "rl_beam_width": 50,
         "rl_max_path_len": 2,
         "rl_max_actions": 5000,

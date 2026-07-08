@@ -1,6 +1,6 @@
 import traverse_strategies as ts
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
-from core.config import GLOVE_300D_PATH
+from core.constants import DEFAULT_RL_MODEL_PATH, GLOVE_300D_PATH
 from core.graph_config import get_graph_path
 from core.utils import load_causal_graph, load_rl_graph, traverse_graph
 
@@ -49,7 +49,7 @@ if __name__ == "__main__":
 
     print("Starting RL traversal...")
     rl_config = {
-        "rl_model_path": "data/models/rl/msmarco_no_inverse_state_dict.pt",
+        "rl_model_path": str(DEFAULT_RL_MODEL_PATH),
         "rl_beam_width": 50,
         "rl_max_path_len": 2,
         "rl_max_actions": 5000,

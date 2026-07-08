@@ -9,8 +9,8 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from sentence_transformers import SentenceTransformer
 
-from core.config import DEFAULT_EMBEDDING_BATCH_SIZE, EMBEDDINGS_DIR
-from core.constants import DistanceMetric
+from core.config import DEFAULT_EMBEDDING_BATCH_SIZE
+from core.constants import DistanceMetric, EMBEDDINGS_DIR
 from core.utils import (
     get_node_universe_for_cache_suffix,
     get_node_universe_path,

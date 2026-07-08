@@ -2,6 +2,9 @@ import argparse
 import json
 from pathlib import Path
 
+from core.config import DEFAULT_RUN_SUFFIX
+from core.constants import EVALUATION_DIR
+
 
 DEFAULT_MIN_F1 = 0.8
 DEFAULT_VARIANT_FILTER = "finetuned"
@@ -125,7 +128,6 @@ def candidate_sort_key(candidate):
         candidate["avg_time_ms"],
         candidate["avg_nodes_visited"],
         -candidate["f1_score"],
-        -candidate["accuracy"],
         candidate["family"],
         candidate["dimension"],
     )
@@ -352,7 +354,13 @@ def parse_args():
     parser.add_argument(
         "evaluation_results_path",
         nargs="?",
-        default="data/evaluation/causenet/msmarco_valid/v3/evaluation_results.json",
+        default=str(
+            EVALUATION_DIR
+            / "causenet"
+            / "msmarco_valid"
+            / DEFAULT_RUN_SUFFIX
+            / "evaluation_results.json"
+        ),
         help="Path to validation evaluation_results.json.",
     )
     parser.add_argument(

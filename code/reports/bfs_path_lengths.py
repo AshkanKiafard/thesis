@@ -1,3 +1,5 @@
+"""Generate BFS path-length statistics in JSON, CSV, and LaTeX formats."""
+
 import argparse
 import csv
 import json
@@ -5,23 +7,22 @@ import time
 from pathlib import Path
 
 import traverse_strategies as ts
+from core.constants import FILTERED_DATASETS_DIR, REPORTS_DIR
 from core.graph_config import get_graph_label, get_graph_path, graph_choices
 from core.utils import load_causal_graph
+from reports.common import (
+    latex_escape,
+    latex_number,
+    report_paths,
+    resolve_repo_path,
+    write_json,
+    write_latex,
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATASET_DIR = REPO_ROOT / "data" / "datasets" / "filtered"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "data" / "reports" / "bfs_path_lengths"
+DEFAULT_DATASET_DIR = FILTERED_DATASETS_DIR
+DEFAULT_OUTPUT_DIR = REPORTS_DIR
 DEFAULT_DATASETS = ("msmarco_test", "sem_test")
 DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank")
-
-
-def resolve_repo_path(path):
-    path = Path(path)
-
-    if path.is_absolute():
-        return path
-
-    return REPO_ROOT / path
 
 
 def load_dataset(dataset_dir, dataset_name, stop_after_pairs=None):
@@ -289,29 +290,52 @@ def write_summary_csv(path, summaries):
             writer.writerow(row)
 
 
-def write_per_example_csv(path, rows):
-    fieldnames = [
-        "graph",
-        "dataset",
-        "id",
-        "answer",
-        "cause",
-        "effect",
-        "cause_in_graph",
-        "effect_in_graph",
-        "evaluated",
-        "path_found",
-        "path_hops",
-        "path_nodes",
-        "visited_nodes",
-        "cutoff",
-        "time_ms",
-    ]
+def write_reports(report, summaries, output_dir):
+    json_path, csv_path, tex_path = report_paths("bfs_path_lengths", output_dir)
+    write_json(json_path, report)
+    write_summary_csv(csv_path, summaries)
 
-    with open(path, "w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    table_rows = []
+    for row in summaries:
+        cells = [
+            latex_escape(get_graph_label(row["graph"])),
+            latex_escape(row["dataset"]),
+            latex_number(row["evaluated_pairs_both_nodes_in_graph"]),
+            latex_number(row["pairs_with_bfs_path"]),
+            latex_number(row["avg_bfs_path_hops_reachable"], 2),
+            latex_number(row["avg_nodes_visited_evaluated"], 1),
+            latex_number(row["avg_time_ms_evaluated"], 1),
+        ]
+        table_rows.append("    " + " & ".join(cells) + " \\\\")
+
+    latex = "\n".join(
+        [
+            r"\begin{table}[t]",
+            r"  \centering",
+            r"  \small",
+            r"  \resizebox{\textwidth}{!}{%",
+            r"  \begin{tabular}{@{}llrrrrr@{}}",
+            r"    \toprule",
+            (
+                r"    \textbf{Graph} & \textbf{Dataset} & \textbf{Evaluated} & "
+                r"\textbf{Reachable} & \textbf{Avg. hops} & "
+                r"\textbf{Avg. visited} & \textbf{Avg. time [ms]} \\"
+            ),
+            r"    \midrule",
+            *table_rows,
+            r"    \bottomrule",
+            r"  \end{tabular}%",
+            r"  }",
+            (
+                r"  \caption{Breadth-first-search path lengths and search effort "
+                r"for evaluation question pairs.}"
+            ),
+            r"  \label{tab:bfs-path-lengths}",
+            r"\end{table}",
+        ]
+    )
+    write_latex(tex_path, latex)
+    return json_path, csv_path, tex_path
 
 
 def parse_args():
@@ -344,7 +368,7 @@ def parse_args():
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="Directory where reports are written.",
+        help="Report root; files are written below bfs_path_lengths/.",
     )
     parser.add_argument(
         "--bfs-max-visits",
@@ -378,7 +402,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+    args.dataset_dir = resolve_repo_path(args.dataset_dir)
+    args.output_dir = resolve_repo_path(args.output_dir)
 
     datasets = {}
     dataset_paths = {}
@@ -401,7 +426,6 @@ def main():
         "graphs": {},
     }
     summary_rows = []
-    per_example_rows = []
 
     for graph_name in args.graphs:
         graph_path = resolve_repo_path(get_graph_path(graph_name))
@@ -442,7 +466,10 @@ def main():
                 bfs_max_visits=args.bfs_max_visits,
                 progress_every=args.progress_every,
             )
-            report["graphs"][graph_name]["datasets"][dataset_name] = summary
+            report["graphs"][graph_name]["datasets"][dataset_name] = {
+                "summary": summary,
+                "examples": rows,
+            }
             summary_rows.append(
                 {
                     "graph": graph_name,
@@ -450,22 +477,16 @@ def main():
                     **summary,
                 }
             )
-            per_example_rows.extend(rows)
             print_summary(graph_name, dataset_name, summary)
 
-    summary_json_path = args.output_dir / "bfs_path_lengths_summary.json"
-    summary_csv_path = args.output_dir / "bfs_path_lengths_summary.csv"
-    per_example_csv_path = args.output_dir / "bfs_path_lengths_per_example.csv"
-
-    with open(summary_json_path, "w", encoding="utf-8", newline="\n") as file:
-        json.dump(report, file, indent=2)
-
-    write_summary_csv(summary_csv_path, summary_rows)
-    write_per_example_csv(per_example_csv_path, per_example_rows)
-
-    print(f"\nWrote summary JSON: {summary_json_path}")
-    print(f"Wrote summary CSV:  {summary_csv_path}")
-    print(f"Wrote examples CSV: {per_example_csv_path}")
+    json_path, csv_path, tex_path = write_reports(
+        report=report,
+        summaries=summary_rows,
+        output_dir=args.output_dir,
+    )
+    print(f"\nWrote JSON report: {json_path}")
+    print(f"Wrote CSV report:  {csv_path}")
+    print(f"Wrote LaTeX table: {tex_path}")
 
 
 if __name__ == "__main__":

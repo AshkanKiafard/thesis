@@ -1,30 +1,30 @@
+"""Generate dataset and graph-coverage statistics for the thesis."""
+
 import argparse
 import csv
 import json
 from pathlib import Path
 
+from core.constants import FILTERED_DATASETS_DIR, REPORTS_DIR
 from core.graph_config import get_graph_config, graph_choices
 from core.utils import load_graph_nodes as load_causal_graph_nodes
+from reports.common import (
+    latex_escape,
+    latex_number,
+    report_paths,
+    resolve_repo_path,
+    write_json,
+    write_latex,
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-DATASET_DIR = REPO_ROOT / "data" / "datasets" / "filtered"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "data" / "reports" / "dataset_balance"
+DATASET_DIR = FILTERED_DATASETS_DIR
+DEFAULT_OUTPUT_DIR = REPORTS_DIR
 SELECTED_GRAPHS = ("causenet", "causenet_full", "causalbank")
 
 
 def load_dataset(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
         return json.load(f)
-
-
-def resolve_repo_path(path):
-    path = Path(path)
-
-    if path.is_absolute():
-        return path
-
-    return REPO_ROOT / path
 
 
 def pretty_split_name(file_path):
@@ -87,18 +87,14 @@ def count_split(data, graph_nodes_by_name):
 
 
 def write_reports(output_dir, rows, selected_graphs, graph_metadata):
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    json_path = output_dir / "dataset_balance.json"
-    csv_path = output_dir / "dataset_balance.csv"
+    json_path, csv_path, tex_path = report_paths("dataset_statistics", output_dir)
 
     report = {
         "graphs": graph_metadata,
         "datasets": rows,
     }
 
-    with open(json_path, "w", encoding="utf-8", newline="\n") as file:
-        json.dump(report, file, indent=2)
+    write_json(json_path, report)
 
     fieldnames = ["dataset", "split", "total_pos", "total_neg"]
 
@@ -124,7 +120,79 @@ def write_reports(output_dir, rows, selected_graphs, graph_metadata):
 
             writer.writerow(flat_row)
 
-    return json_path, csv_path
+    graph_headers = [
+        latex_escape(graph_metadata[graph_name]["label"])
+        for graph_name in selected_graphs
+    ]
+    first_header = [r"    \textbf{Split}", r"\multicolumn{2}{c}{\textbf{Total}}"]
+    first_header.extend(
+        rf"\multicolumn{{2}}{{c}}{{\textbf{{{label}}}}}"
+        for label in graph_headers
+    )
+    second_header = [""] + [r"\textbf{Pos.}", r"\textbf{Neg.}"] * (
+        len(selected_graphs) + 1
+    )
+    split_order = {"Train": 0, "Train+Valid": 1, "Validation": 2, "Test": 3}
+    ordered_rows = sorted(
+        rows,
+        key=lambda row: (row["dataset"], split_order.get(row["split"], 99)),
+    )
+    table_rows = []
+    current_dataset = None
+    dataset_labels = {"msmarco": "MS MARCO", "sem": "SemEval"}
+
+    for row in ordered_rows:
+        if row["dataset"] != current_dataset:
+            if current_dataset is not None:
+                table_rows.append(r"    \addlinespace[2pt]")
+            current_dataset = row["dataset"]
+            dataset_label = dataset_labels.get(current_dataset, current_dataset)
+            table_rows.append(
+                rf"    \multicolumn{{{2 * len(selected_graphs) + 3}}}"
+                rf"{{@{{}}l}}{{\emph{{{latex_escape(dataset_label)}}}}} \\"
+            )
+
+        cells = [
+            latex_escape(row["split"]),
+            latex_number(row["total_pos"]),
+            latex_number(row["total_neg"]),
+        ]
+        for graph_name in selected_graphs:
+            cells.extend(
+                (
+                    latex_number(row["graphs"][graph_name]["pos"]),
+                    latex_number(row["graphs"][graph_name]["neg"]),
+                )
+            )
+        table_rows.append("    " + " & ".join(cells) + " \\\\")
+
+    column_spec = "@{}l" + "rr" * (len(selected_graphs) + 1) + "@{}"
+    latex = "\n".join(
+        [
+            r"\begin{table}[t]",
+            r"  \centering",
+            r"  \small",
+            r"  \resizebox{\textwidth}{!}{%",
+            rf"  \begin{{tabular}}{{{column_spec}}}",
+            r"    \toprule",
+            " & ".join(first_header) + " \\\\",
+            " & ".join(second_header) + " \\\\",
+            r"    \midrule",
+            *table_rows,
+            r"    \bottomrule",
+            r"  \end{tabular}%",
+            r"  }",
+            (
+                r"  \caption{Number of positive and negative causal questions "
+                r"before and after graph-node coverage filtering.}"
+            ),
+            r"  \label{tab:dataset-statistics}",
+            r"\end{table}",
+        ]
+    )
+    write_latex(tex_path, latex)
+
+    return json_path, csv_path, tex_path
 
 
 def parse_args():
@@ -151,7 +219,7 @@ def parse_args():
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="Directory for dataset_balance.json and dataset_balance.csv.",
+        help="Report root; files are written below dataset_statistics/.",
     )
     parser.add_argument(
         "--no-write",
@@ -242,7 +310,7 @@ def main():
     print("=" * len(header))
 
     if not args.no_write:
-        json_path, csv_path = write_reports(
+        json_path, csv_path, tex_path = write_reports(
             output_dir=output_dir,
             rows=rows,
             selected_graphs=selected_graphs,
@@ -250,6 +318,7 @@ def main():
         )
         print(f"\nWrote JSON report: {json_path}")
         print(f"Wrote CSV report:  {csv_path}")
+        print(f"Wrote LaTeX table: {tex_path}")
 
 
 if __name__ == "__main__":

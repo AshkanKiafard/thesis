@@ -14,12 +14,12 @@ from core.config import (
     DEFAULT_ABLATION_MRL_STR,
     DEFAULT_ABLATION_NORMALIZE_STR,
     DEFAULT_ABLATION_REFERENCE_COMBO,
-    LIGHTNING_DIR,
 )
 from core.constants import (
     ActivationFunc,
     CAUSENET_FULL_NODE_UNIVERSE,
     DistanceMetric,
+    LIGHTNING_MODELS_DIR,
     MERGED_NODE_UNIVERSE,
 )
 
@@ -728,15 +728,15 @@ def get_fine_tuned_models(run_suffix: str):
     Expected final-training export pattern:
     <model>_<activation>_<distance>_<norm>_<mrl>_<run_suffix>_finetuned
     """
-    if not os.path.exists(LIGHTNING_DIR):
+    if not os.path.exists(LIGHTNING_MODELS_DIR):
         return []
 
     expected_suffix = f"_{run_suffix}_finetuned"
 
     return [
-        os.path.join(LIGHTNING_DIR, name).replace("\\", "/")
-        for name in os.listdir(LIGHTNING_DIR)
-        if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
+        os.path.join(LIGHTNING_MODELS_DIR, name).replace("\\", "/")
+        for name in os.listdir(LIGHTNING_MODELS_DIR)
+        if os.path.isdir(os.path.join(LIGHTNING_MODELS_DIR, name))
         and name != "old"
         and name.endswith(expected_suffix)
     ]
@@ -829,9 +829,9 @@ def get_ablation_fine_tuned_models(
     )
 
     return [
-        os.path.join(LIGHTNING_DIR, name).replace("\\", "/")
+        os.path.join(LIGHTNING_MODELS_DIR, name).replace("\\", "/")
         for name in expected_names
-        if os.path.isdir(os.path.join(LIGHTNING_DIR, name))
+        if os.path.isdir(os.path.join(LIGHTNING_MODELS_DIR, name))
     ]
 
 

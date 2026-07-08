@@ -1,13 +1,13 @@
 import argparse
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-RAW_CAUSALBANK_GRAPH_PATH = (
-    REPO_ROOT / "data" / "graphs" / "Lexical_Cause_Effect_Graph.txt"
+from core.constants import (
+    CAUSALBANK_FULL_GRAPH_PATH,
+    CAUSALBANK_GRAPH_PATH,
 )
-FILTERED_CAUSALBANK_GRAPH_PATH = (
-    REPO_ROOT / "data" / "graphs" / "Lexical_Cause_Effect_Graph.filtered.txt"
-)
+
+RAW_CAUSALBANK_GRAPH_PATH = CAUSALBANK_FULL_GRAPH_PATH
+FILTERED_CAUSALBANK_GRAPH_PATH = CAUSALBANK_GRAPH_PATH
 
 DEFAULT_MIN_COUNT = 0
 DEFAULT_MIN_CAUSAL_STRENGTH = 0.10

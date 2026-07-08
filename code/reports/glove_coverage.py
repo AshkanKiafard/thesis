@@ -1,15 +1,24 @@
+"""Generate GloVe and evaluation-coverage statistics for the thesis."""
+
 import argparse
 import csv
 import json
 from pathlib import Path
 
-from core.config import GLOVE_300D_PATH
+from core.constants import FILTERED_DATASETS_DIR, GLOVE_300D_PATH, REPORTS_DIR
 from core.graph_config import get_graph_label, get_graph_path, graph_choices
+from reports.common import (
+    latex_escape,
+    latex_number,
+    report_paths,
+    resolve_repo_path,
+    write_json,
+    write_latex,
+)
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_GLOVE_PATH = GLOVE_300D_PATH
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "data" / "reports" / "coverage"
-DEFAULT_DATASET_DIR = REPO_ROOT / "data" / "datasets" / "filtered"
+DEFAULT_OUTPUT_DIR = REPORTS_DIR
+DEFAULT_DATASET_DIR = FILTERED_DATASETS_DIR
 DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank")
 
 # These are the datasets where the graph-membership report should mirror evaluation.
@@ -41,15 +50,6 @@ DATASET_FILE_ALIASES = {
         "sem_test.json",
     ),
 }
-
-def resolve_repo_path(path):
-    path = Path(path)
-
-    if path.is_absolute():
-        return path
-
-    return REPO_ROOT / path
-
 
 def normalize_causenet_concept(value):
     return value.replace("_", " ").strip()
@@ -464,105 +464,6 @@ def print_graph_summary(graph_label, coverage):
     print(f"Unique missing tokens:               {summary['unique_missing_tokens']:,}")
 
 
-def write_lines(path, values):
-    with open(path, "w", encoding="utf-8", newline="\n") as file:
-        for value in values:
-            file.write(f"{value}\n")
-
-
-def write_partial_nodes(path, rows):
-    fieldnames = ["node", "known_tokens", "missing_tokens"]
-
-    with open(path, "w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for row in rows:
-            writer.writerow(
-                {
-                    "node": row["node"],
-                    "known_tokens": " ".join(row["known_tokens"]),
-                    "missing_tokens": " ".join(row["missing_tokens"]),
-                }
-            )
-
-
-def write_graph_report(output_dir, graph_name, coverage):
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    write_lines(
-        output_dir / f"{graph_name}_missing_exact_nodes.txt",
-        coverage["missing_exact_nodes"],
-    )
-    write_lines(
-        output_dir / f"{graph_name}_missing_entity_nodes.txt",
-        coverage["no_token_nodes"],
-    )
-    write_partial_nodes(
-        output_dir / f"{graph_name}_partial_entity_nodes.csv",
-        coverage["partial_token_nodes"],
-    )
-    write_lines(
-        output_dir / f"{graph_name}_missing_tokens.txt",
-        coverage["missing_tokens"],
-    )
-
-
-def write_missing_dataset_examples(path, rows):
-    fieldnames = [
-        "dataset",
-        "family",
-        "id",
-        "answer",
-        "cause",
-        "cause_missing",
-        "cause_missing_tokens",
-        "effect",
-        "effect_missing",
-        "effect_missing_tokens",
-    ]
-
-    with open(path, "w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for row in rows:
-            writer.writerow(
-                {
-                    **row,
-                    "cause_missing_tokens": " ".join(row["cause_missing_tokens"]),
-                    "effect_missing_tokens": " ".join(row["effect_missing_tokens"]),
-                }
-            )
-
-
-def write_missing_dataset_nodes(path, rows):
-    fieldnames = [
-        "dataset",
-        "family",
-        "node",
-        "roles",
-        "example_ids",
-        "missing_tokens",
-    ]
-
-    with open(path, "w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for row in rows:
-            writer.writerow(
-                {
-                    "dataset": row["dataset"],
-                    "family": row["family"],
-                    "node": row["node"],
-                    "roles": " ".join(row["roles"]),
-                    "example_ids": " ".join(row["example_ids"]),
-                    "missing_tokens": " ".join(row["missing_tokens"]),
-                }
-            )
-
-
 def summarize_dataset_family(dataset_results):
     family_nodes = {}
     family_missing_nodes = {}
@@ -929,81 +830,166 @@ def print_graph_membership_summary(graph_label, dataset_name, summary):
     )
 
 
-def write_eval_example_rows(path, rows, include_skip_reason):
-    fieldnames = [
-        "graph",
-        "dataset",
-        "family",
-        "id",
-        "answer",
-        "cause",
-        "cause_in_graph",
-        "effect",
-        "effect_in_graph",
-        "both_cause_and_effect_in_graph",
-    ]
+def iter_summary_rows(report):
+    """Flatten every summary metric into an Excel-friendly long-form table."""
 
-    if include_skip_reason:
-        fieldnames.append("skip_reason")
-
-    with open(path, "w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(
-            {
-                column: row.get(column, "")
-                for column in fieldnames
+    def rows(scope, summary, graph="", dataset="", family=""):
+        for metric, value in summary.items():
+            yield {
+                "scope": scope,
+                "graph": graph,
+                "dataset": dataset,
+                "family": family,
+                "metric": metric,
+                "value": value,
             }
-            for row in rows
+
+    glove_coverage = report["glove_coverage"]
+    for graph_name, result in glove_coverage["graphs"].items():
+        yield from rows("glove_graph", result["summary"], graph=graph_name)
+    for dataset_name, result in glove_coverage["datasets"].items():
+        yield from rows(
+            "glove_dataset",
+            result["summary"],
+            dataset=dataset_name,
         )
+    for family, summary in glove_coverage["dataset_families"].items():
+        yield from rows("glove_dataset_family", summary, family=family)
 
-
-def write_eval_missing_node_rows(path, rows):
-    fieldnames = ["graph", "dataset", "family", "node", "roles", "example_ids"]
-
-    with open(path, "w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for row in rows:
-            writer.writerow(
-                {
-                    "graph": row["graph"],
-                    "dataset": row["dataset"],
-                    "family": row["family"],
-                    "node": row["node"],
-                    "roles": " ".join(row["roles"]),
-                    "example_ids": " ".join(row["example_ids"]),
-                }
+    for graph_name, graph_result in report["evaluation_graph_membership"].items():
+        for dataset_name, result in graph_result["datasets"].items():
+            yield from rows(
+                "evaluation_graph_dataset",
+                result["summary"],
+                graph=graph_name,
+                dataset=dataset_name,
+            )
+        for family, summary in graph_result["dataset_families"].items():
+            yield from rows(
+                "evaluation_graph_family",
+                summary,
+                graph=graph_name,
+                family=family,
             )
 
 
-def write_graph_membership_reports(output_dir, graph_name, dataset_graph_results):
-    output_dir.mkdir(parents=True, exist_ok=True)
+def _count_with_percent(count, total):
+    return f"{latex_number(count)} ({percent(count, total):.1f}\\%)"
 
-    all_kept_examples = []
-    all_skipped_examples = []
-    all_missing_nodes = []
 
-    for result in dataset_graph_results.values():
-        all_kept_examples.extend(result["kept_examples"])
-        all_skipped_examples.extend(result["skipped_examples"])
-        all_missing_nodes.extend(result["missing_nodes"])
+def _dataset_label(dataset_name):
+    labels = {
+        "msmarco_valid": "MS MARCO valid.",
+        "msmarco_test": "MS MARCO test",
+        "semeval_valid": "SemEval valid.",
+        "semeval_test": "SemEval test",
+    }
+    return labels.get(dataset_name, dataset_name.replace("_", " "))
 
-    write_eval_example_rows(
-        output_dir / f"{graph_name}_eval_usable_examples.csv",
-        all_kept_examples,
-        include_skip_reason=False,
+
+def build_latex(report):
+    graph_rows = []
+    for graph_name, result in report["glove_coverage"]["graphs"].items():
+        summary = result["summary"]
+        total = summary["total_nodes"]
+        cells = [
+            latex_escape(get_graph_label(graph_name)),
+            latex_number(total),
+            _count_with_percent(summary["nodes_with_any_glove_token"], total),
+            _count_with_percent(summary["nodes_with_all_tokens_in_glove"], total),
+            _count_with_percent(summary["nodes_with_no_glove_tokens"], total),
+        ]
+        graph_rows.append("    " + " & ".join(cells) + " \\\\")
+
+    graph_table = "\n".join(
+        [
+            r"\begin{table}[t]",
+            r"  \centering",
+            r"  \small",
+            r"  \begin{tabular}{@{}lrrrr@{}}",
+            r"    \toprule",
+            (
+                r"    \textbf{Graph} & \textbf{Nodes} & \textbf{Any token} & "
+                r"\textbf{All tokens} & \textbf{No tokens} \\"
+            ),
+            r"    \midrule",
+            *graph_rows,
+            r"    \bottomrule",
+            r"  \end{tabular}",
+            (
+                r"  \caption{GloVe token coverage of the nodes in each causal "
+                r"graph. Counts are followed by percentages.}"
+            ),
+            r"  \label{tab:glove-graph-coverage}",
+            r"\end{table}",
+        ]
     )
-    write_eval_example_rows(
-        output_dir / f"{graph_name}_eval_skipped_examples.csv",
-        all_skipped_examples,
-        include_skip_reason=True,
-    )
-    write_eval_missing_node_rows(
-        output_dir / f"{graph_name}_eval_missing_cause_effect_nodes.csv",
-        all_missing_nodes,
-    )
+
+    membership_rows = []
+    for graph_name, graph_result in report["evaluation_graph_membership"].items():
+        for dataset_name, result in graph_result["datasets"].items():
+            summary = result["summary"]
+            total = summary["n_examples_total"]
+            cells = [
+                latex_escape(get_graph_label(graph_name)),
+                latex_escape(_dataset_label(dataset_name)),
+                latex_number(total),
+                _count_with_percent(
+                    summary[
+                        "n_examples_eval_usable_both_cause_and_effect_in_graph"
+                    ],
+                    total,
+                ),
+                _count_with_percent(
+                    summary[
+                        "n_examples_skipped_by_eval_missing_cause_or_effect_in_graph"
+                    ],
+                    total,
+                ),
+            ]
+            membership_rows.append("    " + " & ".join(cells) + " \\\\")
+
+    membership_table = ""
+    if membership_rows:
+        membership_table = "\n\n" + "\n".join(
+            [
+                r"\begin{table}[t]",
+                r"  \centering",
+                r"  \small",
+                r"  \begin{tabular}{@{}llrrr@{}}",
+                r"    \toprule",
+                (
+                    r"    \textbf{Graph} & \textbf{Dataset} & \textbf{Total} & "
+                    r"\textbf{Usable} & \textbf{Skipped} \\"
+                ),
+                r"    \midrule",
+                *membership_rows,
+                r"    \bottomrule",
+                r"  \end{tabular}",
+                (
+                    r"  \caption{Evaluation examples retained after requiring "
+                    r"both cause and effect nodes to occur in the graph.}"
+                ),
+                r"  \label{tab:evaluation-graph-coverage}",
+                r"\end{table}",
+            ]
+        )
+
+    return graph_table + membership_table
+
+
+def write_reports(report, output_dir):
+    json_path, csv_path, tex_path = report_paths("glove_coverage", output_dir)
+    write_json(json_path, report)
+
+    fieldnames = ["scope", "graph", "dataset", "family", "metric", "value"]
+    with open(csv_path, "w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(iter_summary_rows(report))
+
+    write_latex(tex_path, build_latex(report))
+    return json_path, csv_path, tex_path
 
 
 def parse_args():
@@ -1054,7 +1040,7 @@ def parse_args():
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="Directory for missing-node and missing-token reports.",
+        help="Report root; files are written below glove_coverage/.",
     )
     parser.add_argument(
         "--dataset-dir",
@@ -1165,16 +1151,11 @@ def main():
             lowercase=args.lowercase,
         )
         print_graph_summary(graph_label, coverage)
-        full_summary["glove_coverage"]["graphs"][graph_name] = coverage["summary"]
-
-        if not args.no_write:
-            write_graph_report(args.output_dir, graph_name, coverage)
+        full_summary["glove_coverage"]["graphs"][graph_name] = coverage
 
     if not args.skip_datasets:
         dataset_files = sorted(args.dataset_dir.glob("*.json"))
         dataset_results = {}
-        all_missing_examples = []
-        all_missing_nodes = []
 
         print(f"\nChecking dataset GloVe-token coverage in: {args.dataset_dir}")
 
@@ -1186,9 +1167,7 @@ def main():
                 lowercase=args.lowercase,
             )
             dataset_results[dataset_name] = result
-            full_summary["glove_coverage"]["datasets"][dataset_name] = result["summary"]
-            all_missing_examples.extend(result["missing_examples"])
-            all_missing_nodes.extend(result["missing_nodes"])
+            full_summary["glove_coverage"]["datasets"][dataset_name] = result
             print_dataset_summary(dataset_name, result["summary"])
 
         family_summary = summarize_dataset_family(dataset_results)
@@ -1196,17 +1175,6 @@ def main():
 
         for family, summary in family_summary.items():
             print_dataset_summary(f"{family} aggregate", summary)
-
-        if not args.no_write:
-            args.output_dir.mkdir(parents=True, exist_ok=True)
-            write_missing_dataset_examples(
-                args.output_dir / "glove_dataset_missing_endpoint_examples.csv",
-                all_missing_examples,
-            )
-            write_missing_dataset_nodes(
-                args.output_dir / "glove_dataset_missing_entity_nodes.csv",
-                all_missing_nodes,
-            )
 
     if not args.skip_graph_eval_coverage:
         eval_dataset_files = resolve_eval_dataset_files(
@@ -1242,7 +1210,7 @@ def main():
                 dataset_graph_results[dataset_name] = result
                 full_summary["evaluation_graph_membership"][graph_name]["datasets"][
                     dataset_name
-                ] = result["summary"]
+                ] = result
                 print_graph_membership_summary(
                     graph_label=graph_label,
                     dataset_name=dataset_name,
@@ -1261,21 +1229,11 @@ def main():
                     summary=summary,
                 )
 
-            if not args.no_write:
-                write_graph_membership_reports(
-                    output_dir=args.output_dir,
-                    graph_name=graph_name,
-                    dataset_graph_results=dataset_graph_results,
-                )
-
     if not args.no_write:
-        args.output_dir.mkdir(parents=True, exist_ok=True)
-        summary_path = args.output_dir / "summary.json"
-
-        with open(summary_path, "w", encoding="utf-8", newline="\n") as file:
-            json.dump(full_summary, file, indent=2)
-
-        print(f"\nWrote reports to: {args.output_dir}")
+        json_path, csv_path, tex_path = write_reports(full_summary, args.output_dir)
+        print(f"\nWrote JSON report: {json_path}")
+        print(f"Wrote CSV report:  {csv_path}")
+        print(f"Wrote LaTeX table: {tex_path}")
 
 
 if __name__ == "__main__":

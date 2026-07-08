@@ -26,9 +26,15 @@ from core.config import (
     BASE_MODELS,
     DEFAULT_EMBEDDING_BATCH_SIZE,
     DEFAULT_RUN_SUFFIX as CONFIG_DEFAULT_RUN_SUFFIX,
-    EMBEDDINGS_DIR,
     EMBEDDING_INDEX_MIN_SUCCESSORS,
-    LIGHTNING_DIR,
+)
+from core.constants import (
+    EMBEDDINGS_DIR,
+    EVALUATION_DIR,
+    LIGHTNING_MODELS_DIR,
+    REPO_ROOT,
+    WEB_DEMO_GRAPH_CACHE_DIR,
+    WEB_DEMO_GRAPH_PREVIEW_CACHE_DIR,
 )
 from core.graph_config import DEFAULT_GRAPH_NAME, GRAPH_CONFIGS, get_graph_label
 from core.utils import (
@@ -45,10 +51,9 @@ from core.utils import (
 )
 
 
-CODE_ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-GRAPH_CACHE_DIR = CODE_ROOT / "data" / "cache" / "web_demo_graphs"
-VISUAL_CACHE_DIR = CODE_ROOT / "data" / "cache" / "web_demo_graph_previews"
+GRAPH_CACHE_DIR = WEB_DEMO_GRAPH_CACHE_DIR
+VISUAL_CACHE_DIR = WEB_DEMO_GRAPH_PREVIEW_CACHE_DIR
 
 DEFAULT_RUN_SUFFIX = os.environ.get("WEB_DEMO_RUN_SUFFIX", CONFIG_DEFAULT_RUN_SUFFIX)
 EMBEDDING_DEVICE = os.environ.get("WEB_DEMO_EMBEDDING_DEVICE", "auto")
@@ -446,7 +451,7 @@ def astar(request: AStarRequest):
 
 def resolve_code_path(path: Path | str) -> Path:
     path = Path(path)
-    return path if path.is_absolute() else CODE_ROOT / path
+    return path if path.is_absolute() else REPO_ROOT / path
 
 
 def get_available_demo_graphs() -> tuple[str, ...]:
@@ -1129,11 +1134,11 @@ def discover_models() -> tuple[dict[str, Any], ...]:
     for model_path in get_fine_tuned_models(DEFAULT_RUN_SUFFIX):
         add_model(model_path, is_finetuned=True)
 
-    if LIGHTNING_DIR.exists():
-        for model_dir in sorted(LIGHTNING_DIR.iterdir()):
+    if LIGHTNING_MODELS_DIR.exists():
+        for model_dir in sorted(LIGHTNING_MODELS_DIR.iterdir()):
             if model_dir.is_dir() and model_dir.name != "old":
                 add_model(
-                    str(model_dir.relative_to(CODE_ROOT)).replace("\\", "/"),
+                    str(model_dir.relative_to(REPO_ROOT)).replace("\\", "/"),
                     is_finetuned=True,
                 )
 
@@ -1257,9 +1262,7 @@ def get_default_astar_max_visits(
 
     for candidate_graph in candidate_graphs:
         p95_file = (
-            CODE_ROOT
-            / "data"
-            / "evaluation"
+            EVALUATION_DIR
             / candidate_graph
             / "msmarco_train"
             / DEFAULT_RUN_SUFFIX
