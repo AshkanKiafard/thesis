@@ -1,22 +1,36 @@
 const state = {
   options: null,
-  graph: null,
   pickMode: "source",
   selectedSource: "",
   selectedTarget: "",
-  lastPathEdges: new Set(),
+  lastPathNodes: new Set(),
   subgraphRequestId: 0,
+  bfsCapMode: "default_p95",
+  bfsDefaults: new Map(),
+  suggestionRequestIds: { source: 0, target: 0 },
+  busy: false,
 };
 
 const els = {
   alert: document.getElementById("alert"),
   graphSelect: document.getElementById("graph-select"),
-  modelSelect: document.getElementById("model-select"),
-  dimSelect: document.getElementById("dim-select"),
+  graphSize: document.getElementById("graph-size"),
+  methodSelect: document.getElementById("method-select"),
+  methodValidation: document.getElementById("method-validation"),
+  astarDimensionControl: document.getElementById("astar-dimension-control"),
+  astarDimensionSelect: document.getElementById("astar-dimension-select"),
   sourceInput: document.getElementById("source-input"),
   targetInput: document.getElementById("target-input"),
   sourceSuggestions: document.getElementById("source-suggestions"),
   targetSuggestions: document.getElementById("target-suggestions"),
+  bfsSettings: document.getElementById("bfs-settings"),
+  bfsSearchCap: document.getElementById("bfs-search-cap"),
+  bfsCapMode: document.getElementById("bfs-cap-mode"),
+  bfsCapSource: document.getElementById("bfs-cap-source"),
+  rlSettings: document.getElementById("rl-settings"),
+  rlDetails: document.getElementById("rl-details"),
+  astarSettings: document.getElementById("astar-settings"),
+  astarDetails: document.getElementById("astar-details"),
   astarMaxVisits: document.getElementById("astar-max-visits"),
   astarMaxVisitsSource: document.getElementById("astar-max-visits-source"),
   embeddingThreshold: document.getElementById("embedding-threshold"),
@@ -76,16 +90,14 @@ const debouncedUpdateSuggestions = {
 };
 
 document.addEventListener("DOMContentLoaded", init);
-els.modelSelect.addEventListener("change", async () => {
-  renderDimensionOptions();
-  await loadAdvancedDefaults();
-});
-els.dimSelect.addEventListener("change", loadAdvancedDefaults);
+els.methodSelect.addEventListener("change", handleMethodChange);
+els.astarDimensionSelect.addEventListener("change", handleAstarDimensionChange);
 els.graphSelect.addEventListener("change", handleGraphChange);
+els.bfsSearchCap.addEventListener("input", handleBfsCapInput);
 els.pickSource.addEventListener("click", () => setPickMode("source"));
 els.pickTarget.addEventListener("click", () => setPickMode("target"));
 els.reloadSubgraph.addEventListener("click", () => loadSubgraph());
-els.controls.addEventListener("submit", runAStar);
+els.controls.addEventListener("submit", runInference);
 els.sourceInput.addEventListener("input", () => handleEndpointInput("source"));
 els.targetInput.addEventListener("input", () => handleEndpointInput("target"));
 
@@ -111,24 +123,81 @@ function renderOptions() {
     els.graphSelect.append(new Option(graphOption.label, graphOption.id));
   }
   els.graphSelect.value = state.options.defaults.graph;
-
-  els.modelSelect.innerHTML = "";
-  for (const model of state.options.models) {
-    els.modelSelect.append(new Option(model.label, model.id));
-  }
-  els.modelSelect.value = state.options.defaults.model;
-  renderDimensionOptions();
+  renderGraphInfo();
+  renderMethodOptions(state.options.defaults.method);
+  renderAdvancedSettings();
 }
 
-function renderDimensionOptions() {
-  const model = selectedModel();
-  els.dimSelect.innerHTML = "";
-  if (!model) return;
+function renderMethodOptions(preferredMethod = els.methodSelect.value) {
+  const currentGraph = els.graphSelect.value;
+  const selectedValue = preferredMethod || state.options.defaults.method;
+  const selectedDimension = selectedAstarDimension();
+  els.methodSelect.innerHTML = "";
 
-  for (const dim of model.dims) {
-    const suffix = dim === model.model_dim ? " (full)" : "";
-    els.dimSelect.append(new Option(`${dim}${suffix}`, String(dim)));
+  for (const method of state.options.methods) {
+    const option = new Option(method.label, method.id);
+    option.disabled = !isMethodSupportedForGraph(method, currentGraph);
+    els.methodSelect.append(option);
   }
+
+  if (selectedValue) {
+    els.methodSelect.value = selectedValue;
+  }
+  if (!els.methodSelect.value && state.options.methods.length) {
+    els.methodSelect.value = state.options.methods[0].id;
+  }
+  renderAstarDimensionOptions(selectedDimension);
+  validateSelectedMethod();
+}
+
+function renderAstarDimensionOptions(preferredDimension = null) {
+  const method = selectedMethod();
+  const dimensions = method?.algorithm === "astar" ? method.config.dimensions || [] : [];
+  els.astarDimensionSelect.innerHTML = "";
+  els.astarDimensionControl.hidden = dimensions.length === 0;
+  if (!dimensions.length) return;
+
+  for (const dimension of dimensions) {
+    els.astarDimensionSelect.append(new Option(`d = ${dimension}`, String(dimension)));
+  }
+
+  const currentDimension = Number(preferredDimension ?? els.astarDimensionSelect.value);
+  const defaultDimension = method.config.default_dimension;
+  const selectedDimension = dimensions.includes(currentDimension)
+    ? currentDimension
+    : defaultDimension;
+  els.astarDimensionSelect.value = String(selectedDimension);
+}
+
+function renderGraphInfo() {
+  const graphOption = selectedGraphOption();
+  els.graphSize.textContent = graphOption ? graphOption.size_label : "";
+}
+
+function renderAdvancedSettings() {
+  const method = selectedMethod();
+  hideAllMethodSettings();
+  if (!method) return;
+
+  if (method.algorithm === "bfs") {
+    els.bfsSettings.hidden = false;
+    renderBfsCapInfo();
+  } else if (method.algorithm === "rl") {
+    els.rlSettings.hidden = false;
+    renderRlDetails(method.config);
+  } else if (method.algorithm === "astar") {
+    els.astarSettings.hidden = false;
+    renderAstarDetails({
+      ...method.config,
+      dimension: selectedAstarDimension(),
+    });
+  }
+}
+
+function hideAllMethodSettings() {
+  els.bfsSettings.hidden = true;
+  els.rlSettings.hidden = true;
+  els.astarSettings.hidden = true;
 }
 
 async function loadSubgraph(center = null) {
@@ -180,16 +249,41 @@ async function handleNodeClick(node) {
 }
 
 async function handleGraphChange() {
+  const previousBfsMode = state.bfsCapMode;
   resetGraphSelectionState();
+  renderGraphInfo();
+  renderMethodOptions();
+  if (selectedMethod()?.algorithm === "bfs" && previousBfsMode === "default_p95") {
+    state.bfsCapMode = "default_p95";
+  }
+  renderAdvancedSettings();
   await loadAdvancedDefaults();
   await loadSubgraph();
+}
+
+async function handleMethodChange() {
+  clearPath();
+  setStatus("Ready", "idle");
+  renderAstarDimensionOptions();
+  validateSelectedMethod();
+  renderAdvancedSettings();
+  await loadAdvancedDefaults();
+}
+
+async function handleAstarDimensionChange() {
+  clearPath();
+  setStatus("Ready", "idle");
+  renderAdvancedSettings();
+  await loadAdvancedDefaults();
 }
 
 function resetGraphSelectionState() {
   state.subgraphRequestId += 1;
   state.selectedSource = "";
   state.selectedTarget = "";
-  state.lastPathEdges = new Set();
+  state.lastPathNodes = new Set();
+  state.suggestionRequestIds.source += 1;
+  state.suggestionRequestIds.target += 1;
   els.sourceInput.value = "";
   els.targetInput.value = "";
   els.sourceSuggestions.innerHTML = "";
@@ -204,7 +298,7 @@ function resetGraphSelectionState() {
 function updateLocalNodeStatuses() {
   const data = graph.graphData();
   for (const node of data.nodes) {
-    const onPath = state.lastPathEdges.has(node.id);
+    const onPath = state.lastPathNodes.has(node.id);
     if (node.id === els.sourceInput.value.trim()) {
       node.status = "source";
     } else if (node.id === els.targetInput.value.trim()) {
@@ -246,10 +340,23 @@ function handleEndpointInput(kind) {
   debouncedUpdateSuggestions[kind]();
 }
 
+function handleBfsCapInput() {
+  const cap = readIntegerInput(els.bfsSearchCap);
+  if (cap === null) {
+    state.bfsCapMode = "default_p95";
+  } else if (cap === -1) {
+    state.bfsCapMode = "uncapped";
+  } else {
+    state.bfsCapMode = "custom";
+  }
+  renderBfsCapInfo();
+}
+
 async function updateSuggestions(kind) {
   const input = kind === "source" ? els.sourceInput : els.targetInput;
   const list = kind === "source" ? els.sourceSuggestions : els.targetSuggestions;
   const query = input.value.trim();
+  const requestId = ++state.suggestionRequestIds[kind];
   if (!query) {
     list.innerHTML = "";
     return;
@@ -263,6 +370,7 @@ async function updateSuggestions(kind) {
 
   try {
     const payload = await apiGet(`/api/nodes?${params.toString()}`);
+    if (requestId !== state.suggestionRequestIds[kind]) return;
     list.innerHTML = "";
     for (const node of payload.nodes) {
       const option = document.createElement("option");
@@ -270,25 +378,32 @@ async function updateSuggestions(kind) {
       list.append(option);
     }
   } catch (error) {
+    if (requestId !== state.suggestionRequestIds[kind]) return;
     showError(error.message);
   }
 }
 
-async function runAStar(event) {
+async function runInference(event) {
   event.preventDefault();
   hideError();
   clearPath();
 
+  const method = selectedMethod();
+  if (!method) {
+    showError("Select a search method.");
+    return;
+  }
+  if (!isMethodSupportedForGraph(method, els.graphSelect.value)) {
+    showError(unsupportedMethodMessage(method));
+    return;
+  }
+
   const body = {
-    graph: els.graphSelect.value,
-    model: els.modelSelect.value,
-    dim: Number(els.dimSelect.value),
+    algorithm: method.algorithm,
+    graph_id: els.graphSelect.value,
     source: els.sourceInput.value.trim(),
     target: els.targetInput.value.trim(),
-    config: {
-      astar_max_visits: readIntegerInput(els.astarMaxVisits),
-      embedding_index_min_successors: readIntegerInput(els.embeddingThreshold),
-    },
+    config: configForSelectedMethod(method),
   };
 
   if (!body.source || !body.target) {
@@ -296,10 +411,13 @@ async function runAStar(event) {
     return;
   }
 
-  setBusy(true, "Running A*...");
-  setStatus("Running A*...", "idle");
+  const runLabel = method.algorithm === "astar"
+    ? `${method.label} (d=${selectedAstarDimension()})`
+    : resultMethodLabel(method);
+  setBusy(true, `Running ${runLabel}...`);
+  setStatus(`Running ${runLabel}...`, "idle");
   try {
-    const result = await apiPost("/api/astar", body);
+    const result = await apiPost("/api/infer", body);
     renderResult(result);
     drawGraph(result.graph);
     els.caption.textContent = result.found
@@ -313,25 +431,67 @@ async function runAStar(event) {
   }
 }
 
+function configForSelectedMethod(method) {
+  if (method.algorithm === "bfs") {
+    return { cap: readIntegerInput(els.bfsSearchCap) };
+  }
+  if (method.algorithm === "rl") {
+    return { policy_config_id: method.config.policy_config_id };
+  }
+  return {
+    model_config_id: method.id,
+    dimension: selectedAstarDimension(),
+    astar_max_visits: readIntegerInput(els.astarMaxVisits),
+    embedding_index_min_successors: readIntegerInput(els.embeddingThreshold),
+  };
+}
+
 async function loadAdvancedDefaults() {
-  const model = selectedModel();
-  if (!model || !els.dimSelect.value) return;
+  const method = selectedMethod();
+  if (!method || !isMethodSupportedForGraph(method, els.graphSelect.value)) {
+    renderAdvancedSettings();
+    return;
+  }
 
   const params = new URLSearchParams({
     graph: els.graphSelect.value,
-    model: els.modelSelect.value,
-    dim: els.dimSelect.value,
+    algorithm: method.algorithm,
   });
+  if (method.algorithm === "astar") {
+    params.set("method", method.id);
+    params.set("dim", String(selectedAstarDimension()));
+  }
 
   try {
     const payload = await apiGet(`/api/config?${params.toString()}`);
-    els.astarMaxVisits.value = String(payload.astar_max_visits);
-    els.astarMaxVisitsSource.textContent = payload.astar_max_visits_source;
-    els.embeddingThreshold.value = String(payload.embedding_index_min_successors);
+    if (payload.algorithm === "bfs") {
+      state.bfsDefaults.set(els.graphSelect.value, payload);
+      if (state.bfsCapMode === "default_p95" || !els.bfsSearchCap.value.trim()) {
+        els.bfsSearchCap.value = String(payload.bfs_cap);
+        state.bfsCapMode = "default_p95";
+      }
+      renderBfsCapInfo(payload);
+    } else if (payload.algorithm === "rl") {
+      renderRlDetails(payload.policy);
+    } else {
+      els.astarMaxVisits.value = String(payload.astar_max_visits);
+      els.astarMaxVisitsSource.textContent = payload.astar_max_visits_source;
+      els.embeddingThreshold.value = String(payload.embedding_index_min_successors);
+      renderAstarDetails({
+        ...method.config,
+        dimension: payload.model?.selected_dim ?? selectedAstarDimension(),
+      });
+    }
   } catch (error) {
-    els.astarMaxVisits.value = "-1";
-    els.astarMaxVisitsSource.textContent = "uncapped; default lookup failed";
-    els.embeddingThreshold.value = "16";
+    if (method.algorithm === "bfs") {
+      els.bfsSearchCap.value = "-1";
+      state.bfsCapMode = "uncapped";
+      renderBfsCapInfo();
+    } else if (method.algorithm === "astar") {
+      els.astarMaxVisits.value = "-1";
+      els.astarMaxVisitsSource.textContent = "uncapped; default lookup failed";
+      els.embeddingThreshold.value = "16";
+    }
     showError(error.message);
   }
 }
@@ -341,29 +501,96 @@ function renderResult(result) {
   els.metricVisited.textContent = formatNumber(result.visited_nodes);
   els.metricRuntime.textContent = `${formatNumber(result.runtime_ms)} ms`;
   els.pathList.innerHTML = "";
-  state.lastPathEdges = new Set(result.path || []);
+  els.pathList.className = `path-list ${result.found ? "path-found" : "path-missing"}`;
+  state.lastPathNodes = new Set(result.path || []);
 
   if (result.found) {
-    setStatus("Path found", "found");
+    setResultStatus(result.config_label, "Path found", "found");
     for (const node of result.path) {
       const item = document.createElement("li");
       item.textContent = node;
       els.pathList.append(item);
     }
   } else {
-    setStatus("No path found", "missing");
+    setResultStatus(
+      result.config_label,
+      formatTermination(result.termination_reason),
+      "missing",
+    );
     const item = document.createElement("li");
-    item.textContent = `${result.source} -> ${result.target}`;
+    item.textContent = "No path found";
     els.pathList.append(item);
   }
 }
 
 function clearPath() {
-  state.lastPathEdges = new Set();
+  state.lastPathNodes = new Set();
   els.metricHops.textContent = "-";
   els.metricVisited.textContent = "-";
   els.metricRuntime.textContent = "-";
   els.pathList.innerHTML = "";
+  els.pathList.className = "path-list";
+}
+
+function renderBfsCapInfo(payload = null) {
+  const graphId = els.graphSelect.value;
+  const defaults = payload || state.bfsDefaults.get(graphId);
+  const graphOption = selectedGraphOption();
+  const defaultCap = defaults?.bfs_cap ?? graphOption?.bfs_p95_cap ?? -1;
+  const defaultSource = defaults?.bfs_cap_source || graphOption?.bfs_p95_cap_source || "";
+  const currentCap = readIntegerInput(els.bfsSearchCap);
+
+  if (state.bfsCapMode === "default_p95" && !els.bfsSearchCap.value.trim()) {
+    els.bfsSearchCap.value = String(defaultCap);
+  }
+
+  if (state.bfsCapMode === "uncapped" || currentCap === -1) {
+    els.bfsCapMode.textContent = "BFS (uncapped)";
+    els.bfsCapSource.textContent = "-1 disables the visited-node cap.";
+  } else if (state.bfsCapMode === "default_p95") {
+    els.bfsCapMode.textContent = "BFS (p95 cap)";
+    els.bfsCapSource.textContent = defaultSource;
+  } else {
+    els.bfsCapMode.textContent = "BFS (custom cap)";
+    els.bfsCapSource.textContent = `Current p95 default for this graph: ${formatNumber(defaultCap)}.`;
+  }
+}
+
+function renderRlDetails(config) {
+  renderDetails(els.rlDetails, [
+    ["Policy", config.policy_label || "RL"],
+    ["Description", config.description],
+    ["Checkpoint", config.checkpoint],
+    ["Parameters", config.parameters],
+    ["Beam width", config.rl_beam_width],
+    ["Max path length", config.rl_max_path_len],
+    ["Max actions", config.rl_max_actions],
+    ["Max visits", formatCap(config.rl_max_visits)],
+  ]);
+}
+
+function renderAstarDetails(config) {
+  renderDetails(els.astarDetails, [
+    ["Embedding", config.model_label],
+    ["Identifier", config.model_identifier],
+    ["Parameters", config.parameters],
+    ["Dimension", config.dimension],
+    ["Activation", labelValue(config.activation)],
+    ["Distance", labelValue(config.distance)],
+    ["Variant", labelValue(config.variant)],
+  ]);
+}
+
+function renderDetails(container, rows) {
+  container.innerHTML = "";
+  for (const [label, value] of rows) {
+    if (value === null || value === undefined || value === "") continue;
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const description = document.createElement("dd");
+    description.textContent = String(value);
+    container.append(term, description);
+  }
 }
 
 function setStatus(text, mode) {
@@ -371,22 +598,78 @@ function setStatus(text, mode) {
   els.resultStatus.className = `result-status ${mode}`;
 }
 
+function setResultStatus(modelLabel, outcome, mode) {
+  const copy = document.createElement("span");
+  copy.className = "result-status-copy";
+
+  const model = document.createElement("span");
+  model.className = "result-status-model";
+  model.textContent = modelLabel;
+  model.title = modelLabel;
+
+  const result = document.createElement("span");
+  result.className = "result-status-outcome";
+  result.textContent = outcome;
+
+  copy.append(model, result);
+  els.resultStatus.replaceChildren(copy);
+  els.resultStatus.className = `result-status has-summary ${mode}`;
+}
+
 function setBusy(isBusy, caption = null) {
-  els.runButton.disabled = isBusy;
+  state.busy = isBusy;
   els.graphSelect.disabled = isBusy;
-  els.modelSelect.disabled = isBusy;
-  els.dimSelect.disabled = isBusy;
+  els.methodSelect.disabled = isBusy;
+  els.astarDimensionSelect.disabled = isBusy;
+  els.bfsSearchCap.disabled = isBusy;
   els.astarMaxVisits.disabled = isBusy;
   els.embeddingThreshold.disabled = isBusy;
   if (caption) els.caption.textContent = caption;
+  validateSelectedMethod();
 }
 
-function selectedModel() {
-  return state.options.models.find((model) => model.id === els.modelSelect.value);
+function validateSelectedMethod() {
+  const method = selectedMethod();
+  if (!method) {
+    els.methodValidation.textContent = "";
+    els.runButton.disabled = true;
+    return false;
+  }
+  const supported = isMethodSupportedForGraph(method, els.graphSelect.value);
+  els.methodValidation.textContent = supported ? "" : unsupportedMethodMessage(method);
+  els.runButton.disabled = state.busy || !supported;
+  return supported;
+}
+
+function selectedMethod() {
+  return state.options?.methods.find((method) => method.id === els.methodSelect.value);
+}
+
+function selectedAstarDimension() {
+  const dimension = Number.parseInt(els.astarDimensionSelect.value, 10);
+  return Number.isInteger(dimension) ? dimension : null;
 }
 
 function selectedGraphOption() {
-  return state.options.graphs.find((graphOption) => graphOption.id === els.graphSelect.value);
+  return state.options?.graphs.find((graphOption) => graphOption.id === els.graphSelect.value);
+}
+
+function isMethodSupportedForGraph(method, graphId) {
+  return method?.supported_graphs?.includes(graphId);
+}
+
+function unsupportedMethodMessage(method) {
+  const graphOption = selectedGraphOption();
+  return `${method.label} is not supported for ${graphOption?.label || els.graphSelect.value}.`;
+}
+
+function resultMethodLabel(method) {
+  if (method.algorithm === "bfs") {
+    if (state.bfsCapMode === "uncapped") return "BFS (uncapped)";
+    if (state.bfsCapMode === "custom") return "BFS (custom cap)";
+    return "BFS (p95 cap)";
+  }
+  return method.label;
 }
 
 function graphCaption(payload, center = null) {
@@ -460,6 +743,40 @@ function formatNumber(value) {
   return new Intl.NumberFormat(undefined, {
     maximumFractionDigits: 2,
   }).format(value);
+}
+
+function formatCap(value) {
+  if (value === null || value === undefined) return "-";
+  if (Number(value) === -1) return "uncapped";
+  return formatNumber(value);
+}
+
+function formatTermination(reason) {
+  const labels = {
+    path_found: "path found",
+    target_unreachable: "target unreachable",
+    cap_reached: "cap reached",
+    frontier_exhausted: "frontier exhausted",
+    rl_policy_terminated: "RL policy terminated",
+    invalid_source_or_target: "invalid source or target",
+    error: "error",
+  };
+  return labels[reason] || reason || "no path found";
+}
+
+function labelValue(value) {
+  if (!value) return value;
+  const labels = {
+    relu: "ReLU",
+    gelu: "GELU",
+    cosine: "Cosine",
+    euclid: "Euclidean",
+    euclidean: "Euclidean",
+    base: "Base",
+    finetuned: "Fine-tuned",
+    ablation: "Ablation",
+  };
+  return labels[value] || value;
 }
 
 function readIntegerInput(input) {

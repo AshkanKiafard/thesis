@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Tuple
 
 import networkx as nx
 
+from core import model_registry
 from core.config import (
     DEFAULT_ABLATION_BASE_MODEL_NAME,
     DEFAULT_ABLATION_COMBOS,
@@ -532,7 +533,7 @@ def get_matryoshka_dims(model_dim: int) -> list[int]:
     # Use a set to avoid duplicate dimensions.
     dims = {model_dim}
 
-    # Generate powers-of-two dimensions starting from 64.
+    # Generate powers-of-two dimensions starting from 2.
     # These represent progressively compressed embedding sizes.
     base_dim = 2
     while base_dim < model_dim:
@@ -549,80 +550,26 @@ def get_matryoshka_dims(model_dim: int) -> list[int]:
     return sorted(dims, reverse=True)
 
 
-MODEL_NAME_STOP_TOKENS = {
-    "relu",
-    "gelu",
-    "cosine",
-    "euclid",
-    "norm",
-    "nonorm",
-    "matryoshka",
-    "single",
-    "best",
-}
-
-BASE_MODEL_DISPLAY_LABELS = {
-    "all-mpnet-base-v2": "all-mpnet-base-v2",
-    "all-MiniLM-L12-v2": "all-MiniLM-L12-v2",
-    "multi-qa-mpnet-base-cos-v1": "multi-qa-mpnet-base-cos-v1",
-    "bge-base-en-v1.5": "BGE base v1.5",
-    "bge-large-en-v1.5": "BGE large v1.5",
-    "mxbai-embed-large-v1": "mxbai large v1",
-    "Qwen3-Embedding-0.6B": "Qwen3 Embedding 0.6B",
-    "Qwen3-Embedding-4B": "Qwen3 Embedding 4B",
-    "granite-embedding-small-english-r2": "Granite Small English r2",
-    "granite-embedding-english-r2": "Granite English r2",
-    "BFS_Uncapped_Baseline": "BFS (no max visits)",
-    "BFS_Baseline": "BFS (max visits)",
-    "RL_Baseline": "RL Baseline",
-}
-
-MODEL_CONFIG_TOKEN_LABELS = {
-    "relu": "ReLU",
-    "gelu": "GELU",
-    "cosine": "Cosine",
-    "euclid": "Euclidean",
-    "norm": "Norm",
-    "nonorm": "NoNorm",
-    "matryoshka": "Matryoshka",
-    "single": "Single",
-}
+MODEL_NAME_STOP_TOKENS = model_registry.MODEL_NAME_STOP_TOKENS
 
 def get_model_base_name(model_name: str) -> str:
-    name = Path(str(model_name)).name
-    name = name.removesuffix("_finetuned")
-    name = name.removesuffix("_best")
-    parts = name.split("_")
-
-    base_parts = []
-    for part in parts:
-        if part in MODEL_NAME_STOP_TOKENS:
-            break
-        base_parts.append(part)
-
-    return "_".join(base_parts)
+    return model_registry.get_model_base_name(model_name)
 
 
 def is_finetuned_model_name(model_name: str) -> bool:
-    name = Path(str(model_name)).name
-
-    if name.endswith("_finetuned"):
-        return True
-
-    parts = name.removesuffix("_finetuned").split("_")
-    return any(part in MODEL_NAME_STOP_TOKENS for part in parts)
+    return model_registry.infer_variant(model_name) != "base"
 
 
 def get_model_config_labels(model_name: str) -> list[str]:
-    name = Path(str(model_name)).name
-    name = name.removesuffix("_finetuned")
-    name = name.removesuffix("_best")
     labels = []
-
-    for part in name.split("_"):
-        label = MODEL_CONFIG_TOKEN_LABELS.get(part)
-        if label and label not in labels:
-            labels.append(label)
+    config = model_registry.parse_model_config(
+        model_name,
+        is_finetuned=is_finetuned_model_name(model_name),
+    )
+    if config["activation"]:
+        labels.append(model_registry.activation_label(config["activation"]))
+    if config["distance"]:
+        labels.append(model_registry.distance_label(config["distance"]))
 
     return labels
 
@@ -632,26 +579,22 @@ def format_model_display_name(
     include_config: bool = True,
     config_separator: str = " + ",
 ) -> str:
-    base_name = get_model_base_name(model_name)
-    label = BASE_MODEL_DISPLAY_LABELS.get(base_name, base_name)
-
     if not include_config:
-        return label
+        return model_registry.canonical_model_label(model_name)
 
-    config_labels = get_model_config_labels(model_name)
-    if not config_labels:
-        return label
-
-    return f"{label} - {config_separator.join(config_labels)}"
+    return model_registry.format_model_display_label(
+        model_name,
+        is_finetuned=is_finetuned_model_name(model_name),
+    )
 
 
 def format_model_run_label(model_name: str, dimension: int | None = None) -> str:
-    label = format_model_display_name(model_name)
-
-    if dimension is not None:
-        label = f"{label} \u00b7 dim {dimension}"
-
-    return label
+    return model_registry.format_model_display_label(
+        model_name,
+        dimension=dimension,
+        include_dimension=dimension is not None,
+        is_finetuned=is_finetuned_model_name(model_name),
+    )
 
 
 def parse_activation_func(value: str) -> ActivationFunc:

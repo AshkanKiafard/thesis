@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="en">
 <head>
-    <title>Webis Demo Causal Graph A* Inference</title>
+    <title>Webis Demo Causal Graph Inference</title>
     <meta charset="utf-8">
-    <meta name="description" content="Interactive demo for A* inference on causal graphs">
+    <meta name="description" content="Interactive demo for inference on causal graphs">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="copyright" content="&copy; 2025 Webis">
     <link rel="icon" type="image/png" href="https://assets.webis.de/img/favicon.png">
@@ -40,10 +40,10 @@
 {
     "@context":"http://schema.org/",
     "@type":"Demo",
-    "name":"Causal Graph A* Inference",
-    "description":"Interactive A* inference demo for causal knowledge graphs.",
+    "name":"Causal Graph Inference",
+    "description":"Interactive inference demo for causal knowledge graphs.",
     "url":"http://127.0.0.1:8000/",
-    "keywords":["causal graph", "A*", "inference", "Webis"],
+    "keywords":["causal graph", "BFS", "reinforcement learning", "A*", "inference", "Webis"],
     "creator":[
         {
             "@type":"Organization",
@@ -57,26 +57,28 @@
 
 <main class="uk-section uk-section-default demo-main">
     <div class="uk-container">
-        <h1>Causal Graph A* Inference</h1>
+        <h1>Causal Graph Inference</h1>
 
         <div id="alert" class="demo-alert" hidden></div>
 
-        <section class="demo-layout" aria-label="A* inference demo">
+        <section class="demo-layout" aria-label="Causal graph inference demo">
             <aside class="demo-panel controls-panel">
                 <form id="controls" class="uk-form-stacked">
                     <div class="uk-margin-small-bottom">
                         <label class="uk-form-label" for="graph-select">Causal Graph</label>
                         <select id="graph-select" class="uk-select"></select>
+                        <div id="graph-size" class="advanced-note"></div>
                     </div>
 
                     <div class="uk-margin-small-bottom">
-                        <label class="uk-form-label" for="model-select">A* Model</label>
-                        <select id="model-select" class="uk-select"></select>
+                        <label class="uk-form-label" for="method-select">Search Method</label>
+                        <select id="method-select" class="uk-select"></select>
+                        <div id="method-validation" class="advanced-note"></div>
                     </div>
 
-                    <div class="uk-margin-small-bottom">
-                        <label class="uk-form-label" for="dim-select">Embedding Dimension</label>
-                        <select id="dim-select" class="uk-select"></select>
+                    <div id="astar-dimension-control" class="uk-margin-small-bottom" hidden>
+                        <label class="uk-form-label" for="astar-dimension-select">Dimension</label>
+                        <select id="astar-dimension-select" class="uk-select"></select>
                     </div>
 
                     <div class="uk-margin-small-bottom">
@@ -104,26 +106,43 @@
 
                     <details class="advanced-settings">
                         <summary>Advanced settings</summary>
-                        <div class="uk-margin-small-top">
+                        <div id="bfs-settings" class="method-settings" hidden>
+                            <div class="uk-margin-small-top">
+                                <label class="uk-form-label" for="bfs-search-cap">Search cap</label>
+                                <input id="bfs-search-cap" class="uk-input" type="number" min="-1" step="1">
+                                <div id="bfs-cap-mode" class="advanced-note"></div>
+                                <div id="bfs-cap-source" class="advanced-note"></div>
+                            </div>
+                        </div>
+                        <div id="rl-settings" class="method-settings" hidden>
+                            <dl id="rl-details" class="config-details"></dl>
+                        </div>
+                        <div id="astar-settings" class="method-settings" hidden>
+                            <dl id="astar-details" class="config-details"></dl>
+                            <div class="uk-margin-small-top">
                             <label class="uk-form-label" for="astar-max-visits">A* Max Visits</label>
                             <input id="astar-max-visits" class="uk-input" type="number" min="-1" step="1">
                             <div id="astar-max-visits-source" class="advanced-note"></div>
-                        </div>
-                        <div class="uk-margin-small-top">
-                            <label class="uk-form-label" for="embedding-threshold">Embedding-Index Threshold</label>
-                            <input id="embedding-threshold" class="uk-input" type="number" min="1" step="1">
+                            </div>
+                            <div class="uk-margin-small-top">
+                                <label class="uk-form-label" for="embedding-threshold">Embedding-Index Threshold</label>
+                                <input id="embedding-threshold" class="uk-input" type="number" min="1" step="1">
+                            </div>
                         </div>
                     </details>
 
                     <button id="run-button" type="submit" class="uk-button uk-button-primary run-button">
                         <span data-uk-icon="icon: play; ratio: 0.85"></span>
-                        Run A*
+                        Run Inference
                     </button>
                 </form>
 
                 <div class="result-panel">
-                    <h2>Result</h2>
-                    <div id="result-status" class="result-status idle">Ready</div>
+                    <div class="result-heading">
+                        <h2>Result</h2>
+                        <span>Search summary</span>
+                    </div>
+                    <div id="result-status" class="result-status idle" aria-live="polite">Ready</div>
                     <dl class="metrics">
                         <div><dt>Hops</dt><dd id="metric-hops">-</dd></div>
                         <div><dt>Visited</dt><dd id="metric-visited">-</dd></div>

@@ -6,6 +6,7 @@ import os
 import pickle
 import threading
 import time
+from bisect import bisect_left
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -20,15 +21,19 @@ os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from core.config import (
     BASE_MODELS,
     DEFAULT_EMBEDDING_BATCH_SIZE,
+    DEFAULT_P95_CONFIG_SOURCE_DATASET,
+    DEFAULT_P95_CONFIG_SOURCE_GRAPH,
     DEFAULT_RUN_SUFFIX as CONFIG_DEFAULT_RUN_SUFFIX,
     EMBEDDING_INDEX_MIN_SUCCESSORS,
 )
 from core.constants import (
+    BFS_CAPPED_BASELINE_MODEL,
+    BFS_UNCAPPED_BASELINE_MODEL,
     EMBEDDINGS_DIR,
     EVALUATION_DIR,
     LIGHTNING_MODELS_DIR,
@@ -36,17 +41,38 @@ from core.constants import (
     WEB_DEMO_GRAPH_CACHE_DIR,
     WEB_DEMO_GRAPH_PREVIEW_CACHE_DIR,
 )
-from core.graph_config import DEFAULT_GRAPH_NAME, GRAPH_CONFIGS, get_graph_label
+from core.graph_config import (
+    DEFAULT_INFERENCE_GRAPH,
+    GRAPH_CONFIGS,
+    SUPPORTED_INFERENCE_GRAPHS,
+    get_graph_bfs_p95_cap,
+    get_graph_cache_suffix,
+    get_graph_label,
+    get_graph_node_universe,
+    graph_supports_algorithm,
+)
+from core.inference_registry import (
+    DEFAULT_RL_POLICY_ID,
+    get_rl_policy_config,
+    graph_supports_rl,
+)
+from core.model_registry import (
+    MODEL_DIMENSIONS,
+    distance_config_token,
+    format_model_display_label,
+    get_embedding_model,
+    method_sort_key,
+    parse_model_config,
+    stable_config_identity,
+)
 from core.utils import (
-    format_model_display_name,
-    get_embedding_cache_suffix,
+    get_ablation_fine_tuned_models,
     get_fine_tuned_models,
-    get_model_config_labels,
     get_matryoshka_dims,
     get_model_distance_metric,
-    get_node_universe_for_graph,
     get_node_universe_path,
     load_causal_graph,
+    load_rl_graph,
     traverse_graph,
 )
 
@@ -77,44 +103,25 @@ PRELOAD_MODEL_RUNTIMES = (
     PRELOAD_MODELS_SETTING.lower()
     not in {"0", "false", "no", "none", "off"}
 )
-SUPPORTED_DEMO_GRAPHS = ("causenet", "causalbank")
-
-
-def parse_demo_graph_choices() -> tuple[str, ...]:
-    requested_graphs = os.environ.get(
-        "WEB_DEMO_GRAPHS",
-        ",".join(SUPPORTED_DEMO_GRAPHS),
-    )
-    choices = []
-
-    for raw_name in requested_graphs.split(","):
-        graph_name = raw_name.strip()
-        if not graph_name:
-            continue
-        if graph_name not in SUPPORTED_DEMO_GRAPHS:
-            print(
-                "Ignoring unsupported web-demo graph "
-                f"'{graph_name}'. Supported demo graphs: "
-                f"{', '.join(SUPPORTED_DEMO_GRAPHS)}.",
-                flush=True,
-            )
-            continue
-        if graph_name not in choices:
-            choices.append(graph_name)
-
-    return tuple(choices or SUPPORTED_DEMO_GRAPHS)
-
-
-DEMO_GRAPH_CHOICES = parse_demo_graph_choices()
+LOAD_ALL_MODELS = os.environ.get("WEB_DEMO_LOAD_ALL", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+BEST_MODEL_KEY = "granite"
+BEST_MODEL_VARIANT = "finetuned"
+BEST_MODEL_ACTIVATION = "relu"
+BEST_MODEL_DISTANCE = "euclid"
+BEST_MODEL_DIMENSION = 32
+DEFAULT_GRAPH_NAME = DEFAULT_INFERENCE_GRAPH
+DEMO_GRAPH_CHOICES = SUPPORTED_INFERENCE_GRAPHS
 
 MODEL_DIM_HINTS = {
-    "sentence-transformers/all-mpnet-base-v2": 768,
+    **MODEL_DIMENSIONS,
     "sentence-transformers/all-MiniLM-L12-v2": 384,
     "sentence-transformers/multi-qa-mpnet-base-cos-v1": 768,
     "BAAI/bge-base-en-v1.5": 768,
-    "BAAI/bge-large-en-v1.5": 1024,
-    "mixedbread-ai/mxbai-embed-large-v1": 1024,
-    "Qwen/Qwen3-Embedding-0.6B": 1024,
     "Qwen/Qwen3-Embedding-4B": 2560,
 }
 
@@ -139,6 +146,34 @@ class ModelRuntime:
     lock: Any = field(default_factory=threading.RLock)
 
 
+@dataclass
+class RLRuntime:
+    policy_config_id: str
+    embedder: Any
+    graphs: dict[str, Any]
+    lock: Any = field(default_factory=threading.RLock)
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class BFSConfig(StrictModel):
+    cap: int | None = None
+
+
+class RLConfig(StrictModel):
+    policy_config_id: str | None = None
+
+
+class InferenceAStarConfig(StrictModel):
+    model_config_id: str | None = None
+    model_id: str | None = None
+    dimension: int | None = None
+    astar_max_visits: int | None = None
+    embedding_index_min_successors: int | None = None
+
+
 class AStarConfig(BaseModel):
     astar_max_visits: int | None = None
     embedding_index_min_successors: int | None = None
@@ -153,38 +188,47 @@ class AStarRequest(BaseModel):
     config: AStarConfig = Field(default_factory=AStarConfig)
 
 
+class InferenceRequest(StrictModel):
+    algorithm: str
+    graph_id: str | None = None
+    graph: str | None = None
+    source: str
+    target: str
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
     preload_inference_modules()
     preload_demo_graphs()
     preload_demo_model_runtimes()
+    preload_demo_rl_runtime()
     yield
 
 
 app = FastAPI(
-    title="Causal Graph A* Demo",
-    description="Interactive Webis-style demo for causal-graph A* inference.",
+    title="Causal Graph Inference Demo",
+    description="Interactive Webis-style demo for causal-graph inference.",
     version="1.0.0",
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# The web demo intentionally exposes only the small/filtered graph variants.
-# They are preloaded during FastAPI startup so A* timing is not polluted by
-# graph deserialization. The parsed graph cache is still lazy per graph name
-# inside get_graph_bundle(), but startup calls it for every exposed demo graph
-# before the UI can respond. By default every model exposed by the UI is also
-# warmed once: one runtime per model/cache suffix, with a full-dimension
-# embedding table that lower matryoshka dims reuse by slicing. CLI
-# training/evaluation code does not use this module, so its loading behavior is
-# unchanged.
+# The web demo exposes the three graph variants used by the evaluation workflow.
+# Startup deliberately loads and prepares every graph, graph preview, A* runtime,
+# and RL runtime. A slow startup is preferable to a UI that occasionally blocks
+# on a first graph/model request. Parsed graph and preview caches still make
+# subsequent starts faster.
 _graph_cache: dict[str, GraphBundle] = {}
 _graph_lock = threading.Lock()
-_graph_warmup_edges: dict[str, tuple[str, str]] = {}
+_graph_warmup_queries: dict[str, tuple[str, str]] = {}
+_overview_visual_cache: dict[tuple[str, int], dict[str, Any]] = {}
 _preload_status: dict[str, dict[str, Any]] = {}
 _preload_complete = False
-_model_cache: dict[tuple[str, str | None], ModelRuntime] = {}
+_model_cache: dict[tuple[str, str | None, str], ModelRuntime] = {}
 _model_lock = threading.Lock()
+_rl_runtime_cache: dict[str, RLRuntime] = {}
+_rl_runtime_lock = threading.Lock()
 _model_preload_status: dict[str, Any] = {
     "enabled": PRELOAD_MODEL_RUNTIMES,
     "setting": PRELOAD_MODELS_SETTING or "all",
@@ -200,34 +244,40 @@ def index():
 
 @app.get("/api/options")
 def options():
-    models = discover_models()
+    models = get_demo_models(discover_models())
+    methods = discover_search_methods(models)
     available_graphs = get_available_demo_graphs()
-    graphs = [
-        {
-            "id": graph_name,
-            "label": get_graph_label(graph_name),
-            "path": str(resolve_code_path(config["path"])),
-        }
-        for graph_name in available_graphs
-        for config in (GRAPH_CONFIGS[graph_name],)
-    ]
+    graphs = [graph_option_payload(graph_name) for graph_name in available_graphs]
     default_graph = (
         DEFAULT_GRAPH_NAME
         if DEFAULT_GRAPH_NAME in available_graphs
         else available_graphs[0] if available_graphs else None
     )
+    default_method = next(
+        (
+            method["id"]
+            for method in methods
+            if default_graph in method.get("supported_graphs", ())
+        ),
+        methods[0]["id"] if methods else None,
+    )
 
     return {
         "graphs": graphs,
+        "methods": methods,
         "models": models,
         "defaults": {
             "graph": default_graph,
+            "method": default_method,
             "model": models[0]["id"] if models else None,
             "dim": models[0]["dims"][0] if models else None,
         },
         "advanced": {
             "run_suffix": DEFAULT_RUN_SUFFIX,
             "embedding_index_min_successors": EMBEDDING_INDEX_MIN_SUCCESSORS,
+            "bfs_cap_source_dataset": DEFAULT_P95_CONFIG_SOURCE_DATASET,
+            "bfs_cap_source_graph": DEFAULT_P95_CONFIG_SOURCE_GRAPH,
+            "load_all": LOAD_ALL_MODELS,
         },
         "limits": {
             "initial_subgraph_nodes": SUBGRAPH_LIMIT,
@@ -244,6 +294,8 @@ def preload_status():
             {
                 "id": graph_name,
                 "label": get_graph_label(graph_name),
+                "nodes": GRAPH_CONFIGS[graph_name]["nodes"],
+                "edges": GRAPH_CONFIGS[graph_name]["edges"],
                 **_preload_status.get(graph_name, {"loaded": False}),
             }
             for graph_name in DEMO_GRAPH_CHOICES
@@ -255,25 +307,49 @@ def preload_status():
 @app.get("/api/config")
 def config_defaults(
     graph: str = Query(default=DEFAULT_GRAPH_NAME),
-    model: str = Query(...),
-    dim: int = Query(..., ge=1),
+    algorithm: str = Query(default="astar"),
+    method: str | None = Query(default=None),
+    model: str | None = Query(default=None),
+    dim: int | None = Query(default=None, ge=1),
 ):
     validate_demo_graph_name(graph)
+    algorithm = normalize_algorithm(algorithm)
 
-    model_option = get_model_option(model)
-    if model_option is None:
-        raise HTTPException(status_code=400, detail=f"Unknown model '{model}'.")
-    if dim not in model_option["dims"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Dimension {dim} is not available for {model_option['label']}.",
-        )
+    if algorithm == "bfs":
+        cap = get_default_bfs_cap(graph)
+        return {
+            "algorithm": "bfs",
+            "bfs_cap": cap["value"],
+            "bfs_cap_source": cap["source"],
+            "bfs_cap_mode": "default_p95",
+        }
 
-    cap = get_default_astar_max_visits(graph, model, dim)
+    if algorithm == "rl":
+        policy = get_rl_policy_config()
+        if not graph_supports_rl(graph, policy.id):
+            raise HTTPException(
+                status_code=400,
+                detail=unsupported_rl_graph_message(graph, policy.id),
+            )
+        return {
+            "algorithm": "rl",
+            "policy": policy.public_config(),
+        }
+
+    model_option = resolve_astar_model_option(method, model, dim)
+
+    cap = get_default_astar_max_visits(
+        graph,
+        model_option["id"],
+        model_option["selected_dim"],
+    )
     return {
+        "algorithm": "astar",
+        "model_config_id": model_option["config_id"],
         "astar_max_visits": cap["value"],
         "astar_max_visits_source": cap["source"],
         "embedding_index_min_successors": EMBEDDING_INDEX_MIN_SUCCESSORS,
+        "model": model_option,
     }
 
 
@@ -299,9 +375,7 @@ def subgraph(
     bundle = get_loaded_graph_bundle(graph)
 
     if not center and not source and not target:
-        cached_overview = load_overview_visual_cache(bundle.name, bundle.path, limit)
-        if cached_overview is not None:
-            return cached_overview
+        return get_overview_visual_graph(bundle, limit)
 
     center_node = canonical_node(bundle, center) if center else None
     source_node = canonical_node(bundle, source) if source else None
@@ -343,81 +417,234 @@ def subgraph(
         else None,
         meta=visual_graph_meta(bundle, "live", limit),
     )
-    if not center_node and not source_node and not target_node:
-        save_overview_visual_cache(bundle.name, bundle.path, limit, visual_graph)
-
     return visual_graph
+
+
+@app.post("/api/infer")
+def infer(request: InferenceRequest):
+    return run_inference(request)
 
 
 @app.post("/api/astar")
 def astar(request: AStarRequest):
-    bundle = get_loaded_graph_bundle(request.graph)
-    model_option = get_model_option(request.model)
-
-    if model_option is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown or unavailable model '{request.model}'.",
+    return run_inference(
+        InferenceRequest(
+            algorithm="astar",
+            graph_id=request.graph,
+            source=request.source,
+            target=request.target,
+            config={
+                "model_id": request.model,
+                "dimension": request.dim,
+                "astar_max_visits": request.config.astar_max_visits,
+                "embedding_index_min_successors": (
+                    request.config.embedding_index_min_successors
+                ),
+            },
         )
+    )
 
-    if request.dim not in model_option["dims"]:
+
+def run_inference(request: InferenceRequest) -> dict[str, Any]:
+    graph_id = request.graph_id or request.graph
+    if not graph_id:
+        raise HTTPException(status_code=400, detail="Missing graph_id.")
+
+    validate_demo_graph_name(graph_id)
+    algorithm = normalize_algorithm(request.algorithm)
+    if not graph_supports_algorithm(graph_id, algorithm):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Dimension {request.dim} is not available for "
-                f"{model_option['label']}."
+                f"{algorithm.upper()} is not supported for "
+                f"{get_graph_label(graph_id)}."
             ),
         )
 
-    source = canonical_node(bundle, request.source)
-    target = canonical_node(bundle, request.target)
+    bundle = get_loaded_graph_bundle(graph_id)
+    source, target = resolve_endpoint_nodes(bundle, request.source, request.target)
 
-    if source is None:
-        raise HTTPException(
-            status_code=400,
-            detail=missing_node_message(bundle, request.source, "start"),
-        )
-    if target is None:
-        raise HTTPException(
-            status_code=400,
-            detail=missing_node_message(bundle, request.target, "target"),
-        )
+    if algorithm == "bfs":
+        return run_bfs_inference(bundle, source, target, request.config)
+    if algorithm == "rl":
+        return run_rl_inference(bundle, source, target, request.config)
+    if algorithm == "astar":
+        return run_astar_inference(bundle, source, target, request.config)
 
-    config = build_astar_runtime_config(bundle.name, model_option, request)
-    runtime = get_model_runtime(
-        model_option["id"],
-        request.dim,
-        get_embedding_cache_suffix(bundle.name),
-        get_node_universe_for_graph(bundle.name),
+    raise HTTPException(status_code=400, detail=f"Unsupported algorithm '{algorithm}'.")
+
+
+def run_bfs_inference(
+    bundle: GraphBundle,
+    source: str,
+    target: str,
+    raw_config: dict[str, Any],
+) -> dict[str, Any]:
+    config_request = parse_algorithm_config(BFSConfig, raw_config)
+    cap = config_request.cap
+    cap_source = None
+    if cap is None:
+        default_cap = get_default_bfs_cap(bundle.name)
+        cap = default_cap["value"]
+        cap_source = default_cap["source"]
+
+    validate_search_cap(cap, "BFS search cap")
+
+    runtime_config = {"bfs_max_visits": cap}
+    started = time.perf_counter()
+    try:
+        import traverse_strategies as ts
+
+        path, visited_nodes = traverse_graph(
+            bundle.graph,
+            source,
+            target,
+            None,
+            ts.bfs_traverse,
+            runtime_config,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"BFS inference failed: {exc}") from exc
+
+    runtime_ms = (time.perf_counter() - started) * 1000.0
+    cap_mode = bfs_cap_mode(bundle.name, cap)
+    return build_inference_response(
+        bundle=bundle,
+        algorithm="bfs",
+        source=source,
+        target=target,
+        path=path,
+        visited_nodes=visited_nodes,
+        runtime_ms=runtime_ms,
+        config_id="bfs",
+        config_label=bfs_result_label(cap, cap_mode),
+        used_config={
+            **runtime_config,
+            "cap_mode": cap_mode,
+            "cap_source": cap_source,
+        },
+        applied_cap=cap,
+        termination_reason=termination_reason(
+            "bfs",
+            bool(path),
+            visited_nodes,
+            cap,
+        ),
     )
+
+
+def run_rl_inference(
+    bundle: GraphBundle,
+    source: str,
+    target: str,
+    raw_config: dict[str, Any],
+) -> dict[str, Any]:
+    config_request = parse_algorithm_config(RLConfig, raw_config)
+    policy = get_rl_policy_config(config_request.policy_config_id)
+    if not graph_supports_rl(bundle.name, policy.id):
+        raise HTTPException(
+            status_code=400,
+            detail=unsupported_rl_graph_message(bundle.name, policy.id),
+        )
+
+    runtime = get_rl_runtime(policy.id)
+    rl_graph = get_rl_graph(runtime, bundle)
+    runtime_config = policy.runtime_config()
+    runtime_config["question"] = f"can {source} cause {target}?"
+
     with runtime.lock:
+        started = time.perf_counter()
         try:
-            runtime.embedder.set_matryoshka_dim(request.dim)
+            import traverse_strategies as ts
+
+            path, visited_nodes = traverse_graph(
+                rl_graph,
+                source,
+                target,
+                runtime.embedder,
+                ts.rl_traverse,
+                runtime_config,
+            )
         except Exception as exc:
             raise HTTPException(
                 status_code=500,
-                detail=f"Could not set embedding dimension {request.dim}: {exc}",
+                detail=f"RL inference failed: {exc}",
+            ) from exc
+        runtime_ms = (time.perf_counter() - started) * 1000.0
+
+    public_config = policy.public_config()
+    return build_inference_response(
+        bundle=bundle,
+        algorithm="rl",
+        source=source,
+        target=target,
+        path=path,
+        visited_nodes=visited_nodes,
+        runtime_ms=runtime_ms,
+        config_id=policy.id,
+        config_label=policy.label,
+        used_config=public_config,
+        applied_cap=public_config["rl_max_visits"],
+        termination_reason=termination_reason(
+            "rl",
+            bool(path),
+            visited_nodes,
+            public_config["rl_max_visits"],
+        ),
+    )
+
+
+def run_astar_inference(
+    bundle: GraphBundle,
+    source: str,
+    target: str,
+    raw_config: dict[str, Any],
+) -> dict[str, Any]:
+    config_request = parse_algorithm_config(InferenceAStarConfig, raw_config)
+    model_option = resolve_astar_model_option(
+        config_request.model_config_id,
+        config_request.model_id,
+        config_request.dimension,
+    )
+
+    runtime_config = build_astar_runtime_config(
+        bundle.name,
+        model_option,
+        config_request,
+    )
+    runtime = get_model_runtime(
+        model_option["id"],
+        model_option["selected_dim"],
+        get_graph_cache_suffix(bundle.name),
+        get_graph_node_universe(bundle.name),
+    )
+    with runtime.lock:
+        try:
+            runtime.embedder.set_matryoshka_dim(model_option["selected_dim"])
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Could not set embedding dimension "
+                    f"{model_option['selected_dim']}: {exc}"
+                ),
             ) from exc
 
         indexed_graph = runtime.indexed_graphs.get(bundle.name)
         if indexed_graph is not None:
-            config["_indexed_graph"] = indexed_graph
+            runtime_config["_indexed_graph"] = indexed_graph
 
         started = time.perf_counter()
         try:
             import traverse_strategies as ts
 
-            # This is the single integration point with the existing inference
-            # code. The runtime lock protects STEmbedder's mutable active
-            # matryoshka dimension while preserving one loaded model per
-            # model/cache suffix.
             path, visited_nodes = traverse_graph(
                 bundle.graph,
                 source,
                 target,
                 runtime.embedder,
                 ts.astar_traverse,
-                config,
+                runtime_config,
             )
         except Exception as exc:
             raise HTTPException(
@@ -426,10 +653,58 @@ def astar(request: AStarRequest):
             ) from exc
 
         runtime_ms = (time.perf_counter() - started) * 1000.0
+
+    public_config = public_astar_config(runtime_config)
+    public_config.update(
+        {
+            "model_config_id": model_option["config_id"],
+            "model_id": model_option["id"],
+            "dimension": model_option["selected_dim"],
+            "label": model_option["selected_label"],
+        }
+    )
+    return build_inference_response(
+        bundle=bundle,
+        algorithm="astar",
+        source=source,
+        target=target,
+        path=path,
+        visited_nodes=visited_nodes,
+        runtime_ms=runtime_ms,
+        config_id=model_option["config_id"],
+        config_label=model_option["selected_label"],
+        used_config=public_config,
+        applied_cap=public_config.get("astar_max_visits"),
+        termination_reason=termination_reason(
+            "astar",
+            bool(path),
+            visited_nodes,
+            public_config.get("astar_max_visits"),
+        ),
+    )
+
+
+def build_inference_response(
+    *,
+    bundle: GraphBundle,
+    algorithm: str,
+    source: str,
+    target: str,
+    path: list[str],
+    visited_nodes: int,
+    runtime_ms: float,
+    config_id: str,
+    config_label: str,
+    used_config: dict[str, Any],
+    applied_cap: int | None,
+    termination_reason: str,
+) -> dict[str, Any]:
     path_edges = path_to_edges(path)
     selected = collect_result_nodes(bundle.graph, path, source, target)
-
     return {
+        "algorithm": algorithm,
+        "graph_id": bundle.name,
+        "graph_label": bundle.label,
         "found": bool(path),
         "path": path,
         "path_edges": path_edges,
@@ -438,7 +713,12 @@ def astar(request: AStarRequest):
         "runtime_ms": round(runtime_ms, 2),
         "source": source,
         "target": target,
-        "used_config": public_astar_config(config),
+        "termination_reason": termination_reason,
+        "applied_cap": applied_cap,
+        "search_budget": applied_cap,
+        "config_id": config_id,
+        "config_label": config_label,
+        "used_config": used_config,
         "graph": build_visual_graph(
             bundle.graph,
             selected,
@@ -452,6 +732,47 @@ def astar(request: AStarRequest):
 def resolve_code_path(path: Path | str) -> Path:
     path = Path(path)
     return path if path.is_absolute() else REPO_ROOT / path
+
+
+def normalize_algorithm(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized in {"a*", "a-star", "astar"}:
+        return "astar"
+    if normalized in {"bfs", "rl"}:
+        return normalized
+    raise HTTPException(
+        status_code=400,
+        detail="Algorithm must be one of: bfs, rl, astar.",
+    )
+
+
+def parse_algorithm_config(model_type, raw_config: dict[str, Any]):
+    try:
+        return model_type.model_validate(raw_config or {})
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
+
+
+def graph_option_payload(graph_name: str) -> dict[str, Any]:
+    config = GRAPH_CONFIGS[graph_name]
+    return {
+        "id": graph_name,
+        "label": config["label"],
+        "nodes": config["nodes"],
+        "edges": config["edges"],
+        "size_label": format_graph_size(config["nodes"], config["edges"]),
+        "bfs_p95_cap": config["bfs_p95_cap"],
+        "bfs_p95_cap_source": config["bfs_p95_cap_source"],
+        "supported_algorithms": list(config["supported_algorithms"]),
+        "cache": {
+            "cache_suffix": config["cache_suffix"],
+            "node_universe": config["node_universe"],
+        },
+    }
+
+
+def format_graph_size(nodes: int, edges: int) -> str:
+    return f"{nodes:,} nodes · {edges:,} edges"
 
 
 def get_available_demo_graphs() -> tuple[str, ...]:
@@ -474,12 +795,162 @@ def validate_demo_graph_name(graph_name: str) -> None:
         )
 
 
+def resolve_endpoint_nodes(
+    bundle: GraphBundle,
+    source_value: str,
+    target_value: str,
+) -> tuple[str, str]:
+    source = canonical_node(bundle, source_value)
+    target = canonical_node(bundle, target_value)
+
+    if source is None:
+        raise HTTPException(
+            status_code=400,
+            detail=missing_node_message(bundle, source_value, "start"),
+        )
+    if target is None:
+        raise HTTPException(
+            status_code=400,
+            detail=missing_node_message(bundle, target_value, "target"),
+        )
+
+    return source, target
+
+
+def get_default_bfs_cap(graph_name: str) -> dict[str, Any]:
+    candidate_graphs = [graph_name]
+    if DEFAULT_P95_CONFIG_SOURCE_GRAPH not in candidate_graphs:
+        candidate_graphs.append(DEFAULT_P95_CONFIG_SOURCE_GRAPH)
+
+    for candidate_graph in candidate_graphs:
+        p95_file = (
+            EVALUATION_DIR
+            / candidate_graph
+            / DEFAULT_P95_CONFIG_SOURCE_DATASET
+            / DEFAULT_RUN_SUFFIX
+            / "visited_nodes_analysis.json"
+        )
+        cap = read_p95_bfs_cap(p95_file)
+        if cap is not None:
+            source_suffix = ""
+            if candidate_graph != graph_name:
+                source_suffix = " via DEFAULT_P95_CONFIG_SOURCE_GRAPH"
+            return {
+                "value": cap,
+                "source": (
+                    f"{candidate_graph}/{DEFAULT_P95_CONFIG_SOURCE_DATASET}/"
+                    f"{DEFAULT_RUN_SUFFIX} p95 successful BFS visits"
+                    f"{source_suffix}"
+                ),
+            }
+
+    cap = get_graph_bfs_p95_cap(graph_name)
+    source = GRAPH_CONFIGS[graph_name].get("bfs_p95_cap_source")
+    if cap is not None:
+        return {
+            "value": cap,
+            "source": source or "central graph registry p95 BFS cap",
+        }
+
+    return {
+        "value": -1,
+        "source": "uncapped; no graph-specific p95 BFS cap configured",
+    }
+
+
+def read_p95_bfs_cap(p95_file: Path) -> int | None:
+    return read_p95_bfs_cap_index(p95_file)
+
+
+@lru_cache(maxsize=16)
+def read_p95_bfs_cap_index(p95_file: Path) -> int | None:
+    if not p95_file.exists():
+        return None
+
+    try:
+        with open(p95_file, encoding="utf-8") as file:
+            entries = json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    for model_name in (BFS_UNCAPPED_BASELINE_MODEL, BFS_CAPPED_BASELINE_MODEL):
+        for entry in entries:
+            analysis = entry.get("analysis", {})
+            if entry.get("model") != model_name or analysis.get("strategy") != "BFS":
+                continue
+            p95_value = analysis.get("p95_visited_successful_only")
+            if p95_value is not None:
+                return int(math.ceil(p95_value))
+
+    return None
+
+
+def validate_search_cap(cap: int, label: str) -> None:
+    if cap < -1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label} must be -1 for uncapped or a non-negative integer.",
+        )
+
+
+def bfs_cap_mode(graph_name: str, cap: int) -> str:
+    if cap == -1:
+        return "uncapped"
+    if cap == get_default_bfs_cap(graph_name)["value"]:
+        return "default_p95"
+    return "custom"
+
+
+def bfs_result_label(cap: int, cap_mode: str) -> str:
+    if cap_mode == "uncapped":
+        return "BFS (uncapped)"
+    if cap_mode == "default_p95":
+        return "BFS (p95 cap)"
+    return "BFS (custom cap)"
+
+
+def termination_reason(
+    algorithm: str,
+    found: bool,
+    visited_nodes: int,
+    cap: int | None,
+) -> str:
+    if found:
+        return "path_found"
+    if cap is not None and cap >= 0 and visited_nodes >= cap:
+        return "cap_reached"
+    if algorithm == "rl":
+        return "rl_policy_terminated"
+    return "frontier_exhausted"
+
+
+def unsupported_rl_graph_message(graph_name: str, policy_config_id: str) -> str:
+    policy = get_rl_policy_config(policy_config_id)
+    supported = ", ".join(get_graph_label(graph) for graph in policy.supported_graphs)
+    return (
+        f"RL policy '{policy.label}' is not supported for "
+        f"{get_graph_label(graph_name)}. Supported graphs: {supported}."
+    )
+
+
 def preload_inference_modules() -> None:
     started = time.perf_counter()
 
     # Import the traversal package during startup so the first UI click does not
-    # pay Python import/module-initialization cost inside the timed A* endpoint.
-    import traverse_strategies  # noqa: F401
+    # pay Python import/module-initialization cost inside the timed endpoint.
+    try:
+        import traverse_strategies  # noqa: F401
+    except ModuleNotFoundError as exc:
+        _model_preload_status["inference_modules"] = {
+            "loaded": False,
+            "error": str(exc),
+        }
+        print(
+            "Could not preload graph inference modules: "
+            f"{exc}. Install the full requirements before running A* or RL.",
+            flush=True,
+        )
+        return
 
     elapsed = time.perf_counter() - started
     _model_preload_status["inference_modules"] = {
@@ -487,7 +958,7 @@ def preload_inference_modules() -> None:
         "elapsed_seconds": round(elapsed, 2),
     }
     print(
-        "Preloaded A* inference modules in "
+        "Preloaded graph inference modules in "
         f"{elapsed:.2f}s.",
         flush=True,
     )
@@ -502,37 +973,99 @@ def preload_demo_graphs() -> None:
 
     started = time.perf_counter()
     print(
-        "Preloading web-demo graphs before serving UI: "
+        "Preloading web-demo graphs and visual previews: "
         f"{', '.join(available_graphs)}",
         flush=True,
     )
 
     for graph_name in available_graphs:
         graph_started = time.perf_counter()
-        _preload_status[graph_name] = {
-            "loaded": False,
-            "path": str(resolve_code_path(GRAPH_CONFIGS[graph_name]["path"])),
-        }
-        bundle = get_graph_bundle(graph_name)
-        elapsed = time.perf_counter() - graph_started
-        _preload_status[graph_name] = {
-            "loaded": True,
-            "path": str(bundle.path),
-            "nodes": bundle.graph.number_of_nodes(),
-            "edges": bundle.graph.number_of_edges(),
-            "elapsed_seconds": round(elapsed, 2),
-        }
+        try:
+            bundle = get_graph_bundle(graph_name)
+            preview = get_overview_visual_graph(bundle, SUBGRAPH_LIMIT)
+        except Exception as exc:
+            _preload_status[graph_name] = {
+                "loaded": False,
+                "path": str(resolve_code_path(GRAPH_CONFIGS[graph_name]["path"])),
+                "nodes": GRAPH_CONFIGS[graph_name]["nodes"],
+                "edges": GRAPH_CONFIGS[graph_name]["edges"],
+                "error": exception_message(exc),
+                "elapsed_seconds": round(time.perf_counter() - graph_started, 2),
+            }
+            print(
+                "Web-demo graph preload failed: "
+                f"{graph_name}: {exception_message(exc)}",
+                flush=True,
+            )
+            raise RuntimeError(
+                f"Could not preload web-demo graph '{graph_name}'."
+            ) from exc
+
+        _preload_status[graph_name].update(
+            {
+                "loaded": True,
+                "preview_loaded": True,
+                "preview_nodes": len(preview["nodes"]),
+                "preview_edges": len(preview["links"]),
+                "elapsed_seconds": round(time.perf_counter() - graph_started, 2),
+            }
+        )
         print(
-            "Preloaded web-demo graph: "
-            f"{graph_name} with {bundle.graph.number_of_nodes():,} nodes and "
-            f"{bundle.graph.number_of_edges():,} edges in {elapsed:.2f}s.",
+            "Finished web-demo graph preload: "
+            f"{graph_name} in {_preload_status[graph_name]['elapsed_seconds']:.2f}s.",
             flush=True,
         )
 
     _preload_complete = True
     print(
-        "Finished web-demo graph preload in "
+        "Finished web-demo graph and preview preload in "
         f"{time.perf_counter() - started:.2f}s.",
+        flush=True,
+    )
+
+
+def preload_demo_rl_runtime() -> None:
+    """Load the RL embedder and all enabled RL graph views before serving."""
+    policy = get_rl_policy_config(DEFAULT_RL_POLICY_ID)
+    started = time.perf_counter()
+    status: dict[str, Any] = {
+        "loaded": False,
+        "policy": policy.id,
+        "graphs": [],
+    }
+    _model_preload_status["rl"] = status
+
+    try:
+        runtime = get_rl_runtime(policy.id)
+        for graph_name in get_available_demo_graphs():
+            if not graph_supports_rl(graph_name, policy.id):
+                continue
+            bundle = get_loaded_graph_bundle(graph_name)
+            get_rl_graph(runtime, bundle)
+            status["graphs"].append(graph_name)
+    except Exception as exc:
+        status.update(
+            {
+                "error": exception_message(exc),
+                "elapsed_seconds": round(time.perf_counter() - started, 2),
+            }
+        )
+        print(
+            "RL runtime preload failed: "
+            f"{exception_message(exc)}",
+            flush=True,
+        )
+        raise RuntimeError("Could not preload the RL runtime.") from exc
+
+    status.update(
+        {
+            "loaded": True,
+            "elapsed_seconds": round(time.perf_counter() - started, 2),
+        }
+    )
+    print(
+        "Finished RL runtime preload in "
+        f"{status['elapsed_seconds']:.2f}s.",
         flush=True,
     )
 
@@ -548,7 +1081,7 @@ def preload_demo_model_runtimes() -> None:
         )
         return
 
-    models = get_model_options_for_preload(discover_models())
+    models = get_model_options_for_preload(get_demo_models(discover_models()))
     if not models:
         _model_preload_status.update(
             {
@@ -561,6 +1094,7 @@ def preload_demo_model_runtimes() -> None:
         return
 
     graph_names = get_available_demo_graphs()
+    runtime_groups = group_graphs_by_embedding_universe(graph_names)
     started = time.perf_counter()
     _model_preload_status.update(
         {
@@ -591,6 +1125,7 @@ def preload_demo_model_runtimes() -> None:
             "dim": dim,
             "warmed_dims": model_option["dims"],
             "loaded": False,
+            "runtime_groups": [],
         }
         _model_preload_status["models"].append(model_status)
 
@@ -601,36 +1136,62 @@ def preload_demo_model_runtimes() -> None:
             flush=True,
         )
 
-        try:
-            runtime = get_model_runtime(
-                model_option["id"],
-                dim,
-                get_embedding_cache_suffix(DEFAULT_GRAPH_NAME),
-                get_node_universe_for_graph(DEFAULT_GRAPH_NAME),
-            )
-            prepare_runtime_indexes(runtime, graph_names)
-            warm_runtime_dimensions(runtime, model_option["dims"])
-            warm_runtime_traversals(runtime, graph_names, model_option["dims"])
-        except Exception as exc:
-            model_status.update(
-                {
-                    "loaded": False,
-                    "error": exception_message(exc),
-                    "elapsed_seconds": round(time.perf_counter() - model_started, 2),
-                }
-            )
+        model_failed = False
+        indexed_graphs = set()
+        for cache_suffix, node_universe, grouped_graph_names in runtime_groups:
+            group_status = {
+                "cache_suffix": cache_suffix,
+                "node_universe": node_universe,
+                "graphs": list(grouped_graph_names),
+                "loaded": False,
+            }
+            model_status["runtime_groups"].append(group_status)
+
+            try:
+                runtime = get_model_runtime(
+                    model_option["id"],
+                    dim,
+                    cache_suffix,
+                    node_universe,
+                )
+                prepare_runtime_indexes(runtime, grouped_graph_names)
+                warm_runtime_dimensions(runtime, model_option["dims"])
+                warm_runtime_traversals(
+                    runtime,
+                    grouped_graph_names,
+                    model_option["dims"],
+                )
+            except Exception as exc:
+                model_failed = True
+                group_status["error"] = exception_message(exc)
+                model_status.update(
+                    {
+                        "loaded": False,
+                        "error": exception_message(exc),
+                        "elapsed_seconds": round(
+                            time.perf_counter() - model_started,
+                            2,
+                        ),
+                    }
+                )
+                print(
+                    "A* model warmup failed: "
+                    f"{model_option['label']}: {exception_message(exc)}",
+                    flush=True,
+                )
+                break
+
+            group_status["loaded"] = True
+            indexed_graphs.update(runtime.indexed_graphs)
+
+        if model_failed:
             failed_models.append(model_status)
-            print(
-                "A* model warmup failed; selecting this model may still pay "
-                f"lazy load cost: {model_option['label']}: {exception_message(exc)}",
-                flush=True,
-            )
             continue
 
         model_status.update(
             {
                 "loaded": True,
-                "indexed_graphs": sorted(runtime.indexed_graphs),
+                "indexed_graphs": sorted(indexed_graphs),
                 "dimension_warmup": True,
                 "traversal_warmup": True,
                 "elapsed_seconds": round(time.perf_counter() - model_started, 2),
@@ -659,6 +1220,12 @@ def preload_demo_model_runtimes() -> None:
         f"{len(failed_models)} failed.",
         flush=True,
     )
+    if failed_models:
+        failed_labels = ", ".join(model["label"] for model in failed_models)
+        raise RuntimeError(
+            "Could not preload every A* runtime: "
+            f"{failed_labels}."
+        )
 
 
 def get_model_options_for_preload(
@@ -704,6 +1271,24 @@ def get_model_options_for_preload(
         )
 
     return tuple(selected)
+
+
+def group_graphs_by_embedding_universe(
+    graph_names: tuple[str, ...],
+) -> tuple[tuple[str | None, str, tuple[str, ...]], ...]:
+    """Group graphs that can share an A* model runtime and embedding cache."""
+    groups: dict[tuple[str | None, str], list[str]] = {}
+    for graph_name in graph_names:
+        key = (
+            get_graph_cache_suffix(graph_name),
+            get_graph_node_universe(graph_name),
+        )
+        groups.setdefault(key, []).append(graph_name)
+
+    return tuple(
+        (cache_suffix, node_universe, tuple(names))
+        for (cache_suffix, node_universe), names in groups.items()
+    )
 
 
 def exception_message(exc: Exception) -> str:
@@ -760,6 +1345,8 @@ def prepare_runtime_indexes(
     for graph_name in missing_graph_names:
         bundle = get_loaded_graph_bundle(graph_name)
         for node in bundle.nodes:
+            if is_ignorable_graph_node(node):
+                continue
             if node in seen_nodes:
                 continue
             seen_nodes.add(node)
@@ -814,22 +1401,32 @@ def warm_runtime_traversals(
 
     for graph_name in graph_names:
         bundle = get_loaded_graph_bundle(graph_name)
-        warmup_edge = get_graph_warmup_edge(bundle)
-        if warmup_edge is None:
+        warmup_query = get_graph_warmup_query(bundle)
+        if warmup_query is None:
             continue
 
-        source, target = warmup_edge
-        config = {
-            "embedding_index_min_successors": EMBEDDING_INDEX_MIN_SUCCESSORS,
-            "astar_max_visits": 10,
-        }
+        source, target = warmup_query
         indexed_graph = runtime.indexed_graphs.get(graph_name)
-        if indexed_graph is not None:
-            config["_indexed_graph"] = indexed_graph
 
         for dim in dims:
             runtime.embedder.set_matryoshka_dim(dim)
-            traverse_graph(
+            max_visits = get_default_astar_max_visits(
+                graph_name,
+                runtime.model_path,
+                dim,
+            )["value"]
+            config = {
+                "embedding_index_min_successors": (
+                    EMBEDDING_INDEX_MIN_SUCCESSORS
+                ),
+                "astar_max_visits": max_visits,
+            }
+            if indexed_graph is not None:
+                config["_indexed_graph"] = indexed_graph
+
+            synchronize_embedding_device(runtime.embedder)
+            started = time.perf_counter()
+            path, visited_nodes = traverse_graph(
                 bundle.graph,
                 source,
                 target,
@@ -837,51 +1434,83 @@ def warm_runtime_traversals(
                 ts.astar_traverse,
                 config,
             )
+            synchronize_embedding_device(runtime.embedder)
+            print(
+                "Finished dynamic A* startup warmup: "
+                f"{graph_name}, {runtime.model_path}, d={dim}, "
+                f"visited={visited_nodes:,}, found={bool(path)}, "
+                f"elapsed={time.perf_counter() - started:.2f}s.",
+                flush=True,
+            )
 
     runtime.embedder.set_matryoshka_dim(dims[0])
 
 
-def get_graph_warmup_edge(bundle: GraphBundle) -> tuple[str, str] | None:
-    cached = _graph_warmup_edges.get(bundle.name)
+def get_graph_warmup_query(bundle: GraphBundle) -> tuple[str, str] | None:
+    """Select a representative two-hop query from graph topology alone."""
+    cached = _graph_warmup_queries.get(bundle.name)
     if cached is not None:
         return cached
 
-    best_edge = None
-    best_degree = None
+    adjacency = bundle.graph._succ
+    fallback_edge = None
+    best_query = None
+    best_branching_distance = None
+
     for source in bundle.nodes:
-        out_degree = bundle.graph.out_degree(source)
-        if out_degree <= 0:
+        successors = adjacency.get(source, {})
+        out_degree = len(successors)
+        if not out_degree:
             continue
 
-        try:
-            target = next(iter(bundle.graph.successors(source)))
-        except StopIteration:
+        if fallback_edge is None:
+            fallback_edge = (source, next(iter(successors)))
+        if out_degree < EMBEDDING_INDEX_MIN_SUCCESSORS:
             continue
 
-        if best_degree is None or out_degree < best_degree:
-            best_edge = (source, target)
-            best_degree = out_degree
-            if out_degree == 1:
+        direct_successors = set(successors)
+        target = next(
+            (
+                candidate
+                for intermediary in successors
+                for candidate in adjacency.get(intermediary, {})
+                if candidate != source and candidate not in direct_successors
+            ),
+            None,
+        )
+        if target is None:
+            continue
+
+        branching_distance = out_degree - EMBEDDING_INDEX_MIN_SUCCESSORS
+        if (
+            best_branching_distance is None
+            or branching_distance < best_branching_distance
+        ):
+            best_query = (source, target)
+            best_branching_distance = branching_distance
+            if branching_distance == 0:
                 break
 
-    if best_edge is not None:
-        _graph_warmup_edges[bundle.name] = best_edge
+    selected_query = best_query or fallback_edge
+    if selected_query is not None:
+        _graph_warmup_queries[bundle.name] = selected_query
 
-    return best_edge
+    return selected_query
+
+
+def synchronize_embedding_device(embedder) -> None:
+    if not str(getattr(embedder, "device", "")).startswith("cuda"):
+        return
+
+    import torch
+
+    torch.cuda.synchronize()
 
 
 def get_loaded_graph_bundle(graph_name: str) -> GraphBundle:
     validate_demo_graph_name(graph_name)
     cached = _graph_cache.get(graph_name)
-    if cached is None:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"Graph '{graph_name}' is enabled but not preloaded. "
-                "Restart the demo so startup can load graph data before A* runs."
-            ),
-        )
-    return cached
+    return cached if cached is not None else get_graph_bundle(graph_name)
 
 
 def get_graph_bundle(graph_name: str) -> GraphBundle:
@@ -901,7 +1530,12 @@ def get_graph_bundle(graph_name: str) -> GraphBundle:
             )
 
         graph = load_graph_for_demo(graph_name, graph_path)
-        nodes = sorted(str(node) for node in graph.nodes)
+        remove_ignorable_graph_nodes(graph, graph_name)
+        nodes = sorted(
+            str(node)
+            for node in graph.nodes
+            if not is_ignorable_graph_node(node)
+        )
         lowercase_to_node = {}
         for node in nodes:
             lowercase_to_node.setdefault(node.lower(), node)
@@ -915,7 +1549,74 @@ def get_graph_bundle(graph_name: str) -> GraphBundle:
             lowercase_to_node=lowercase_to_node,
         )
         _graph_cache[graph_name] = bundle
+        _preload_status[graph_name] = {
+            "loaded": True,
+            "path": str(bundle.path),
+            "nodes": bundle.graph.number_of_nodes(),
+            "edges": bundle.graph.number_of_edges(),
+        }
         return bundle
+
+
+def is_ignorable_graph_node(node: Any) -> bool:
+    """Exclude blank and punctuation-only concepts such as ``# #``.
+
+    CauseNet contains a few placeholder concepts that are not present in the
+    embedding node universes. A node remains valid when it has at least one
+    alphanumeric character, so concepts such as ``C#`` are retained.
+    """
+    value = str(node).strip()
+    return not value or not any(character.isalnum() for character in value)
+
+
+def remove_ignorable_graph_nodes(graph, graph_name: str) -> int:
+    ignored_nodes = [
+        node
+        for node in list(graph.nodes)
+        if is_ignorable_graph_node(node)
+    ]
+    if not ignored_nodes:
+        return 0
+
+    graph.remove_nodes_from(ignored_nodes)
+    print(
+        "Ignored blank or punctuation-only graph node(s) for web-demo graph "
+        f"{graph_name}: removed {len(ignored_nodes):,}.",
+        flush=True,
+    )
+    return len(ignored_nodes)
+
+
+def remove_ignorable_rl_nodes(graph, graph_name: str) -> int:
+    """Apply the same concept filter to the separate RL adjacency graph."""
+    ignored_nodes = {
+        node
+        for node in graph.nodes
+        if is_ignorable_graph_node(node)
+    }
+    if not ignored_nodes:
+        return 0
+
+    for node in ignored_nodes:
+        graph.adjacency.pop(node, None)
+    for source, successors in graph.adjacency.items():
+        graph.adjacency[source] = [
+            target
+            for target in successors
+            if target not in ignored_nodes
+        ]
+    graph.edge_sources = {
+        (source, target): sentence
+        for (source, target), sentence in graph.edge_sources.items()
+        if source not in ignored_nodes and target not in ignored_nodes
+    }
+    graph.nodes.difference_update(ignored_nodes)
+    print(
+        "Ignored blank or punctuation-only RL graph node(s) for web-demo graph "
+        f"{graph_name}: removed {len(ignored_nodes):,}.",
+        flush=True,
+    )
+    return len(ignored_nodes)
 
 
 def load_graph_for_demo(graph_name: str, graph_path: Path):
@@ -1085,17 +1786,71 @@ def save_overview_visual_cache(
         print(f"Could not save visual overview cache for {graph_name}: {exc}", flush=True)
 
 
+def get_overview_visual_graph(bundle: GraphBundle, limit: int) -> dict[str, Any]:
+    """Return the prebuilt overview graph without repeating disk or graph work."""
+    key = (bundle.name, limit)
+    cached = _overview_visual_cache.get(key)
+    if cached is not None:
+        return cached
+
+    cached = load_overview_visual_cache(bundle.name, bundle.path, limit)
+    if cached is not None:
+        _overview_visual_cache[key] = cached
+        return cached
+
+    selected = sample_overview_nodes(bundle.graph, limit)
+    visual_graph = build_visual_graph(
+        bundle.graph,
+        selected,
+        edge_limit=preview_edge_budget(bundle.graph, len(selected)),
+        meta=visual_graph_meta(bundle, "memory", limit),
+    )
+    save_overview_visual_cache(bundle.name, bundle.path, limit, visual_graph)
+    _overview_visual_cache[key] = visual_graph
+    return visual_graph
+
+
+def normalize_model_path(model_path: str) -> str:
+    normalized = str(model_path).replace("\\", "/")
+    if "://" in normalized:
+        return normalized
+
+    local_path = Path(normalized)
+    if local_path.is_absolute() or resolve_code_path(local_path).exists():
+        resolved = local_path if local_path.is_absolute() else resolve_code_path(local_path)
+        try:
+            return resolved.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+        except ValueError:
+            return resolved.as_posix()
+
+    return normalized
+
+
+def read_training_metadata(model_path: str) -> dict[str, Any]:
+    metadata_path = resolve_code_path(model_path) / "training_metadata.json"
+    if not metadata_path.exists():
+        return {}
+
+    try:
+        with open(metadata_path, encoding="utf-8") as file:
+            return json.load(file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
 @lru_cache(maxsize=1)
 def discover_models() -> tuple[dict[str, Any], ...]:
     models: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen_paths: set[str] = set()
+    seen_model_types: set[tuple[str, str, str | None, str | None, bool | None]] = set()
 
     def add_model(model_path: str, is_finetuned: bool = False):
-        normalized_path = model_path.replace("\\", "/")
-        if normalized_path in seen:
+        normalized_path = normalize_model_path(model_path)
+        if normalized_path in seen_paths:
             return
 
-        dim = infer_model_dim(normalized_path)
+        metadata = read_training_metadata(normalized_path)
+        dim = infer_model_dim(normalized_path, metadata)
         if dim is None:
             return
 
@@ -1103,35 +1858,71 @@ def discover_models() -> tuple[dict[str, Any], ...]:
             return
 
         distance_metric = get_model_distance_metric(normalized_path)
-        distance = distance_metric.name.lower()
+        parsed_config = parse_model_config(
+            normalized_path,
+            metadata=metadata,
+            is_finetuned=is_finetuned,
+        )
+        model_type = (
+            parsed_config["model_key"] or normalized_path,
+            parsed_config["variant"],
+            parsed_config["activation"],
+            parsed_config["distance"],
+            parsed_config["normalize"],
+        )
+        # A search-method choice represents one model configuration. Matryoshka
+        # dimensions are selected separately in the UI, and duplicate training
+        # directories for the same configuration must not create extra choices.
+        if model_type in seen_model_types:
+            return
+
         dims = get_matryoshka_dims(dim)
         cache_name = Path(normalized_path).name
-        config_labels = get_model_config_labels(cache_name)
-        label = format_model_display_name(cache_name)
+        label = format_model_display_label(
+            normalized_path,
+            is_finetuned=is_finetuned,
+            metadata=metadata,
+        )
+        base_label = format_model_display_label(
+            normalized_path,
+            variant="base",
+            is_finetuned=False,
+            metadata=metadata,
+        ).removesuffix(" Base")
 
         models.append(
             {
                 "id": normalized_path,
                 "label": label,
-                "base_label": format_model_display_name(
-                    cache_name,
-                    include_config=False,
-                ),
-                "config_label": " + ".join(config_labels),
+                "base_label": base_label,
+                "config_label": label,
                 "model_dim": dim,
                 "dims": dims,
-                "distance": distance,
+                "distance": distance_config_token(parsed_config["distance"])
+                or distance_metric.name.lower(),
                 "distance_label": distance_metric.name.title(),
                 "is_finetuned": is_finetuned,
                 "cache_name": cache_name,
+                "variant": parsed_config["variant"],
+                "activation": parsed_config["activation"],
+                "model_key": parsed_config["model_key"],
+                "normalize": parsed_config["normalize"],
+                "metadata": metadata,
             }
         )
-        seen.add(normalized_path)
+        seen_paths.add(normalized_path)
+        seen_model_types.add(model_type)
 
     for model_path in BASE_MODELS:
         add_model(model_path)
 
     for model_path in get_fine_tuned_models(DEFAULT_RUN_SUFFIX):
+        add_model(model_path, is_finetuned=True)
+
+    # The Granite reference plus its three activation/distance variants are
+    # stored under the ablation run suffix, not the normal fine-tuning suffix.
+    # Include them explicitly before the general directory scan.
+    for model_path in get_ablation_fine_tuned_models(DEFAULT_RUN_SUFFIX):
         add_model(model_path, is_finetuned=True)
 
     if LIGHTNING_MODELS_DIR.exists():
@@ -1145,8 +1936,221 @@ def discover_models() -> tuple[dict[str, Any], ...]:
     return tuple(models)
 
 
+def get_demo_models(
+    models: tuple[dict[str, Any], ...],
+    *,
+    load_all: bool | None = None,
+) -> tuple[dict[str, Any], ...]:
+    """Return the A* configurations exposed and preloaded by this demo run."""
+    if load_all is None:
+        load_all = LOAD_ALL_MODELS
+    if load_all:
+        return models
+
+    best_models = [
+        model
+        for model in models
+        if model["model_key"] == BEST_MODEL_KEY
+        and model["variant"] == BEST_MODEL_VARIANT
+        and model["activation"] == BEST_MODEL_ACTIVATION
+        and model["distance"] == BEST_MODEL_DISTANCE
+    ]
+    if len(best_models) != 1:
+        raise RuntimeError(
+            "Limited web-demo mode requires exactly one Granite FT "
+            "ReLU+Euclidean model."
+        )
+
+    best_model = dict(best_models[0])
+    if BEST_MODEL_DIMENSION not in best_model["dims"]:
+        raise RuntimeError(
+            "Limited web-demo mode requires dimension "
+            f"{BEST_MODEL_DIMENSION} for {best_model['label']}."
+        )
+    best_model["dims"] = [BEST_MODEL_DIMENSION]
+    return (best_model,)
+
+
+def discover_search_methods(
+    models: tuple[dict[str, Any], ...] | None = None,
+) -> tuple[dict[str, Any], ...]:
+    if models is None:
+        models = get_demo_models(discover_models())
+
+    methods: dict[str, dict[str, Any]] = {}
+
+    def add_method(method: dict[str, Any]) -> None:
+        methods.setdefault(method["id"], method)
+
+    add_method(
+        {
+            "id": stable_config_identity(algorithm="bfs"),
+            "algorithm": "bfs",
+            "label": "BFS",
+            "supported_graphs": [
+                graph
+                for graph in SUPPORTED_INFERENCE_GRAPHS
+                if graph_supports_algorithm(graph, "bfs")
+            ],
+            "config": {},
+        }
+    )
+
+    policy = get_rl_policy_config(DEFAULT_RL_POLICY_ID)
+    add_method(
+        {
+            "id": stable_config_identity(
+                algorithm="rl",
+                policy_config_id=policy.id,
+                checkpoint_id=str(policy.checkpoint_path),
+            ),
+            "algorithm": "rl",
+            "label": policy.label,
+            "description": policy.description,
+            "supported_graphs": list(policy.supported_graphs),
+            "config": policy.public_config(),
+        }
+    )
+
+    for model in models:
+        add_method(astar_method_payload(model))
+
+    return tuple(sorted(methods.values(), key=method_sort_key))
+
+
+def astar_method_payload(model: dict[str, Any]) -> dict[str, Any]:
+    label = format_model_display_label(
+        model["id"],
+        is_finetuned=model["is_finetuned"],
+        metadata=model.get("metadata"),
+    )
+    config = {
+        "model_id": model["id"],
+        "model_key": model["model_key"],
+        "variant": model["variant"],
+        "activation": model["activation"],
+        "distance": model["distance"],
+        "dimensions": model["dims"],
+        "default_dimension": model["dims"][0],
+        "model_dim": model["model_dim"],
+        "checkpoint_id": model["id"],
+        "normalize": model["normalize"],
+        "cache_name": model["cache_name"],
+    }
+    embedding_model = get_embedding_model(model["id"])
+    if embedding_model is not None:
+        config.update(
+            {
+                "model_label": embedding_model.label,
+                "model_identifier": embedding_model.identifier,
+                "parameters": embedding_model.parameters,
+                "full_dimension": embedding_model.full_dimension,
+            }
+        )
+
+    config_id = stable_config_identity(
+        algorithm="astar",
+        model_id=model["id"],
+        variant=model["variant"],
+        activation=model["activation"],
+        distance=model["distance"],
+        checkpoint_id=model["id"],
+        normalize=model["normalize"],
+    )
+    return {
+        "id": config_id,
+        "algorithm": "astar",
+        "label": label,
+        "supported_graphs": [
+            graph
+            for graph in SUPPORTED_INFERENCE_GRAPHS
+            if graph_supports_algorithm(graph, "astar")
+        ],
+        "config": config,
+    }
+
+
+def get_search_method(method_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            method
+            for method in discover_search_methods()
+            if method["id"] == method_id
+        ),
+        None,
+    )
+
+
 def get_model_option(model_id: str) -> dict[str, Any] | None:
-    return next((model for model in discover_models() if model["id"] == model_id), None)
+    normalized_id = normalize_model_path(model_id)
+    return next(
+        (
+            model
+            for model in get_demo_models(discover_models())
+            if model["id"] == normalized_id or model["id"] == model_id
+        ),
+        None,
+    )
+
+
+def resolve_astar_model_option(
+    method_id: str | None,
+    model_id: str | None,
+    dim: int | None,
+) -> dict[str, Any]:
+    if method_id:
+        method = get_search_method(method_id)
+        if method is None or method.get("algorithm") != "astar":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown A* model configuration '{method_id}'.",
+            )
+        config = method["config"]
+        model_id = config["model_id"]
+        dim = dim if dim is not None else config["default_dimension"]
+
+    if model_id is None or dim is None:
+        raise HTTPException(
+            status_code=400,
+            detail="A* requests require model_config_id or model_id and dimension.",
+        )
+
+    model_option = get_model_option(model_id)
+    if model_option is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown or unavailable model '{model_id}'.",
+        )
+
+    if dim not in model_option["dims"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Dimension {dim} is not available for "
+                f"{model_option['label']}."
+            ),
+        )
+
+    payload = dict(model_option)
+    payload["selected_dim"] = dim
+    payload["selected_label"] = format_model_display_label(
+        model_option["id"],
+        dimension=dim,
+        include_dimension=len(model_option["dims"]) > 1,
+        is_finetuned=model_option["is_finetuned"],
+        metadata=model_option.get("metadata"),
+    )
+    payload["config_id"] = stable_config_identity(
+        algorithm="astar",
+        model_id=model_option["id"],
+        variant=model_option["variant"],
+        activation=model_option["activation"],
+        distance=model_option["distance"],
+        dimension=dim,
+        checkpoint_id=model_option["id"],
+        normalize=model_option["normalize"],
+    )
+    return payload
 
 
 def get_model_runtime(
@@ -1198,32 +2202,86 @@ def get_model_runtime(
         return runtime
 
 
+def get_rl_runtime(policy_config_id: str) -> RLRuntime:
+    policy = get_rl_policy_config(policy_config_id)
+
+    with _rl_runtime_lock:
+        runtime = _rl_runtime_cache.get(policy.id)
+        if runtime is not None:
+            return runtime
+
+        try:
+            from core.embeddings import DistanceMetric, GloveEmbeder
+
+            embedder = GloveEmbeder(
+                policy.glove_path,
+                DistanceMetric.COSINE,
+                device=EMBEDDING_DEVICE,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not load RL GloVe embedder: {exc}",
+            ) from exc
+
+        runtime = RLRuntime(policy.id, embedder, {})
+        _rl_runtime_cache[policy.id] = runtime
+        return runtime
+
+
+def get_rl_graph(runtime: RLRuntime, bundle: GraphBundle):
+    cached = runtime.graphs.get(bundle.name)
+    if cached is not None:
+        return cached
+
+    graph_path = bundle.path
+    start_time = time.perf_counter()
+    try:
+        graph = load_rl_graph(
+            graph_path,
+            use_inverse=False,
+            progress_every=1_000_000,
+            progress_label=f"{bundle.name} RL graph",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not load RL graph for {bundle.label}: {exc}",
+        ) from exc
+
+    remove_ignorable_rl_nodes(graph, bundle.name)
+    runtime.graphs[bundle.name] = graph
+    print(
+        "Loaded RL graph for inference: "
+        f"{bundle.name} with {len(graph.nodes):,} nodes in "
+        f"{time.perf_counter() - start_time:.2f}s.",
+        flush=True,
+    )
+    return graph
+
+
 def build_astar_runtime_config(
     graph_name: str,
     model_option: dict[str, Any],
-    request: AStarRequest,
+    request: InferenceAStarConfig,
 ) -> dict[str, int]:
     config = {
         "embedding_index_min_successors": EMBEDDING_INDEX_MIN_SUCCESSORS,
     }
 
-    if request.config.astar_max_visits is None:
+    if request.astar_max_visits is None:
         max_visits = get_default_astar_max_visits(
             graph_name,
             model_option["id"],
-            request.dim,
+            model_option["selected_dim"],
         )["value"]
     else:
-        max_visits = request.config.astar_max_visits
+        max_visits = request.astar_max_visits
 
-    if max_visits < -1:
-        raise HTTPException(
-            status_code=400,
-            detail="A* max visits must be -1 for uncapped or a non-negative integer.",
-        )
+    validate_search_cap(max_visits, "A* max visits")
     config["astar_max_visits"] = max_visits
 
-    threshold = request.config.embedding_index_min_successors
+    threshold = request.embedding_index_min_successors
     if threshold is None:
         threshold = EMBEDDING_INDEX_MIN_SUCCESSORS
     if threshold < 1:
@@ -1330,7 +2388,7 @@ def embedding_cache_exists(model_path: str) -> bool:
     cache_name = f"{Path(model_path).name}_embeddings"
     node_file = get_node_universe_path(
         EMBEDDINGS_DIR,
-        get_node_universe_for_graph(DEFAULT_GRAPH_NAME),
+        get_graph_node_universe(DEFAULT_GRAPH_NAME),
     )
     return (
         node_file.exists()
@@ -1338,7 +2396,15 @@ def embedding_cache_exists(model_path: str) -> bool:
     )
 
 
-def infer_model_dim(model_path: str) -> int | None:
+def infer_model_dim(
+    model_path: str,
+    metadata: dict[str, Any] | None = None,
+) -> int | None:
+    metadata = metadata or {}
+    metadata_model_path = metadata.get("model_path")
+    if metadata_model_path in MODEL_DIM_HINTS:
+        return MODEL_DIM_HINTS[metadata_model_path]
+
     if model_path in MODEL_DIM_HINTS:
         return MODEL_DIM_HINTS[model_path]
 
@@ -1375,20 +2441,28 @@ def search_nodes(bundle: GraphBundle, query: str, limit: int) -> list[str]:
     if not query:
         return bundle.nodes[:limit]
 
+    # GraphBundle.nodes is sorted during startup. Jump directly to the prefix
+    # range so async datalist requests do not scan millions of nodes per key.
     prefix_matches = []
-    contains_matches = []
-    for node in bundle.nodes:
+    start = bisect_left(bundle.nodes, query)
+    for node in bundle.nodes[start:]:
         lowered = node.lower()
         if lowered.startswith(query):
             prefix_matches.append(node)
-        elif query in lowered:
-            contains_matches.append(node)
-
-        if len(prefix_matches) >= limit:
+            if len(prefix_matches) >= limit:
+                return prefix_matches
+        elif prefix_matches or lowered > query:
             break
 
-    matches = prefix_matches + contains_matches
-    return matches[:limit]
+    if prefix_matches:
+        return prefix_matches
+
+    contains_matches = [
+        node
+        for node in bundle.nodes
+        if query in node.lower()
+    ]
+    return contains_matches[:limit]
 
 
 def missing_node_message(bundle: GraphBundle, value: str, role: str) -> str:
