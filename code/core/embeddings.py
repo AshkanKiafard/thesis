@@ -14,6 +14,7 @@ from core.constants import DistanceMetric, EMBEDDINGS_DIR
 from core.utils import (
     get_node_universe_for_cache_suffix,
     get_node_universe_path,
+    is_valid_graph_node,
     normalize_node_universe,
     read_node_universe,
     write_node_universe,
@@ -401,10 +402,11 @@ def _load_embedding_checkpoint(cache_file, texts, dim, node_universe):
 
         with open(paths["meta"], encoding="utf-8") as file:
             metadata = json.load(file)
-        if metadata.get("node_universe") != node_universe:
+        metadata_node_universe = normalize_node_universe(metadata.get("node_universe"))
+        if metadata_node_universe != node_universe:
             raise ValueError(
                 "checkpoint node universe mismatch: "
-                f"{metadata.get('node_universe')} != {node_universe}"
+                f"{metadata_node_universe} != {node_universe}"
             )
         if metadata.get("num_texts") != len(texts):
             raise ValueError(
@@ -869,9 +871,21 @@ class STEmbedder:
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than 0")
 
-        requested_texts = (
+        raw_requested_texts = (
             list(texts) if texts_are_unique else list(dict.fromkeys(texts))
         )
+        requested_texts = [
+            text
+            for text in raw_requested_texts
+            if is_valid_graph_node(text)
+        ]
+        skipped_requested_texts = len(raw_requested_texts) - len(requested_texts)
+        if skipped_requested_texts:
+            print(
+                "Skipping blank or punctuation-only embedding index text(s): "
+                f"{skipped_requested_texts:,}.",
+                flush=True,
+            )
         unique_texts = requested_texts
         self._ensure_tensor_cache_dim()
         active_dim = self._active_tensor_dim() or self.get_model_dim()

@@ -35,6 +35,9 @@ from core.constants import (
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.graph_config import (
     DEFAULT_GRAPH_NAME,
+    canonical_graph_name,
+    graph_aliases_for,
+    graph_arg,
     get_graph_label,
     get_graph_path,
     graph_choices,
@@ -115,6 +118,7 @@ def build_output_paths(
     data/evaluation/causenet/msmarco_valid/v3/evaluation_results.json
     data/evaluation/causenet/msmarco_valid/v3/evaluation_results.csv
     """
+    graph_name = canonical_graph_name(graph_name)
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
 
@@ -135,13 +139,16 @@ def get_p95_analysis_file(
     graph_name: str,
     ablation: bool = False,
 ):
-    return (
-        get_evaluation_output_root(ablation)
-        / graph_name
+    output_root = get_evaluation_output_root(ablation)
+    candidates = [
+        output_root
+        / graph_dir
         / dataset_name
         / run_suffix
         / "visited_nodes_analysis.json"
-    )
+        for graph_dir in (canonical_graph_name(graph_name), *graph_aliases_for(graph_name))
+    ]
+    return next((path for path in candidates if path.exists()), candidates[0])
 
 
 def get_evaluation_results_file(
@@ -150,13 +157,16 @@ def get_evaluation_results_file(
     graph_name: str,
     ablation: bool = False,
 ):
-    return (
-        get_evaluation_output_root(ablation)
-        / graph_name
+    output_root = get_evaluation_output_root(ablation)
+    candidates = [
+        output_root
+        / graph_dir
         / dataset_name
         / run_suffix
         / "evaluation_results.json"
-    )
+        for graph_dir in (canonical_graph_name(graph_name), *graph_aliases_for(graph_name))
+    ]
+    return next((path for path in candidates if path.exists()), candidates[0])
 
 
 def load_p95_configs(
@@ -379,6 +389,24 @@ def compute_embedding_path_cost(path, embeder):
     return float(total)
 
 
+def synchronize_embedding_device(embeder) -> None:
+    if embeder is None:
+        return
+
+    if not str(getattr(embeder, "device", "")).startswith("cuda"):
+        return
+
+    torch.cuda.synchronize()
+
+
+def cleanup_cuda_cache() -> None:
+    if not torch.cuda.is_available():
+        return
+
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
+
 def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=None):
     """
     Run one untimed traversal before evaluation.
@@ -413,6 +441,7 @@ def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=N
             strategy,
             strategy_config,
         )
+        synchronize_embedding_device(embeder)
 
         break
 
@@ -627,7 +656,8 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
                     f"can {cause} cause {effect}?"
                 )
 
-            start_time = time.time()
+            synchronize_embedding_device(embeder)
+            start_time = time.perf_counter()
 
             path, visited_nodes = traverse_graph(
                 graph,
@@ -638,7 +668,8 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
                 strategy_config,
             )
 
-            elapsed = time.time() - start_time
+            synchronize_embedding_device(embeder)
+            elapsed = time.perf_counter() - start_time
             pred_label = bool(path)
 
             path_length = len(path) if path else 0
@@ -713,6 +744,7 @@ def parse_args():
     )
     parser.add_argument(
         "--graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=DEFAULT_GRAPH_NAME,
         help="Graph to evaluate with. Defaults to CauseNet.",
@@ -728,6 +760,7 @@ def parse_args():
     )
     parser.add_argument(
         "--config-source-graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=None,
         help=(
@@ -746,11 +779,12 @@ def parse_args():
     )
     parser.add_argument(
         "--fallback-config-source-graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=DEFAULT_GRAPH_NAME,
         help=(
             "Graph namespace for fallback traversal caps. Defaults to CauseNet, "
-            "so CausalBank test runs can reuse CauseNet msmarco_train p95 caps."
+            "so CEG test runs can reuse CauseNet msmarco_train p95 caps."
         ),
     )
     parser.add_argument(
@@ -764,6 +798,7 @@ def parse_args():
     )
     parser.add_argument(
         "--ablation-cap-source-graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=DEFAULT_GRAPH_NAME,
         help=(
@@ -1171,6 +1206,280 @@ if __name__ == "__main__":
         f"in {time.time() - graph_load_start:.1f}s"
     )
 
+    evaluation_errors = []
+
+    if args.baselines_only:
+        print(
+            "\nBaselines-only mode enabled. "
+            "Skipping A*/Dijkstra model evaluation before baselines."
+        )
+    else:
+        print("\nRunning A*/Dijkstra model evaluation before baselines.")
+
+        if args.skip_dijkstra:
+            print("Skipping Dijkstra model evaluation because --skip-dijkstra was set.")
+
+        if current_split == "test" and not args.ablation:
+            semantic_model_queue = [selected_test_model_path]
+        else:
+            semantic_model_queue = model_queue
+
+        for model_path in semantic_model_queue:
+            model_name = get_model_name(model_path)
+
+            print(f"\nEVALUATING: {model_path}")
+
+            try:
+                distance_metric = get_model_distance_metric(model_path)
+                print(f"Distance metric: {distance_metric}")
+
+                main_embeder = STEmbedder(
+                    model_path=model_path,
+                    distance_metric=distance_metric,
+                    device=args.embedding_device,
+                    cache_suffix=embedding_cache_suffix,
+                    node_universe=node_universe,
+                )
+
+                full_dim = main_embeder.get_model_dim()
+
+                if args.ablation:
+                    if args.dim > full_dim:
+                        raise ValueError(
+                            f"Requested dim {args.dim}, but {model_path} only "
+                            f"has {full_dim} embedding dimensions."
+                        )
+                    dims = [args.dim]
+                elif current_split == "test":
+                    dims = [selected_test_dimension]
+                else:
+                    dims = get_matryoshka_dims(full_dim)
+
+                existing_results = load_results_file(output_json_file)
+                pending_work = []
+
+                for dim in dims:
+                    if args.force_model_results:
+                        completed_algorithms = set()
+                    else:
+                        completed_algorithms = {
+                            algorithm
+                            for entry in existing_results
+                            if entry.get("model") == model_name
+                            and entry.get("dimension") == dim
+                            for algorithm in entry.get("evaluation", {}).keys()
+                        }
+
+                    pending_strategies = {}
+                    used_config = {}
+
+                    if "A*" not in completed_algorithms:
+                        used_config["astar_max_visits"] = get_p95_cap(
+                            p95_configs,
+                            model_name,
+                            dim,
+                            "A*",
+                        )
+                        pending_strategies["A*"] = ts.astar_traverse
+
+                    if (
+                        not args.skip_dijkstra
+                        and "Dijkstra" not in completed_algorithms
+                    ):
+                        used_config["dijkstra_max_visits"] = get_p95_cap(
+                            p95_configs,
+                            model_name,
+                            dim,
+                            "Dijkstra",
+                        )
+                        pending_strategies["Dijkstra"] = ts.dijkstra_traverse
+
+                    if not pending_strategies:
+                        print(f"Skipping {model_name} dim {dim}")
+                        continue
+
+                    used_config["embedding_index_min_successors"] = (
+                        EMBEDDING_INDEX_MIN_SUCCESSORS
+                    )
+                    pending_work.append((dim, pending_strategies, used_config))
+
+                if not pending_work:
+                    print(f"No pending dimensions for {model_name}.")
+                    del main_embeder
+                    gc.collect()
+                    cleanup_cuda_cache()
+                    continue
+
+                for dim, pending_strategies, used_config in pending_work:
+
+                    print(f"--- Dim: {dim} ---")
+                    main_embeder.set_matryoshka_dim(dim)
+
+                    indexed_graph = None
+                    if not args.skip_embedding_preload:
+                        print(
+                            "Loading graph embedding index at Matryoshka dim "
+                            f"{dim}."
+                        )
+                        indexed_graph = preload_graph_embeddings(
+                            main_embeder,
+                            causal_graph,
+                            batch_size=args.embedding_batch_size,
+                            save_cache=not args.no_save_embedding_cache,
+                        )
+
+                    if indexed_graph is not None and main_embeder.has_embedding_index():
+                        used_config["_indexed_graph"] = indexed_graph
+                    else:
+                        used_config.pop("_indexed_graph", None)
+
+                    for strategy_name, strategy in pending_strategies.items():
+                        run_warmup_traversal(
+                            valid_data,
+                            causal_graph,
+                            main_embeder,
+                            strategy,
+                            strategy_name,
+                            config=used_config,
+                        )
+
+                    main_summary = run_evaluation_loop(
+                        valid_data,
+                        causal_graph,
+                        main_embeder,
+                        pending_strategies,
+                        f"{model_path} | dim {dim} | {run_suffix}",
+                        config=used_config,
+                    )
+
+                    save_result(
+                        {
+                            "model": model_name,
+                            "model_path": model_path,
+                            "dimension": dim,
+                            "split": current_split,
+                            "run_suffix": run_suffix,
+                            "ablation": args.ablation,
+                            "config_source_dataset": config_source_dataset_name,
+                            "config_source_graph": config_source_graph_name,
+                            "ablation_shared_max_visits": args.ablation,
+                            "ablation_cap_reference_model": ablation_reference_model,
+                            "embedding_device": args.embedding_device,
+                            "used_config": strip_runtime_config(used_config),
+                            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                            "evaluation": main_summary,
+                        },
+                        output_json_file,
+                        output_csv_file,
+                        replace_existing=(
+                            (
+                                lambda entry, model_name=model_name, dim=dim: (
+                                    entry.get("model") == model_name
+                                    and entry.get("dimension") == dim
+                                )
+                            )
+                            if args.force_model_results
+                            else None
+                        ),
+                    )
+
+                del main_embeder
+                gc.collect()
+                cleanup_cuda_cache()
+
+            except Exception as e:
+                print(f"Error for {model_path}: {e}")
+                evaluation_errors.append((model_path, e))
+
+    if should_run_rl_baseline:
+        print(f"Loading RL graph from: {graph_path}")
+        graph_load_start = time.time()
+        rl_graph = load_rl_graph(
+            graph_path,
+            use_inverse=False,
+            progress_every=1_000_000,
+            progress_label=f"{graph_name} RL graph",
+        )
+        print(
+            "Loaded RL graph: "
+            f"{len(rl_graph.nodes):,} nodes in "
+            f"{time.time() - graph_load_start:.1f}s"
+        )
+
+        rl_embeder = GloveEmbeder(
+            GLOVE_300D_PATH,
+            DistanceMetric.COSINE,
+            device=args.embedding_device,
+        )
+
+        rl_config = {
+            "rl_model_path": str(DEFAULT_RL_MODEL_PATH),
+            "rl_beam_width": 50,
+            "rl_max_path_len": 2,
+            "rl_max_actions": 5000,
+            "rl_max_visits": -1,
+        }
+
+        preload_rl_embeddings(
+            rl_embeder,
+            rl_graph,
+            data=valid_data,
+        )
+
+        run_warmup_traversal(
+            valid_data,
+            rl_graph,
+            rl_embeder,
+            ts.rl_traverse,
+            "RL",
+            config=rl_config,
+        )
+
+        rl_summary = run_evaluation_loop(
+            valid_data,
+            rl_graph,
+            rl_embeder,
+            {"RL": ts.rl_traverse},
+            f"RL Baseline | {dataset_name} | {run_suffix}",
+            config=rl_config,
+        )
+
+        save_result(
+            {
+                "model": RL_BASELINE_MODEL,
+                "dimension": None,
+                "split": current_split,
+                "run_suffix": run_suffix,
+                "config_source_dataset": config_source_dataset_name,
+                "embedding_device": args.embedding_device,
+                "used_config": rl_config,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "evaluation": rl_summary,
+            },
+            output_json_file,
+            output_csv_file,
+            replace_existing=(
+                (lambda entry: entry.get("model") == RL_BASELINE_MODEL)
+                if force_rl_baseline
+                else None
+            ),
+        )
+
+        del rl_embeder
+        del rl_graph
+        gc.collect()
+        cleanup_cuda_cache()
+    else:
+        if args.skip_rl_baseline:
+            print(
+                f"Skipping {RL_BASELINE_MODEL} because "
+                "--skip-rl-baseline was set."
+            )
+        elif has_rl_baseline:
+            print(f"Skipping {RL_BASELINE_MODEL} because it already exists.")
+        else:
+            print(f"Skipping {RL_BASELINE_MODEL}.")
+
     if should_run_bfs_uncapped_baseline:
         bfs_uncapped_config = {"bfs_max_visits": -1}
 
@@ -1279,279 +1588,12 @@ if __name__ == "__main__":
         else:
             print(f"Skipping {BFS_CAPPED_BASELINE_MODEL}.")
 
-    existing_results = load_results_file(output_json_file)
-
-    if should_run_rl_baseline:
-        print(f"Loading RL graph from: {graph_path}")
-        graph_load_start = time.time()
-        rl_graph = load_rl_graph(
-            graph_path,
-            use_inverse=False,
-            progress_every=1_000_000,
-            progress_label=f"{graph_name} RL graph",
-        )
-        print(
-            "Loaded RL graph: "
-            f"{len(rl_graph.nodes):,} nodes in "
-            f"{time.time() - graph_load_start:.1f}s"
-        )
-
-        rl_embeder = GloveEmbeder(
-            GLOVE_300D_PATH,
-            DistanceMetric.COSINE,
-            device=args.embedding_device,
-        )
-
-        rl_config = {
-            "rl_model_path": str(DEFAULT_RL_MODEL_PATH),
-            "rl_beam_width": 50,
-            "rl_max_path_len": 2,
-            "rl_max_actions": 5000,
-            "rl_max_visits": -1,
-        }
-
-        preload_rl_embeddings(
-            rl_embeder,
-            rl_graph,
-            data=valid_data,
-        )
-
-        run_warmup_traversal(
-            valid_data,
-            rl_graph,
-            rl_embeder,
-            ts.rl_traverse,
-            "RL",
-            config=rl_config,
-        )
-
-        rl_summary = run_evaluation_loop(
-            valid_data,
-            rl_graph,
-            rl_embeder,
-            {"RL": ts.rl_traverse},
-            f"RL Baseline | {dataset_name} | {run_suffix}",
-            config=rl_config,
-        )
-
-        save_result(
-            {
-                "model": RL_BASELINE_MODEL,
-                "dimension": None,
-                "split": current_split,
-                "run_suffix": run_suffix,
-                "config_source_dataset": config_source_dataset_name,
-                "embedding_device": args.embedding_device,
-                "used_config": rl_config,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "evaluation": rl_summary,
-            },
-            output_json_file,
-            output_csv_file,
-            replace_existing=(
-                (lambda entry: entry.get("model") == RL_BASELINE_MODEL)
-                if force_rl_baseline
-                else None
-            ),
-        )
-
-        del rl_embeder
-        del rl_graph
-        gc.collect()
-    else:
-        if args.skip_rl_baseline:
-            print(
-                f"Skipping {RL_BASELINE_MODEL} because "
-                "--skip-rl-baseline was set."
-            )
-        elif has_rl_baseline:
-            print(f"Skipping {RL_BASELINE_MODEL} because it already exists.")
-        else:
-            print(f"Skipping {RL_BASELINE_MODEL}.")
-
     if args.baselines_only:
         print(
             "\nBaseline handling complete. "
             "Skipping A*/Dijkstra model evaluation because --baselines-only was set."
         )
         raise SystemExit(0)
-
-    if args.skip_dijkstra:
-        print("Skipping Dijkstra model evaluation because --skip-dijkstra was set.")
-
-    if current_split == "test" and not args.ablation:
-        semantic_model_queue = [selected_test_model_path]
-    else:
-        semantic_model_queue = model_queue
-
-    evaluation_errors = []
-
-    for model_path in semantic_model_queue:
-        model_name = get_model_name(model_path)
-
-        print(f"\nEVALUATING: {model_path}")
-
-        try:
-            distance_metric = get_model_distance_metric(model_path)
-            print(f"Distance metric: {distance_metric}")
-
-            main_embeder = STEmbedder(
-                model_path=model_path,
-                distance_metric=distance_metric,
-                device=args.embedding_device,
-                cache_suffix=embedding_cache_suffix,
-                node_universe=node_universe,
-            )
-
-            full_dim = main_embeder.get_model_dim()
-
-            if args.ablation:
-                if args.dim > full_dim:
-                    raise ValueError(
-                        f"Requested dim {args.dim}, but {model_path} only "
-                        f"has {full_dim} embedding dimensions."
-                    )
-                dims = [args.dim]
-            elif current_split == "test":
-                dims = [selected_test_dimension]
-            else:
-                dims = get_matryoshka_dims(full_dim)
-
-            existing_results = load_results_file(output_json_file)
-            pending_work = []
-
-            for dim in dims:
-                if args.force_model_results:
-                    completed_algorithms = set()
-                else:
-                    completed_algorithms = {
-                        algorithm
-                        for entry in existing_results
-                        if entry.get("model") == model_name
-                        and entry.get("dimension") == dim
-                        for algorithm in entry.get("evaluation", {}).keys()
-                    }
-
-                pending_strategies = {}
-                used_config = {}
-
-                if "A*" not in completed_algorithms:
-                    used_config["astar_max_visits"] = get_p95_cap(
-                        p95_configs,
-                        model_name,
-                        dim,
-                        "A*",
-                    )
-                    pending_strategies["A*"] = ts.astar_traverse
-
-                if (
-                    not args.skip_dijkstra
-                    and "Dijkstra" not in completed_algorithms
-                ):
-                    used_config["dijkstra_max_visits"] = get_p95_cap(
-                        p95_configs,
-                        model_name,
-                        dim,
-                        "Dijkstra",
-                    )
-                    pending_strategies["Dijkstra"] = ts.dijkstra_traverse
-
-                if not pending_strategies:
-                    print(f"Skipping {model_name} dim {dim}")
-                    continue
-
-                used_config["embedding_index_min_successors"] = (
-                    EMBEDDING_INDEX_MIN_SUCCESSORS
-                )
-                pending_work.append((dim, pending_strategies, used_config))
-
-            if not pending_work:
-                print(f"No pending dimensions for {model_name}.")
-                del main_embeder
-                gc.collect()
-                torch.cuda.empty_cache()
-                continue
-
-            for dim, pending_strategies, used_config in pending_work:
-
-                print(f"--- Dim: {dim} ---")
-                main_embeder.set_matryoshka_dim(dim)
-
-                indexed_graph = None
-                if not args.skip_embedding_preload:
-                    print(
-                        "Loading graph embedding index at Matryoshka dim "
-                        f"{dim}."
-                    )
-                    indexed_graph = preload_graph_embeddings(
-                        main_embeder,
-                        causal_graph,
-                        batch_size=args.embedding_batch_size,
-                        save_cache=not args.no_save_embedding_cache,
-                    )
-
-                if indexed_graph is not None and main_embeder.has_embedding_index():
-                    used_config["_indexed_graph"] = indexed_graph
-                else:
-                    used_config.pop("_indexed_graph", None)
-
-                for strategy_name, strategy in pending_strategies.items():
-                    run_warmup_traversal(
-                        valid_data,
-                        causal_graph,
-                        main_embeder,
-                        strategy,
-                        strategy_name,
-                        config=used_config,
-                    )
-
-                main_summary = run_evaluation_loop(
-                    valid_data,
-                    causal_graph,
-                    main_embeder,
-                    pending_strategies,
-                    f"{model_path} | dim {dim} | {run_suffix}",
-                    config=used_config,
-                )
-
-                save_result(
-                    {
-                        "model": model_name,
-                        "model_path": model_path,
-                        "dimension": dim,
-                        "split": current_split,
-                        "run_suffix": run_suffix,
-                        "ablation": args.ablation,
-                        "config_source_dataset": config_source_dataset_name,
-                        "config_source_graph": config_source_graph_name,
-                        "ablation_shared_max_visits": args.ablation,
-                        "ablation_cap_reference_model": ablation_reference_model,
-                        "embedding_device": args.embedding_device,
-                        "used_config": strip_runtime_config(used_config),
-                        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "evaluation": main_summary,
-                    },
-                    output_json_file,
-                    output_csv_file,
-                    replace_existing=(
-                        (
-                            lambda entry, model_name=model_name, dim=dim: (
-                                entry.get("model") == model_name
-                                and entry.get("dimension") == dim
-                            )
-                        )
-                        if args.force_model_results
-                        else None
-                    ),
-                )
-
-            del main_embeder
-            gc.collect()
-            torch.cuda.empty_cache()
-
-        except Exception as e:
-            print(f"Error for {model_path}: {e}")
-            evaluation_errors.append((model_path, e))
 
     if args.ablation and evaluation_errors:
         failed_models = [get_model_name(path) for path, _ in evaluation_errors]

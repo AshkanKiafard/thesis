@@ -3,8 +3,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from core.constants import EVALUATION_DIR
+from core.constants import EVALUATION_DIR, LIGHTNING_MODELS_DIR
 from core.config import (
+    DEFAULT_ABLATION_CAP_SOURCE_DATASET,
+    DEFAULT_ABLATION_CAP_SOURCE_GRAPH,
     DEFAULT_EMBEDDING_BATCH_SIZE,
     DEFAULT_P95_CONFIG_SOURCE_DATASET,
     DEFAULT_P95_CONFIG_SOURCE_GRAPH,
@@ -14,7 +16,8 @@ from core.config import (
     DEFAULT_VALIDATION_DATASET,
     DEFAULT_VALIDATION_GRAPH,
 )
-from core.graph_config import graph_choices
+from core.graph_config import graph_arg, graph_choices
+from core.utils import get_ablation_reference_model_name
 from evaluation.select_best_model import print_selection, select_best_astar_model
 
 
@@ -22,13 +25,14 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "Run the main evaluation workflow: all models on MSMARCO validation "
-            "with CauseNet, then the selected best validation model on MSMARCO "
-            "test and SemEval test across the default three graphs."
+            "with CauseNet, then the fixed Granite d=32 main model on MSMARCO "
+            "test and SemEval test across the default graphs, then ablation."
         )
     )
     parser.add_argument("--run-suffix", default=DEFAULT_RUN_SUFFIX)
     parser.add_argument(
         "--validation-graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=DEFAULT_VALIDATION_GRAPH,
         help="Graph used for the full MSMARCO validation run and model selection.",
@@ -36,6 +40,7 @@ def parse_args():
     parser.add_argument(
         "--test-graphs",
         nargs="+",
+        type=graph_arg,
         choices=graph_choices(),
         default=DEFAULT_TEST_GRAPHS,
         help="Graphs used for the best-model test evaluations.",
@@ -61,6 +66,7 @@ def parse_args():
     )
     parser.add_argument(
         "--test-config-source-graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=DEFAULT_P95_CONFIG_SOURCE_GRAPH,
         help=(
@@ -86,13 +92,41 @@ def parse_args():
     parser.add_argument(
         "--variant-filter",
         default="finetuned",
-        help="Model/path substring used by select_best_model.py.",
+        help=(
+            "Model/path substring used by select_best_model.py when "
+            "--select-best-from-validation is set."
+        ),
     )
     parser.add_argument(
         "--min-f1",
         type=float,
         default=0.8,
-        help="Minimum validation F1 for best-model selection.",
+        help=(
+            "Minimum validation F1 for best-model selection when "
+            "--select-best-from-validation is set."
+        ),
+    )
+    parser.add_argument(
+        "--best-model-path",
+        default=None,
+        help=(
+            "Explicit model path for test evaluation. Defaults to the Granite "
+            "ReLU+Euclidean finetuned model for --run-suffix."
+        ),
+    )
+    parser.add_argument(
+        "--best-model-dim",
+        type=int,
+        default=32,
+        help="Matryoshka dimension for the fixed test model. Default: 32.",
+    )
+    parser.add_argument(
+        "--select-best-from-validation",
+        action="store_true",
+        help=(
+            "Select the test model from validation results instead of using "
+            "the fixed Granite finetuned d=32 model."
+        ),
     )
     parser.add_argument(
         "--no-force",
@@ -113,6 +147,29 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--skip-ablation",
+        action="store_true",
+        help="Skip the final four-model ablation phase.",
+    )
+    parser.add_argument(
+        "--ablation-dim",
+        type=int,
+        default=32,
+        help="Matryoshka dimension for the final ablation phase. Default: 32.",
+    )
+    parser.add_argument(
+        "--ablation-cap-source-dataset",
+        default=DEFAULT_ABLATION_CAP_SOURCE_DATASET,
+        help="Normal evaluation dataset whose A* p95 cap is shared by ablation.",
+    )
+    parser.add_argument(
+        "--ablation-cap-source-graph",
+        type=graph_arg,
+        choices=graph_choices(),
+        default=DEFAULT_ABLATION_CAP_SOURCE_GRAPH,
+        help="Normal evaluation graph whose A* p95 cap is shared by ablation.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print commands without running them.",
@@ -124,6 +181,10 @@ def parse_args():
         parser.error("--embedding-batch-size must be greater than 0")
     if args.min_f1 < 0 or args.min_f1 > 1:
         parser.error("--min-f1 must be between 0 and 1")
+    if args.best_model_dim <= 0:
+        parser.error("--best-model-dim must be greater than 0")
+    if args.ablation_dim <= 0:
+        parser.error("--ablation-dim must be greater than 0")
 
     return args
 
@@ -183,6 +244,12 @@ def validation_results_path(args):
     )
 
 
+def default_best_model_path(args):
+    return str(
+        LIGHTNING_MODELS_DIR / get_ablation_reference_model_name(args.run_suffix)
+    )
+
+
 def select_best_model(args):
     results_path = validation_results_path(args)
 
@@ -207,6 +274,22 @@ def select_best_model(args):
     return selection["best"]
 
 
+def resolve_test_model(args):
+    if args.select_best_from_validation:
+        return select_best_model(args)
+
+    model_path = args.best_model_path or default_best_model_path(args)
+    best = {
+        "model_path": model_path,
+        "dimension": args.best_model_dim,
+    }
+    print(
+        "\nUsing fixed test model: "
+        f"{best['model_path']} | dim {best['dimension']}"
+    )
+    return best
+
+
 def main():
     args = parse_args()
 
@@ -221,10 +304,16 @@ def main():
         f"{args.test_config_source_graph}/"
         f"{args.test_config_source_dataset}/{args.run_suffix}"
     )
+    print(
+        "Ablation p95 source: "
+        f"{args.ablation_cap_source_graph}/"
+        f"{args.ablation_cap_source_dataset}/{args.run_suffix}"
+    )
     print(f"Embedding device: {args.embedding_device}")
     print(f"Embedding batch size: {args.embedding_batch_size}")
     print(f"Force results: {not args.no_force}")
     print(f"Skip Dijkstra: {args.skip_dijkstra}")
+    print(f"Skip ablation: {args.skip_ablation}")
 
     if not args.skip_validation:
         run_command(
@@ -238,7 +327,7 @@ def main():
     else:
         print("\nSkipping validation evaluation and reusing existing results.")
 
-    best_model = select_best_model(args)
+    best_model = resolve_test_model(args)
     best_model_args = [
         "--best-model-path",
         best_model["model_path"],
@@ -261,6 +350,32 @@ def main():
                 ),
                 dry_run=args.dry_run,
             )
+
+    if not args.skip_ablation:
+        ablation_args = [
+            "--ablation",
+            "--dim",
+            str(args.ablation_dim),
+            "--ablation-cap-source-dataset",
+            args.ablation_cap_source_dataset,
+            "--ablation-cap-source-graph",
+            args.ablation_cap_source_graph,
+        ]
+
+        print("\nStarting final ablation phase.")
+        for graph in args.test_graphs:
+            for dataset in args.test_datasets:
+                run_command(
+                    evaluation_command(
+                        args,
+                        dataset,
+                        graph,
+                        extra_args=ablation_args,
+                    ),
+                    dry_run=args.dry_run,
+                )
+    else:
+        print("\nSkipping final ablation phase.")
 
     print("\nMain evaluation workflow complete.")
 

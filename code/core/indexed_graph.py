@@ -2,6 +2,8 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
+from core.utils import is_ignorable_graph_node
+
 
 @dataclass
 class IndexedGraph:
@@ -39,7 +41,7 @@ def build_indexed_graph(graph, text_to_idx, progress_every=500_000) -> IndexedGr
     missing_nodes = [
         node
         for node in graph.nodes
-        if node not in text_to_idx
+        if node not in text_to_idx and not is_ignorable_graph_node(node)
     ]
 
     if missing_nodes:
@@ -56,6 +58,7 @@ def build_indexed_graph(graph, text_to_idx, progress_every=500_000) -> IndexedGr
         adjacency[index] = tuple(
             text_to_idx[successor]
             for successor in graph_adjacency.get(node, ())
+            if successor in text_to_idx
         )
 
         if progress_every and processed % progress_every == 0:

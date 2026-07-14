@@ -3,11 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.utils import load_causal_graph
+import networkx as nx
+
+from core.indexed_graph import build_indexed_graph
+from core.utils import is_ignorable_graph_node, load_causal_graph
 
 
 class GraphLoadingTests(unittest.TestCase):
-    def test_causenet_loader_skips_blank_endpoints(self):
+    def test_causenet_loader_skips_blank_and_punctuation_only_endpoints(self):
         rows = [
             {
                 "causal_relation": {
@@ -30,6 +33,20 @@ class GraphLoadingTests(unittest.TestCase):
                 },
                 "sources": [],
             },
+            {
+                "causal_relation": {
+                    "cause": {"concept": "# ##"},
+                    "effect": {"concept": "punctuation_only"},
+                },
+                "sources": [],
+            },
+            {
+                "causal_relation": {
+                    "cause": {"concept": "C#"},
+                    "effect": {"concept": "valid_effect"},
+                },
+                "sources": [],
+            },
         ]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -41,8 +58,26 @@ class GraphLoadingTests(unittest.TestCase):
 
             graph = load_causal_graph(graph_path)
 
-        self.assertEqual(set(graph.nodes), {"valid cause", "valid effect"})
+        self.assertEqual(set(graph.nodes), {"valid cause", "valid effect", "C#"})
         self.assertNotIn("", graph.nodes)
+        self.assertNotIn("# ##", graph.nodes)
+        self.assertTrue(is_ignorable_graph_node("# ##"))
+        self.assertFalse(is_ignorable_graph_node("C#"))
+
+    def test_indexed_graph_ignores_invalid_missing_nodes(self):
+        graph = nx.DiGraph()
+        graph.add_edge("cause", "effect")
+        graph.add_edge("cause", "# ##")
+        graph.add_edge("# ##", "effect")
+
+        indexed_graph = build_indexed_graph(
+            graph,
+            {"cause": 0, "effect": 1},
+            progress_every=None,
+        )
+
+        self.assertEqual(indexed_graph.successors(0), (1,))
+        self.assertEqual(indexed_graph.successors(1), ())
 
 
 if __name__ == "__main__":

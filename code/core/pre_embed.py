@@ -18,7 +18,7 @@ from core.config import (
 )
 from core.constants import EMBEDDINGS_DIR, LIGHTNING_MODELS_DIR
 from core.embedding_preload import get_embedding_cache_path, load_embedding_cache
-from core.graph_config import get_graph_label, get_graph_path, graph_choices
+from core.graph_config import graph_arg, get_graph_label, get_graph_path, graph_choices
 from core.utils import (
     MERGED_NODE_UNIVERSE,
     get_ablation_fine_tuned_models,
@@ -27,6 +27,7 @@ from core.utils import (
     get_fine_tuned_models,
     get_node_universe_for_graph,
     get_node_universe_path,
+    is_valid_graph_node,
     write_node_universe,
 )
 
@@ -74,11 +75,12 @@ def parse_args():
     )
     parser.add_argument(
         "--graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=None,
         help=(
             "Graph to pre-embed. If omitted, pre-embed the combined "
-            "causenet+causalbank node set into the shared JSONL/mmap cache. "
+            "causenet+ceg node set into the shared JSONL/mmap cache. "
             "Full graph variants are stored in separate graph-specific cache "
             "files."
         ),
@@ -149,7 +151,11 @@ def load_graph_nodes_for_pre_embed(graph_name, graph_path):
                 cause = relation["cause"]["concept"].replace("_", " ").strip()
                 effect = relation["effect"]["concept"].replace("_", " ").strip()
 
-                if cause and effect and cause != effect:
+                if (
+                    is_valid_graph_node(cause)
+                    and is_valid_graph_node(effect)
+                    and cause != effect
+                ):
                     nodes.add(cause)
                     nodes.add(effect)
 
@@ -166,7 +172,11 @@ def load_graph_nodes_for_pre_embed(graph_name, graph_path):
                 cause = cause.replace("_", " ").strip().lower()
                 effect = effect.replace("_", " ").strip().lower()
 
-                if cause and effect and cause != effect:
+                if (
+                    is_valid_graph_node(cause)
+                    and is_valid_graph_node(effect)
+                    and cause != effect
+                ):
                     nodes.add(cause)
                     nodes.add(effect)
 
@@ -341,7 +351,7 @@ def main():
 
     node_universe = get_node_universe_for_graph(args.graph)
     selected_graphs = (
-        ("causenet", "causalbank")
+        ("causenet", "ceg")
         if node_universe == MERGED_NODE_UNIVERSE
         else (args.graph,)
     )
@@ -361,7 +371,7 @@ def main():
     graph_nodes = sorted(graph_nodes)
     if node_universe == MERGED_NODE_UNIVERSE:
         print(
-            "Merged CauseNet precision + CausalBank graph nodes: "
+            "Merged CauseNet Precision + CEG graph nodes: "
             f"{len(graph_nodes)}"
         )
     else:

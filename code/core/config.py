@@ -28,7 +28,7 @@ DEFAULT_P95_CONFIG_SOURCE_DATASET = "msmarco_train"
 DEFAULT_P95_CONFIG_SOURCE_GRAPH = "causenet"
 
 DEFAULT_VALIDATION_GRAPH = "causenet"
-DEFAULT_TEST_GRAPHS = ("causenet", "causalbank", "causenet_full")
+DEFAULT_TEST_GRAPHS = ("causenet", "ceg", "causenet_full")
 DEFAULT_VALIDATION_DATASET = str(
     FILTERED_DATASETS_DIR / "msmarco_valid_filtered.json"
 )

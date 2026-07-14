@@ -1,15 +1,19 @@
 from core.constants import (
     CAUSENET_FULL_NODE_UNIVERSE,
-    CAUSALBANK_FULL_GRAPH_PATH,
-    CAUSALBANK_GRAPH_PATH,
+    CEG_FULL_GRAPH_PATH,
+    CEG_GRAPH_PATH,
     CAUSENET_FULL_GRAPH_PATH,
     CAUSENET_GRAPH_PATH,
     MERGED_NODE_UNIVERSE,
 )
 
 DEFAULT_GRAPH_NAME = "causenet"
-SUPPORTED_INFERENCE_GRAPHS = ("causenet", "causenet_full", "causalbank")
+SUPPORTED_INFERENCE_GRAPHS = ("causenet", "causenet_full", "ceg")
 DEFAULT_INFERENCE_GRAPH = DEFAULT_GRAPH_NAME
+GRAPH_ALIASES = {
+    "causalbank": "ceg",
+    "causalbank_full": "ceg_full",
+}
 
 GRAPH_CONFIGS = {
     "causenet": {
@@ -43,10 +47,10 @@ GRAPH_CONFIGS = {
         "node_universe": CAUSENET_FULL_NODE_UNIVERSE,
         "web_demo": True,
     },
-    "causalbank": {
-        "id": "causalbank",
-        "label": "CausalBank Filtered",
-        "path": CAUSALBANK_GRAPH_PATH,
+    "ceg": {
+        "id": "ceg",
+        "label": "CEG Filtered",
+        "path": CEG_GRAPH_PATH,
         "nodes": 77_264,
         "edges": 21_507_177,
         "bfs_p95_cap": 12_170,
@@ -59,20 +63,46 @@ GRAPH_CONFIGS = {
         "node_universe": MERGED_NODE_UNIVERSE,
         "web_demo": True,
     },
-    "causalbank_full": {
-        "id": "causalbank_full",
-        "label": "CausalBank Full",
-        "path": CAUSALBANK_FULL_GRAPH_PATH,
+    "ceg_full": {
+        "id": "ceg_full",
+        "label": "CEG Full",
+        "path": CEG_FULL_GRAPH_PATH,
         "nodes": 79_865,
         "edges": 92_270_736,
         "bfs_p95_cap": None,
         "bfs_p95_cap_source": None,
         "supported_algorithms": ("bfs", "astar"),
-        "cache_suffix": "causalbank_full",
+        "cache_suffix": "ceg_full",
         "node_universe": MERGED_NODE_UNIVERSE,
         "web_demo": False,
     },
 }
+
+
+def canonical_graph_name(graph_name):
+    graph_name = str(graph_name).strip()
+    return GRAPH_ALIASES.get(graph_name, graph_name)
+
+
+def graph_aliases_for(graph_name):
+    graph_name = canonical_graph_name(graph_name)
+    return tuple(
+        alias
+        for alias, canonical in GRAPH_ALIASES.items()
+        if canonical == graph_name
+    )
+
+
+def graph_arg(value):
+    graph_name = canonical_graph_name(value)
+    if graph_name not in GRAPH_CONFIGS:
+        choices = ", ".join(graph_choices())
+        aliases = ", ".join(sorted(GRAPH_ALIASES))
+        raise ValueError(
+            f"Unknown graph '{value}'. Choices: {choices}. "
+            f"Legacy aliases: {aliases}"
+        )
+    return graph_name
 
 
 def graph_choices():
@@ -84,6 +114,7 @@ def inference_graph_choices():
 
 
 def get_graph_config(graph_name):
+    graph_name = canonical_graph_name(graph_name)
     try:
         return GRAPH_CONFIGS[graph_name]
     except KeyError as exc:

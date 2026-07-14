@@ -4,6 +4,7 @@ from pathlib import Path
 from core.config import DEFAULT_EMBEDDING_BATCH_SIZE
 from core.embeddings import load_st_embedding_cache_index
 from core.indexed_graph import build_indexed_graph
+from core.utils import is_valid_graph_node
 
 
 def load_embedding_cache(save_path, node_universe):
@@ -44,7 +45,12 @@ def preload_graph_embeddings(
     evaluation still has to load them before timed traversal. Missing rows are
     encoded here as a fallback when pre_embed.py was not run beforehand.
     """
-    nodes = list(graph.nodes)
+    nodes = [
+        node
+        for node in graph.nodes
+        if is_valid_graph_node(node)
+    ]
+    skipped_nodes = graph.number_of_nodes() - len(nodes)
     cached_before = sum(
         1
         for node in nodes
@@ -59,6 +65,12 @@ def preload_graph_embeddings(
         f"active dim {active_dim}, model dim {model_dim})...",
         flush=True,
     )
+    if skipped_nodes:
+        print(
+            "Skipping blank or punctuation-only graph node(s) during "
+            f"embedding index preload: {skipped_nodes:,}.",
+            flush=True,
+        )
 
     start_time = time.time()
     added = embeder.prepare_embedding_index(
@@ -101,13 +113,24 @@ def preload_rl_embeddings(embeder, graph, data=None, batch_size=4096):
     RL uses separate entity/question/relation embedding paths, so warming these
     caches before timed evaluation keeps preprocessing out of traversal timing.
     """
-    nodes = list(graph.nodes)
+    nodes = [
+        node
+        for node in graph.nodes
+        if is_valid_graph_node(node)
+    ]
+    skipped_nodes = len(graph.nodes) - len(nodes)
     entity_texts = nodes + ["stop stop action"]
 
     print(
         "Preloading RL GloVe entity embeddings "
         f"({len(entity_texts):,} entities)..."
     )
+    if skipped_nodes:
+        print(
+            "Skipping blank or punctuation-only RL graph node(s) during "
+            f"embedding preload: {skipped_nodes:,}.",
+            flush=True,
+        )
     start_time = time.time()
     added_entities = embeder.preload_entities(
         entity_texts,

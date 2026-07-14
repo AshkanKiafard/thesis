@@ -25,13 +25,17 @@ from core.constants import (
 )
 
 NODE_UNIVERSE_FILENAMES = {
-    MERGED_NODE_UNIVERSE: "merged_causenet_causalbank_nodes.jsonl",
+    MERGED_NODE_UNIVERSE: "merged_causenet_ceg_nodes.jsonl",
     CAUSENET_FULL_NODE_UNIVERSE: "causenet_full_nodes.jsonl",
+}
+NODE_UNIVERSE_ALIASES = {
+    "merged_causenet_causalbank": MERGED_NODE_UNIVERSE,
 }
 
 GRAPH_NODE_UNIVERSES = {
     None: MERGED_NODE_UNIVERSE,
     "causenet": MERGED_NODE_UNIVERSE,
+    "ceg": MERGED_NODE_UNIVERSE,
     "causalbank": MERGED_NODE_UNIVERSE,
     "causenet_full": CAUSENET_FULL_NODE_UNIVERSE,
 }
@@ -40,11 +44,16 @@ CACHE_SUFFIX_NODE_UNIVERSES = {
     None: MERGED_NODE_UNIVERSE,
     "": MERGED_NODE_UNIVERSE,
     "causenet_full": CAUSENET_FULL_NODE_UNIVERSE,
+    "causalbank_full": MERGED_NODE_UNIVERSE,
+    "ceg_full": MERGED_NODE_UNIVERSE,
 }
 
 
 def get_embedding_cache_suffix(graph_name):
-    if graph_name in {"causenet_full", "causalbank_full"}:
+    if graph_name == "causalbank_full":
+        return "ceg_full"
+
+    if graph_name in {"causenet_full", "ceg_full"}:
         return graph_name
 
     return None
@@ -53,6 +62,8 @@ def get_embedding_cache_suffix(graph_name):
 def normalize_node_universe(node_universe: str | None) -> str:
     if node_universe is None:
         return MERGED_NODE_UNIVERSE
+
+    node_universe = NODE_UNIVERSE_ALIASES.get(node_universe, node_universe)
 
     if node_universe not in NODE_UNIVERSE_FILENAMES:
         choices = ", ".join(sorted(NODE_UNIVERSE_FILENAMES))
@@ -183,6 +194,16 @@ def _normalize_lexical_ceg_concept(value):
     return value.replace("_", " ").strip().lower()
 
 
+def is_ignorable_graph_node(node: Any) -> bool:
+    """Exclude blank and punctuation-only concepts such as ``# ##``."""
+    value = str(node).strip()
+    return not value or not any(character.isalnum() for character in value)
+
+
+def is_valid_graph_node(node: Any) -> bool:
+    return not is_ignorable_graph_node(node)
+
+
 def _build_source(connection, cause, effect):
     # Match original causal-qa-rl graph_utils._build_source.
     if connection == "causes":
@@ -261,7 +282,7 @@ def _iter_causenet_edges(file_path, remove_self_loops=True):
                 d["causal_relation"]["effect"]["concept"]
             )
 
-            if not cause or not effect:
+            if not is_valid_graph_node(cause) or not is_valid_graph_node(effect):
                 continue
 
             if remove_self_loops and cause == effect:
@@ -302,7 +323,7 @@ def _iter_lexical_ceg_edges(
             cause = _normalize_lexical_ceg_concept(cause)
             effect = _normalize_lexical_ceg_concept(effect)
 
-            if not cause or not effect:
+            if not is_valid_graph_node(cause) or not is_valid_graph_node(effect):
                 continue
 
             if remove_self_loops and cause == effect:

@@ -2,19 +2,19 @@ import argparse
 from pathlib import Path
 
 from core.constants import (
-    CAUSALBANK_FULL_GRAPH_PATH,
-    CAUSALBANK_GRAPH_PATH,
+    CEG_FULL_GRAPH_PATH,
+    CEG_GRAPH_PATH,
 )
 
-RAW_CAUSALBANK_GRAPH_PATH = CAUSALBANK_FULL_GRAPH_PATH
-FILTERED_CAUSALBANK_GRAPH_PATH = CAUSALBANK_GRAPH_PATH
+RAW_CEG_GRAPH_PATH = CEG_FULL_GRAPH_PATH
+FILTERED_CEG_GRAPH_PATH = CEG_GRAPH_PATH
 
-DEFAULT_MIN_COUNT = 0
+DEFAULT_MIN_COUNT = 6
 DEFAULT_MIN_CAUSAL_STRENGTH = 0.10
 DEFAULT_NECESSITY_WEIGHT = 0.90
 
 
-def normalize_causalbank_concept(value):
+def normalize_ceg_concept(value):
     return value.replace("_", " ").strip().lower()
 
 
@@ -48,7 +48,7 @@ def edge_passes_filter(
     return causal_strength >= min_causal_strength
 
 
-def iter_filtered_causalbank_edges(
+def iter_filtered_ceg_edges(
     input_path,
     min_count=DEFAULT_MIN_COUNT,
     min_causal_strength=DEFAULT_MIN_CAUSAL_STRENGTH,
@@ -80,8 +80,8 @@ def iter_filtered_causalbank_edges(
                 continue
 
             cause, effect = parts[0].split("->", 1)
-            cause = normalize_causalbank_concept(cause)
-            effect = normalize_causalbank_concept(effect)
+            cause = normalize_ceg_concept(cause)
+            effect = normalize_ceg_concept(effect)
 
             if not cause or not effect:
                 continue
@@ -92,9 +92,9 @@ def iter_filtered_causalbank_edges(
             yield cause, effect, count, necessity_score, sufficiency_score
 
 
-def filter_causalbank_graph(
-    input_path=RAW_CAUSALBANK_GRAPH_PATH,
-    output_path=FILTERED_CAUSALBANK_GRAPH_PATH,
+def filter_ceg_graph(
+    input_path=RAW_CEG_GRAPH_PATH,
+    output_path=FILTERED_CEG_GRAPH_PATH,
     min_count=DEFAULT_MIN_COUNT,
     min_causal_strength=DEFAULT_MIN_CAUSAL_STRENGTH,
     necessity_weight=DEFAULT_NECESSITY_WEIGHT,
@@ -108,7 +108,7 @@ def filter_causalbank_graph(
 
     with open(output_path, "w", encoding="utf-8", newline="\n") as output_file:
         for cause, effect, count, necessity_score, sufficiency_score in (
-            iter_filtered_causalbank_edges(
+            iter_filtered_ceg_edges(
                 input_path=input_path,
                 min_count=min_count,
                 min_causal_strength=min_causal_strength,
@@ -135,25 +135,25 @@ def filter_causalbank_graph(
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Pre-filter the raw CausalBank/lexical CEG graph once."
+        description="Pre-filter the raw lexical Cause Effect Graph once."
     )
     parser.add_argument(
         "--input",
         type=Path,
-        default=RAW_CAUSALBANK_GRAPH_PATH,
-        help="Raw CausalBank graph path.",
+        default=RAW_CEG_GRAPH_PATH,
+        help="Raw CEG graph path.",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=FILTERED_CAUSALBANK_GRAPH_PATH,
-        help="Filtered CausalBank graph path.",
+        default=FILTERED_CEG_GRAPH_PATH,
+        help="Filtered CEG graph path.",
     )
     parser.add_argument(
         "--min-count",
         type=int,
         default=DEFAULT_MIN_COUNT,
-        help="Minimum CausalBank pair count.",
+        help="Minimum CEG pair count.",
     )
     parser.add_argument(
         "--min-causal-strength",
@@ -175,7 +175,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    stats = filter_causalbank_graph(
+    stats = filter_ceg_graph(
         input_path=args.input,
         output_path=args.output,
         min_count=args.min_count,

@@ -30,7 +30,7 @@ The demo serves a Webis-template-based page and API endpoints from
 ```text
 CauseNet Precision   80,214 nodes      197,376 edges
 CauseNet Full    12,185,920 nodes   11,606,975 edges
-CausalBank Filtered  77,264 nodes   21,507,177 edges
+CEG Filtered         77,264 nodes   21,507,177 edges
 ```
 
 Graph metadata is centralized in `core.graph_config`. Each entry stores the
@@ -125,7 +125,7 @@ A* model warmup:
 Startup preloads every A* model exposed by the UI and prepares one runtime
 embedding table plus indexed graph adjacencies for each compatible graph node
 universe. CauseNet Full therefore uses its own full-node embedding cache rather
-than the smaller merged CauseNet/CausalBank cache. Each table is built at the
+than the smaller merged CauseNet/CEG cache. Each table is built at the
 model's full dimension, so lower Matryoshka dimensions reuse it by slicing.
 Startup also preloads A* p95 defaults and dynamically selects a two-hop query
 from each graph's topology for every exposed model and dimension. The warmup

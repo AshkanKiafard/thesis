@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from core.constants import FILTERED_DATASETS_DIR, REPORTS_DIR
-from core.graph_config import get_graph_config, graph_choices
+from core.graph_config import graph_arg, get_graph_config, graph_choices
 from core.utils import load_graph_nodes as load_causal_graph_nodes
 from reports.common import (
     latex_escape,
@@ -19,7 +19,7 @@ from reports.common import (
 
 DATASET_DIR = FILTERED_DATASETS_DIR
 DEFAULT_OUTPUT_DIR = REPORTS_DIR
-SELECTED_GRAPHS = ("causenet", "causenet_full", "causalbank")
+SELECTED_GRAPHS = ("causenet", "causenet_full", "ceg")
 
 
 def load_dataset(file_path):
@@ -211,6 +211,7 @@ def parse_args():
     parser.add_argument(
         "--graphs",
         nargs="+",
+        type=graph_arg,
         choices=graph_choices(),
         default=list(SELECTED_GRAPHS),
         help="Graphs to check.",
@@ -245,9 +246,9 @@ def main():
 
         if not graph_path.exists():
             message = f"Missing {graph_config['label']} graph: {graph_path}"
-            if graph_name == "causalbank":
+            if graph_name == "ceg":
                 message += (
-                    "\nRun: python -m preprocessing.filter_causalbank_graph"
+                    "\nRun: python -m preprocessing.filter_ceg_graph"
                 )
             raise FileNotFoundError(message)
 

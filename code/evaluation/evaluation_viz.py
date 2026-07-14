@@ -20,7 +20,13 @@ from core.constants import (
     RL_BASELINE_MODEL,
     THESIS_PLOTS_DIR,
 )
-from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
+from core.graph_config import (
+    DEFAULT_GRAPH_NAME,
+    canonical_graph_name,
+    graph_aliases_for,
+    graph_arg,
+    graph_choices,
+)
 from core.utils import (
     format_model_display_name,
     get_ablation_model_names,
@@ -152,6 +158,7 @@ def parse_args():
     )
     parser.add_argument(
         "--graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=None,
         help=(
@@ -238,8 +245,21 @@ def build_input_paths(
     graph_name: str,
     ablation: bool = False,
 ):
+    graph_name = canonical_graph_name(graph_name)
     input_root = EVALUATION_INPUT_ROOT / "ablation" if ablation else EVALUATION_INPUT_ROOT
-    eval_dir = input_root / graph_name / dataset_name / run_suffix
+    candidate_dirs = [
+        input_root / graph_dir / dataset_name / run_suffix
+        for graph_dir in (graph_name, *graph_aliases_for(graph_name))
+    ]
+    eval_dir = next(
+        (
+            path
+            for path in candidate_dirs
+            if (path / "evaluation_results.json").exists()
+            or (path / "visited_nodes_analysis.json").exists()
+        ),
+        candidate_dirs[0],
+    )
     eval_results_path = eval_dir / "evaluation_results.json"
     visited_nodes_path = eval_dir / "visited_nodes_analysis.json"
 
@@ -252,11 +272,15 @@ def build_plot_output_dir(
     graph_name: str,
     ablation: bool = False,
 ):
+    graph_name = canonical_graph_name(graph_name)
     plot_root = PLOT_OUTPUT_DIR / "ablation" if ablation else PLOT_OUTPUT_DIR
     return plot_root / graph_name / dataset_name / run_suffix
 
 
 def discover_result_sets(graph_name=None, run_suffix=None, ablation=False):
+    if graph_name is not None:
+        graph_name = canonical_graph_name(graph_name)
+
     result_sets = []
 
     input_root = EVALUATION_INPUT_ROOT / "ablation" if ablation else EVALUATION_INPUT_ROOT
@@ -273,7 +297,10 @@ def discover_result_sets(graph_name=None, run_suffix=None, ablation=False):
             if path.is_dir()
         ]
     else:
-        graph_dirs = [input_root / graph_name]
+        graph_dirs = [
+            input_root / graph_dir
+            for graph_dir in (graph_name, *graph_aliases_for(graph_name))
+        ]
 
     for graph_dir in sorted(graph_dirs):
         if not graph_dir.is_dir():
@@ -303,7 +330,7 @@ def discover_result_sets(graph_name=None, run_suffix=None, ablation=False):
 
                 result_sets.append(
                     {
-                        "graph": graph_dir.name,
+                        "graph": canonical_graph_name(graph_dir.name),
                         "dataset": dataset_dir.name,
                         "run_suffix": run_dir.name,
                         "eval_results_path": eval_results_path,
@@ -3147,7 +3174,7 @@ def save_thesis_figure(fig, stem):
 def create_thesis_main_figure(rows):
     fig, axes = plt.subplots(1, 3, figsize=(15.8, 5.25))
     fig.suptitle(
-        "CauseNet precision graph - MS MARCO validation",
+        "CauseNet Precision - MS MARCO Validation",
         fontsize=14,
         fontweight="semibold",
     )

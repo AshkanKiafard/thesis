@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from core.constants import DEFAULT_RL_MODEL_PATH, GLOVE_300D_PATH
-from core.graph_config import SUPPORTED_INFERENCE_GRAPHS
+from core.graph_config import SUPPORTED_INFERENCE_GRAPHS, canonical_graph_name
 
 
 @dataclass(frozen=True)
@@ -80,4 +80,5 @@ def get_rl_policy_config(policy_config_id: str | None = None) -> RLPolicyConfig:
 
 def graph_supports_rl(graph_id: str, policy_config_id: str | None = None) -> bool:
     policy = get_rl_policy_config(policy_config_id)
+    graph_id = canonical_graph_name(graph_id)
     return graph_id in policy.supported_graphs

@@ -251,7 +251,7 @@ class InferenceRegistryTests(unittest.TestCase):
 
         self.assertEqual(
             [graph["label"] for graph in graphs],
-            ["CauseNet Precision", "CauseNet Full", "CausalBank Filtered"],
+            ["CauseNet Precision", "CauseNet Full", "CEG Filtered"],
         )
         self.assertEqual(
             [(graph["nodes"], graph["edges"]) for graph in graphs],
@@ -261,17 +261,17 @@ class InferenceRegistryTests(unittest.TestCase):
                 (77_264, 21_507_177),
             ],
         )
-        self.assertNotIn("causalbank_full", SUPPORTED_INFERENCE_GRAPHS)
+        self.assertNotIn("ceg_full", SUPPORTED_INFERENCE_GRAPHS)
         self.assertEqual(GRAPH_CONFIGS["causenet"]["label"], "CauseNet Precision")
 
     def test_full_graph_uses_its_own_embedding_universe_during_warmup(self):
         groups = group_graphs_by_embedding_universe(
-            ("causenet", "causenet_full", "causalbank")
+            ("causenet", "causenet_full", "ceg")
         )
         self.assertEqual(
             groups,
             (
-                (None, "merged_causenet_causalbank", ("causenet", "causalbank")),
+                (None, "merged_causenet_ceg", ("causenet", "ceg")),
                 ("causenet_full", "causenet_full", ("causenet_full",)),
             ),
         )
@@ -371,7 +371,7 @@ class InferenceRegistryTests(unittest.TestCase):
         )
         self.assertEqual(set(policy.supported_graphs), set(SUPPORTED_INFERENCE_GRAPHS))
         self.assertTrue(graph_supports_rl("causenet", policy.id))
-        self.assertFalse(graph_supports_rl("causalbank_full", policy.id))
+        self.assertFalse(graph_supports_rl("ceg_full", policy.id))
         self.assertNotIn("dimension", config_defaults(graph="causenet", algorithm="rl"))
 
     def test_backend_rejects_algorithm_specific_field_leakage(self):

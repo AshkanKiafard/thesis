@@ -26,6 +26,8 @@ from core.constants import (
 from core.embeddings import STEmbedder, GloveEmbeder, DistanceMetric
 from core.graph_config import (
     DEFAULT_GRAPH_NAME,
+    canonical_graph_name,
+    graph_arg,
     get_graph_label,
     get_graph_path,
     graph_choices,
@@ -65,6 +67,7 @@ def build_output_paths(
     ->
     data/evaluation/causenet/msmarco_valid/v3/visited_nodes_analysis.json
     """
+    graph_name = canonical_graph_name(graph_name)
     dataset_stem = Path(dataset_path).stem
     dataset_name = dataset_stem.replace("_filtered", "")
 
@@ -276,6 +279,7 @@ def parse_args():
     )
     parser.add_argument(
         "--graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=DEFAULT_GRAPH_NAME,
         help="Graph to analyze with. Defaults to CauseNet.",

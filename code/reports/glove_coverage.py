@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from core.constants import FILTERED_DATASETS_DIR, GLOVE_300D_PATH, REPORTS_DIR
-from core.graph_config import get_graph_label, get_graph_path, graph_choices
+from core.graph_config import graph_arg, get_graph_label, get_graph_path, graph_choices
 from reports.common import (
     latex_escape,
     latex_number,
@@ -19,7 +19,7 @@ from reports.common import (
 DEFAULT_GLOVE_PATH = GLOVE_300D_PATH
 DEFAULT_OUTPUT_DIR = REPORTS_DIR
 DEFAULT_DATASET_DIR = FILTERED_DATASETS_DIR
-DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank")
+DEFAULT_GRAPHS = ("causenet", "causenet_full", "ceg")
 
 # These are the datasets where the graph-membership report should mirror evaluation.
 # For every row we check whether cause and effect both exist in the graph. If not,
@@ -74,11 +74,11 @@ def iter_causenet_nodes(file_path, progress_every=500_000):
                 yield effect
 
 
-def iter_causalbank_nodes(file_path, progress_every=1_000_000):
+def iter_ceg_nodes(file_path, progress_every=1_000_000):
     with open(file_path, encoding="utf-8") as file:
         for line_number, line in enumerate(file, start=1):
             if progress_every and line_number % progress_every == 0:
-                print(f"Read {line_number:,} CausalBank filtered lines...")
+                print(f"Read {line_number:,} CEG filtered lines...")
 
             parts = line.rstrip("\n").split("\t")
 
@@ -96,8 +96,8 @@ def load_nodes(graph_name, graph_path):
     if graph_name in {"causenet", "causenet_full"}:
         return set(iter_causenet_nodes(graph_path))
 
-    if graph_name in {"causalbank", "causalbank_full"}:
-        return set(iter_causalbank_nodes(graph_path))
+    if graph_name in {"ceg", "ceg_full"}:
+        return set(iter_ceg_nodes(graph_path))
 
     raise ValueError(f"Unknown graph name: {graph_name}")
 
@@ -1002,6 +1002,7 @@ def parse_args():
     parser.add_argument(
         "--graphs",
         nargs="+",
+        type=graph_arg,
         choices=graph_choices(),
         default=list(DEFAULT_GRAPHS),
         help="Graphs to check.",
@@ -1025,16 +1026,20 @@ def parse_args():
         help="Path override for CauseNet full JSONL graph.",
     )
     parser.add_argument(
+        "--ceg-graph",
         "--causalbank-graph",
+        dest="ceg_graph",
         type=Path,
-        default=get_graph_path("causalbank"),
-        help="Path override for filtered CausalBank graph.",
+        default=get_graph_path("ceg"),
+        help="Path override for filtered CEG graph.",
     )
     parser.add_argument(
+        "--ceg-full-graph",
         "--causalbank-full-graph",
+        dest="ceg_full_graph",
         type=Path,
-        default=get_graph_path("causalbank_full"),
-        help="Path override for full CausalBank graph.",
+        default=get_graph_path("ceg_full"),
+        help="Path override for full CEG graph.",
     )
     parser.add_argument(
         "--output-dir",
@@ -1089,8 +1094,8 @@ def main():
     graph_path_overrides = {
         "causenet": args.causenet_graph,
         "causenet_full": args.causenet_full_graph,
-        "causalbank": args.causalbank_graph,
-        "causalbank_full": args.causalbank_full_graph,
+        "ceg": args.ceg_graph,
+        "ceg_full": args.ceg_full_graph,
     }
     graph_paths = {
         graph_name: resolve_repo_path(graph_path_overrides[graph_name])

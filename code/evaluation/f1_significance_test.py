@@ -7,7 +7,13 @@ import numpy as np
 
 from core.config import DEFAULT_RUN_SUFFIX
 from core.constants import EVALUATION_DIR, REPO_ROOT
-from core.graph_config import DEFAULT_GRAPH_NAME, graph_choices
+from core.graph_config import (
+    DEFAULT_GRAPH_NAME,
+    canonical_graph_name,
+    graph_aliases_for,
+    graph_arg,
+    graph_choices,
+)
 
 
 DEFAULT_DATASET_NAME = "msmarco_test"
@@ -35,6 +41,7 @@ def load_json(path):
 
 
 def resolve_evaluation_results_path(dataset_name_or_path, run_suffix, graph_name):
+    graph_name = canonical_graph_name(graph_name)
     requested_path = Path(dataset_name_or_path)
 
     if requested_path.suffix == ".json":
@@ -50,10 +57,11 @@ def resolve_evaluation_results_path(dataset_name_or_path, run_suffix, graph_name
     else:
         candidates = [
             EVALUATION_DIR
-            / graph_name
+            / graph_dir
             / dataset_name_or_path
             / run_suffix
             / "evaluation_results.json"
+            for graph_dir in (graph_name, *graph_aliases_for(graph_name))
         ]
 
     for path in candidates:
@@ -508,6 +516,7 @@ def parse_args():
     )
     parser.add_argument(
         "--graph",
+        type=graph_arg,
         choices=graph_choices(),
         default=DEFAULT_GRAPH_NAME,
         help="Graph results to test. Defaults to CauseNet.",

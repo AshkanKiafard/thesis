@@ -45,6 +45,8 @@ from core.graph_config import (
     DEFAULT_INFERENCE_GRAPH,
     GRAPH_CONFIGS,
     SUPPORTED_INFERENCE_GRAPHS,
+    canonical_graph_name,
+    graph_aliases_for,
     get_graph_bfs_p95_cap,
     get_graph_cache_suffix,
     get_graph_label,
@@ -312,7 +314,7 @@ def config_defaults(
     model: str | None = Query(default=None),
     dim: int | None = Query(default=None, ge=1),
 ):
-    validate_demo_graph_name(graph)
+    graph = validate_demo_graph_name(graph)
     algorithm = normalize_algorithm(algorithm)
 
     if algorithm == "bfs":
@@ -359,6 +361,7 @@ def nodes(
     q: str = Query(default=""),
     limit: int = Query(default=20, ge=1, le=100),
 ):
+    graph = validate_demo_graph_name(graph)
     bundle = get_loaded_graph_bundle(graph)
     return {"nodes": search_nodes(bundle, q, limit)}
 
@@ -372,6 +375,7 @@ def subgraph(
     depth: int = Query(default=1, ge=0, le=2),
     limit: int = Query(default=SUBGRAPH_LIMIT, ge=20, le=600),
 ):
+    graph = validate_demo_graph_name(graph)
     bundle = get_loaded_graph_bundle(graph)
 
     if not center and not source and not target:
@@ -450,7 +454,7 @@ def run_inference(request: InferenceRequest) -> dict[str, Any]:
     if not graph_id:
         raise HTTPException(status_code=400, detail="Missing graph_id.")
 
-    validate_demo_graph_name(graph_id)
+    graph_id = validate_demo_graph_name(graph_id)
     algorithm = normalize_algorithm(request.algorithm)
     if not graph_supports_algorithm(graph_id, algorithm):
         raise HTTPException(
@@ -754,6 +758,7 @@ def parse_algorithm_config(model_type, raw_config: dict[str, Any]):
 
 
 def graph_option_payload(graph_name: str) -> dict[str, Any]:
+    graph_name = canonical_graph_name(graph_name)
     config = GRAPH_CONFIGS[graph_name]
     return {
         "id": graph_name,
@@ -783,7 +788,8 @@ def get_available_demo_graphs() -> tuple[str, ...]:
     )
 
 
-def validate_demo_graph_name(graph_name: str) -> None:
+def validate_demo_graph_name(graph_name: str) -> str:
+    graph_name = canonical_graph_name(graph_name)
     if graph_name not in DEMO_GRAPH_CHOICES:
         choices = ", ".join(DEMO_GRAPH_CHOICES)
         raise HTTPException(
@@ -793,6 +799,7 @@ def validate_demo_graph_name(graph_name: str) -> None:
                 f"Enabled graphs: {choices}."
             ),
         )
+    return graph_name
 
 
 def resolve_endpoint_nodes(
@@ -818,18 +825,21 @@ def resolve_endpoint_nodes(
 
 
 def get_default_bfs_cap(graph_name: str) -> dict[str, Any]:
+    graph_name = canonical_graph_name(graph_name)
     candidate_graphs = [graph_name]
     if DEFAULT_P95_CONFIG_SOURCE_GRAPH not in candidate_graphs:
         candidate_graphs.append(DEFAULT_P95_CONFIG_SOURCE_GRAPH)
 
     for candidate_graph in candidate_graphs:
-        p95_file = (
+        p95_files = [
             EVALUATION_DIR
-            / candidate_graph
+            / graph_dir
             / DEFAULT_P95_CONFIG_SOURCE_DATASET
             / DEFAULT_RUN_SUFFIX
             / "visited_nodes_analysis.json"
-        )
+            for graph_dir in (candidate_graph, *graph_aliases_for(candidate_graph))
+        ]
+        p95_file = next((path for path in p95_files if path.exists()), p95_files[0])
         cap = read_p95_bfs_cap(p95_file)
         if cap is not None:
             source_suffix = ""
@@ -1508,13 +1518,13 @@ def synchronize_embedding_device(embedder) -> None:
 
 
 def get_loaded_graph_bundle(graph_name: str) -> GraphBundle:
-    validate_demo_graph_name(graph_name)
+    graph_name = validate_demo_graph_name(graph_name)
     cached = _graph_cache.get(graph_name)
     return cached if cached is not None else get_graph_bundle(graph_name)
 
 
 def get_graph_bundle(graph_name: str) -> GraphBundle:
-    validate_demo_graph_name(graph_name)
+    graph_name = validate_demo_graph_name(graph_name)
 
     with _graph_lock:
         cached = _graph_cache.get(graph_name)
@@ -1638,7 +1648,16 @@ def load_graph_for_demo(graph_name: str, graph_path: Path):
 
 
 def graph_cache_path(graph_name: str) -> Path:
+    graph_name = canonical_graph_name(graph_name)
     return GRAPH_CACHE_DIR / f"{graph_name}.pickle"
+
+
+def graph_cache_paths_for_read(graph_name: str) -> list[Path]:
+    graph_name = canonical_graph_name(graph_name)
+    return [
+        GRAPH_CACHE_DIR / f"{name}.pickle"
+        for name in (graph_name, *graph_aliases_for(graph_name))
+    ]
 
 
 def graph_source_signature(graph_path: Path) -> dict[str, Any]:
@@ -1655,7 +1674,10 @@ def load_graph_from_disk_cache(graph_name: str, graph_path: Path):
     if DISABLE_GRAPH_DISK_CACHE:
         return None
 
-    cache_path = graph_cache_path(graph_name)
+    cache_path = next(
+        (path for path in graph_cache_paths_for_read(graph_name) if path.exists()),
+        graph_cache_path(graph_name),
+    )
     if not cache_path.exists():
         return None
 
@@ -1714,7 +1736,16 @@ def save_graph_to_disk_cache(graph_name: str, graph_path: Path, graph):
 
 
 def overview_visual_cache_path(graph_name: str, limit: int) -> Path:
+    graph_name = canonical_graph_name(graph_name)
     return VISUAL_CACHE_DIR / f"{graph_name}_preview_v{VISUAL_CACHE_VERSION}_{limit}.json"
+
+
+def overview_visual_cache_paths_for_read(graph_name: str, limit: int) -> list[Path]:
+    graph_name = canonical_graph_name(graph_name)
+    return [
+        VISUAL_CACHE_DIR / f"{name}_preview_v{VISUAL_CACHE_VERSION}_{limit}.json"
+        for name in (graph_name, *graph_aliases_for(graph_name))
+    ]
 
 
 def visual_cache_signature(graph_name: str, graph_path: Path, limit: int) -> dict[str, Any]:
@@ -1731,7 +1762,15 @@ def visual_cache_signature(graph_name: str, graph_path: Path, limit: int) -> dic
 
 
 def load_overview_visual_cache(graph_name: str, graph_path: Path, limit: int):
-    cache_path = overview_visual_cache_path(graph_name, limit)
+    graph_name = canonical_graph_name(graph_name)
+    cache_path = next(
+        (
+            path
+            for path in overview_visual_cache_paths_for_read(graph_name, limit)
+            if path.exists()
+        ),
+        overview_visual_cache_path(graph_name, limit),
+    )
     if not cache_path.exists() or not graph_path.exists():
         return None
 
@@ -1742,7 +1781,11 @@ def load_overview_visual_cache(graph_name: str, graph_path: Path, limit: int):
         print(f"Ignoring unreadable visual cache {cache_path}: {exc}", flush=True)
         return None
 
-    if payload.get("signature") != visual_cache_signature(graph_name, graph_path, limit):
+    expected_signatures = [
+        visual_cache_signature(name, graph_path, limit)
+        for name in (graph_name, *graph_aliases_for(graph_name))
+    ]
+    if payload.get("signature") not in expected_signatures:
         print(f"Ignoring stale visual cache {cache_path}.", flush=True)
         return None
 
@@ -2307,6 +2350,7 @@ def get_default_astar_max_visits(
     model_id: str,
     dim: int,
 ) -> dict[str, Any]:
+    graph_name = canonical_graph_name(graph_name)
     if ASTAR_MAX_VISITS != -1:
         return {
             "value": ASTAR_MAX_VISITS,
@@ -2319,13 +2363,15 @@ def get_default_astar_max_visits(
         candidate_graphs.append(DEFAULT_GRAPH_NAME)
 
     for candidate_graph in candidate_graphs:
-        p95_file = (
+        p95_files = [
             EVALUATION_DIR
-            / candidate_graph
+            / graph_dir
             / "msmarco_train"
             / DEFAULT_RUN_SUFFIX
             / "visited_nodes_analysis.json"
-        )
+            for graph_dir in (candidate_graph, *graph_aliases_for(candidate_graph))
+        ]
+        p95_file = next((path for path in p95_files if path.exists()), p95_files[0])
         cap = read_p95_astar_cap(p95_file, model_name, dim)
         if cap is not None:
             return {

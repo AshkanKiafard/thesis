@@ -34,8 +34,8 @@ DOCKER_DIR = DATA_DIR / "docker"
 GLOVE_300D_PATH = EMBEDDINGS_DIR / "glove.6B" / "glove.6B.300d.txt"
 CAUSENET_GRAPH_PATH = GRAPHS_DIR / "causenet-precision.jsonl"
 CAUSENET_FULL_GRAPH_PATH = GRAPHS_DIR / "causenet-full.jsonl"
-CAUSALBANK_GRAPH_PATH = GRAPHS_DIR / "Lexical_Cause_Effect_Graph.filtered.txt"
-CAUSALBANK_FULL_GRAPH_PATH = GRAPHS_DIR / "Lexical_Cause_Effect_Graph.txt"
+CEG_GRAPH_PATH = GRAPHS_DIR / "Lexical_Cause_Effect_Graph.filtered.txt"
+CEG_FULL_GRAPH_PATH = GRAPHS_DIR / "Lexical_Cause_Effect_Graph.txt"
 DEFAULT_RL_MODEL_PATH = RL_MODELS_DIR / "msmarco_no_inverse_state_dict.pt"
 
 
@@ -61,5 +61,5 @@ BASELINE_MODEL_NAMES = frozenset(
     }
 )
 
-MERGED_NODE_UNIVERSE = "merged_causenet_causalbank"
+MERGED_NODE_UNIVERSE = "merged_causenet_ceg"
 CAUSENET_FULL_NODE_UNIVERSE = "causenet_full"

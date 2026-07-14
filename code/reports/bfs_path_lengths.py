@@ -8,7 +8,7 @@ from pathlib import Path
 
 import traverse_strategies as ts
 from core.constants import FILTERED_DATASETS_DIR, REPORTS_DIR
-from core.graph_config import get_graph_label, get_graph_path, graph_choices
+from core.graph_config import graph_arg, get_graph_label, get_graph_path, graph_choices
 from core.utils import load_causal_graph
 from reports.common import (
     latex_escape,
@@ -22,7 +22,7 @@ from reports.common import (
 DEFAULT_DATASET_DIR = FILTERED_DATASETS_DIR
 DEFAULT_OUTPUT_DIR = REPORTS_DIR
 DEFAULT_DATASETS = ("msmarco_test", "sem_test")
-DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank")
+DEFAULT_GRAPHS = ("causenet", "causenet_full", "ceg")
 
 
 def load_dataset(dataset_dir, dataset_name, stop_after_pairs=None):
@@ -354,6 +354,7 @@ def parse_args():
     parser.add_argument(
         "--graphs",
         nargs="+",
+        type=graph_arg,
         choices=graph_choices(),
         default=list(DEFAULT_GRAPHS),
         help="Graphs to check.",
