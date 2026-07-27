@@ -16,7 +16,7 @@ from core.graph_config import (
 )
 
 
-DEFAULT_DATASET_NAME = "msmarco_test"
+DEFAULT_DATASET_NAME = "sem_test"
 DEFAULT_REFERENCE_CONTAINS = [
     "granite-embedding-english-r2",
     "finetuned",

@@ -2,15 +2,11 @@
 
 import argparse
 import csv
-import os
-import sqlite3
-import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from core.constants import REPORTS_DIR
-from core.graph_config import graph_arg, get_graph_label, get_graph_path, graph_choices
+from core.graph_config import get_graph_label, get_graph_path, graph_choices
 from core.utils import _iter_graph_edges
 from reports.common import (
     display_path,
@@ -22,87 +18,11 @@ from reports.common import (
     write_latex,
 )
 
-DEFAULT_GRAPHS = ("causenet", "causenet_full", "ceg", "ceg_full")
+DEFAULT_GRAPHS = ("causenet", "causenet_full", "causalbank", "causalbank_full")
 DEFAULT_OUTPUT_DIR = REPORTS_DIR
-DEFAULT_BATCH_SIZE = 100_000
-COUNT_MODE = "unique_directed_edges"
 
 
-@dataclass
-class CountResult:
-    graph: str
-    label: str
-    path: str
-    nodes: int
-    edges: int
-    parsed_relation_records: int
-    duplicate_relation_records: int
-    count_mode: str
-    count_seconds: float
-    temp_database_peak_bytes: int
-
-    def as_dict(self):
-        return {
-            "graph": self.graph,
-            "label": self.label,
-            "path": self.path,
-            "nodes": self.nodes,
-            "edges": self.edges,
-            "parsed_relation_records": self.parsed_relation_records,
-            "duplicate_relation_records": self.duplicate_relation_records,
-            "count_mode": self.count_mode,
-            "count_seconds": self.count_seconds,
-            "temp_database_peak_bytes": self.temp_database_peak_bytes,
-        }
-
-
-def create_count_database(db_path: Path):
-    connection = sqlite3.connect(str(db_path))
-    connection.execute("PRAGMA journal_mode = OFF")
-    connection.execute("PRAGMA synchronous = OFF")
-    connection.execute("PRAGMA temp_store = FILE")
-    connection.execute(
-        """
-        CREATE TABLE edges (
-            cause TEXT NOT NULL,
-            effect TEXT NOT NULL,
-            PRIMARY KEY (cause, effect)
-        ) WITHOUT ROWID
-        """
-    )
-    connection.execute(
-        """
-        CREATE TABLE nodes (
-            node TEXT NOT NULL PRIMARY KEY
-        ) WITHOUT ROWID
-        """
-    )
-    return connection
-
-
-def flush_batch(connection, edge_batch, node_batch):
-    if not edge_batch:
-        return
-
-    connection.executemany(
-        "INSERT OR IGNORE INTO edges (cause, effect) VALUES (?, ?)",
-        edge_batch,
-    )
-    connection.executemany(
-        "INSERT OR IGNORE INTO nodes (node) VALUES (?)",
-        ((node,) for node in node_batch),
-    )
-    connection.commit()
-    edge_batch.clear()
-    node_batch.clear()
-
-
-def count_graph(
-    graph_name,
-    progress_every=None,
-    batch_size=DEFAULT_BATCH_SIZE,
-    temporary_directory=None,
-):
+def count_graph(graph_name, progress_every=None, deduplicate_edges=False):
     label = get_graph_label(graph_name)
     graph_path = resolve_repo_path(get_graph_path(graph_name))
 
@@ -111,89 +31,46 @@ def count_graph(
 
     print(f"Counting {label} from {display_path(graph_path)}...", flush=True)
     start_time = time.perf_counter()
-    temporary_directory = (
-        resolve_repo_path(temporary_directory)
-        if temporary_directory is not None
-        else None
-    )
-    if temporary_directory is not None:
-        temporary_directory.mkdir(parents=True, exist_ok=True)
+    nodes = set()
+    edge_count = 0
+    seen_edges = set() if deduplicate_edges else None
 
-    fd, db_name = tempfile.mkstemp(
-        prefix=f"graph_statistics_{graph_name}_",
-        suffix=".sqlite",
-        dir=temporary_directory,
-    )
-    os.close(fd)
-    db_path = Path(db_name)
-    print(f"Temporary deduplication database: {display_path(db_path)}", flush=True)
+    for input_edge_count, (cause, effect, _edge_attrs) in enumerate(
+        _iter_graph_edges(graph_path),
+        start=1,
+    ):
+        nodes.add(cause)
+        nodes.add(effect)
 
-    connection = None
-    parsed_relation_records = 0
-    temp_database_peak_bytes = 0
+        if seen_edges is None:
+            edge_count += 1
+        else:
+            edge = (cause, effect)
+            if edge not in seen_edges:
+                seen_edges.add(edge)
+                edge_count += 1
 
-    try:
-        connection = create_count_database(db_path)
-        edge_batch = []
-        node_batch = []
-
-        for parsed_relation_records, (cause, effect, _edge_attrs) in enumerate(
-            _iter_graph_edges(graph_path),
-            start=1,
-        ):
-            edge_batch.append((cause, effect))
-            node_batch.extend((cause, effect))
-
-            if len(edge_batch) >= batch_size:
-                flush_batch(connection, edge_batch, node_batch)
-                temp_database_peak_bytes = max(
-                    temp_database_peak_bytes,
-                    db_path.stat().st_size,
-                )
-
-            if progress_every and parsed_relation_records % progress_every == 0:
-                print(
-                    "Parsed "
-                    f"{parsed_relation_records:,} relation records from {label}...",
-                    flush=True,
-                )
-
-        flush_batch(connection, edge_batch, node_batch)
-        temp_database_peak_bytes = max(
-            temp_database_peak_bytes,
-            db_path.stat().st_size,
-        )
-
-        nodes = connection.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
-        edge_count = connection.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-        duplicate_relation_records = parsed_relation_records - edge_count
-        count_seconds = time.perf_counter() - start_time
-
-        return CountResult(
-            graph=graph_name,
-            label=label,
-            path=display_path(graph_path),
-            nodes=nodes,
-            edges=edge_count,
-            parsed_relation_records=parsed_relation_records,
-            duplicate_relation_records=duplicate_relation_records,
-            count_mode=COUNT_MODE,
-            count_seconds=count_seconds,
-            temp_database_peak_bytes=temp_database_peak_bytes,
-        ).as_dict()
-    finally:
-        if connection is not None:
-            connection.close()
-
-        try:
-            db_path.unlink()
+        if progress_every and input_edge_count % progress_every == 0:
             print(
-                "Removed temporary deduplication database: "
-                f"{display_path(db_path)}",
+                f"Counted {input_edge_count:,} input edges from {label}...",
                 flush=True,
             )
-        except FileNotFoundError:
-            pass
+
+    count_seconds = time.perf_counter() - start_time
+
+    return {
+        "graph": graph_name,
+        "label": label,
+        "path": display_path(graph_path),
+        "nodes": len(nodes),
+        "edges": edge_count,
+        "count_mode": (
+            "streamed_unique_edges"
+            if deduplicate_edges
+            else "streamed_input_edges"
+        ),
+        "count_seconds": count_seconds,
+    }
 
 
 def write_reports(rows, output_dir):
@@ -209,11 +86,8 @@ def write_reports(rows, output_dir):
                 "path",
                 "nodes",
                 "edges",
-                "parsed_relation_records",
-                "duplicate_relation_records",
                 "count_mode",
                 "count_seconds",
-                "temp_database_peak_bytes",
             ],
         )
         writer.writeheader()
@@ -242,10 +116,7 @@ def write_reports(rows, output_dir):
             *(f"    {row}" for row in table_rows),
             r"    \bottomrule",
             r"  \end{tabular}",
-            (
-                r"  \caption{Number of nodes and unique directed edges "
-                r"in each causal graph.}"
-            ),
+            r"  \caption{Number of nodes and directed edges in each causal graph.}",
             r"  \label{tab:graph-statistics}",
             r"\end{table}",
         ]
@@ -258,18 +129,17 @@ def write_reports(rows, output_dir):
 def print_table(rows):
     print()
     print(
-        f"{'Graph':<18} {'Nodes':>14} {'Unique edges':>14} "
-        f"{'Parsed records':>16} {'Duplicates':>14} {'Count seconds':>14}"
+        f"{'Graph':<18} {'Nodes':>14} {'Edges':>14} "
+        f"{'Mode':<22} {'Count seconds':>14}"
     )
-    print("-" * 100)
+    print("-" * 90)
 
     for row in rows:
         print(
             f"{row['label']:<18} "
             f"{row['nodes']:>14,} "
             f"{row['edges']:>14,} "
-            f"{row['parsed_relation_records']:>16,} "
-            f"{row['duplicate_relation_records']:>14,} "
+            f"{row['count_mode']:<22} "
             f"{row['count_seconds']:>14.1f}"
         )
 
@@ -285,7 +155,6 @@ def parse_args():
     parser.add_argument(
         "--graphs",
         nargs="+",
-        type=graph_arg,
         choices=graph_choices(),
         default=DEFAULT_GRAPHS,
         help="Graphs to count.",
@@ -303,28 +172,15 @@ def parse_args():
         help="Print graph counting progress every N parsed input edges. Use 0 to disable.",
     )
     parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=DEFAULT_BATCH_SIZE,
-        help="Number of parsed relation records to insert per SQLite batch.",
-    )
-    parser.add_argument(
-        "--temporary-directory",
-        type=Path,
-        default=None,
+        "--deduplicate-edges",
+        action="store_true",
         help=(
-            "Directory for the temporary SQLite deduplication database. "
-            "Use a drive with enough free disk space for full graphs."
+            "Count unique (cause, effect) edges like NetworkX DiGraph. This can "
+            "still use a lot of memory on full graphs, so the default only "
+            "counts streamed valid input edges."
         ),
     )
-    args = parser.parse_args()
-
-    if args.progress_every < 0:
-        parser.error("--progress-every must be greater than or equal to 0")
-    if args.batch_size <= 0:
-        parser.error("--batch-size must be greater than 0")
-
-    return args
+    return parser.parse_args()
 
 
 def main():
@@ -336,8 +192,7 @@ def main():
         count_graph(
             graph_name,
             progress_every=progress_every,
-            batch_size=args.batch_size,
-            temporary_directory=args.temporary_directory,
+            deduplicate_edges=args.deduplicate_edges,
         )
         for graph_name in args.graphs
     ]

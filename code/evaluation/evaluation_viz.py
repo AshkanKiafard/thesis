@@ -3183,19 +3183,21 @@ def create_thesis_main_figure(rows):
         axes[0],
         rows,
         "f1_score",
-        "F1 score",
-        "F1 score",
+        r"F$_1$ Score",
+        r"F$_1$ score",
         "(a)",
     )
+
     plot_thesis_metric_panel(
         axes[1],
         rows,
         "avg_nodes_visited",
-        "Search effort",
+        "Visited Nodes",
         "Average visited nodes (log scale)",
         "(b)",
         log_scale=True,
     )
+
     plot_thesis_metric_panel(
         axes[2],
         rows,
