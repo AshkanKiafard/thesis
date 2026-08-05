@@ -1,0 +1,159 @@
+\chapter{Training Procedure}
+\label{chap:train}
+
+This chapter describes the procedure used to adapt pre-trained embedding models for more efficient $A^*$ traversal. Section~\ref{sec:train_dataset} explains how successful graph traversals are converted into supervised preference examples. Sections~\ref{sec:train_objective} and~\ref{sec:train_matryoshka} introduce the ranking-based training objective and its extension to multiple Matryoshka dimensionalities. Section~\ref{sec:train_validation} presents the search-based validation procedure, while Sections~\ref{sec:train_hyperparameters} and~\ref{sec:train_final_training} describe hyperparameter optimization and final model training. Finally, Section~\ref{sec:train_final_precomputation} explains how the trained embeddings are precomputed and stored for evaluation and inference.
+
+\section{Fine-Tuning Dataset Construction}
+\label{sec:train_dataset}
+
+To fine-tune the embedding model, supervised training and validation datasets are constructed from the corresponding splits of the binary causal question dataset derived from MS MARCO by \citet{bluebaum:2024}. The supervision is generated automatically from successful $A^*$ traversals rather than from manually annotated reasoning paths. These traversals provide preference examples that encourage the model to assign a lower estimated traversal cost to successors on discovered causal paths than to alternative successors. For each cause--effect pair $(A,B)$, let $a,b\in V$ denote the corresponding graph nodes. An $A^*$ search is performed on the causal graph $G=(V,E)$ using a heuristic defined by distances between graph-node embeddings precomputed with the respective base embedding model. A discovered path is retained if
+\[
+P=(p_0,\dots,p_k), \qquad p_0=a,\quad p_k=b,\quad k\geq1.
+\]
+For each retained path, the following instances are added to the dataset
+\[
+D \gets D \cup
+\left\{
+(p_i,p_k,p_{i+1},n)
+\;\middle|\;
+0\leq i<k,\;
+n\in N^+(p_i)\setminus\{p_{i+1}\}
+\right\},
+\]
+where $p_i$ denotes the current node, $p_k$ the target effect, $p_{i+1}$ the next node on the discovered path, and $n$ an alternative successor of $p_i$. Each quadruple therefore defines a pairwise preference between the path successor and a competing traversal choice. Algorithm~\ref{alg:training-dataset} summarizes the construction procedure. Since the paths discovered by $A^*$ depend on the heuristic distance metric, separate datasets are generated for cosine and Euclidean distance, cached, and reused during hyperparameter optimization and final model training.
+
+\section{Ranking-Based Training Objective}
+\label{sec:train_objective}
+
+The ranking-based objective uses the training quadruples constructed in Section~\ref{sec:train_dataset} to reshape the embedding space for graph traversal. For a quadruple $(c,e,p,n)$, the positive successor $p$ should yield a lower cumulative distance to the target effect $e$ than the alternative successor $n$. The difference between the positive and negative traversal costs is defined as
+\[
+\begin{aligned}
+\Delta &= f(p)-f(n) \\
+&= \bigl[g(p)+h(p)\bigr]-\bigl[g(n)+h(n)\bigr] \\
+&=
+\left[
+d\bigl(\phi(c),\phi(p)\bigr)
++
+d\bigl(\phi(p),\phi(e)\bigr)
+\right]
+-
+\left[
+d\bigl(\phi(c),\phi(n)\bigr)
++
+d\bigl(\phi(n),\phi(e)\bigr)
+\right].
+\end{aligned}
+\]
+A value $\Delta<0$ indicates that the positive traversal decision is preferred. The ranking loss is obtained by applying a non-linear activation function $\sigma$ to $\Delta$
+\[
+\mathcal{L}_{\mathrm{rank}}=\sigma(\Delta).
+\]
+This work evaluates ReLU and GELU as activation functions. An additional regularization term encourages the embedding norms to remain close to one
+\[
+\mathcal{R}
+=
+\sum_{x\in\{c,e,p,n\}}
+\left(\lVert\phi(x)\rVert_2-1\right)^2.
+\]
+The resulting loss is
+\[
+    \mathcal{L}
+    =
+    \mathcal{L}_{\mathrm{rank}} + \mathcal{R}.
+\]
+The objective therefore optimizes embedding distances for causal graph traversal rather than semantic similarity.
+
+\section{Matryoshka Representation Learning}
+\label{sec:train_matryoshka}
+
+To support efficient causal knowledge graph traversal at different embedding dimensionalities, the ranking objective is extended using Matryoshka Representation Learning~\cite{kusupati:2022}. Rather than optimizing only the full embedding vector, the objective is applied to multiple nested prefixes of each representation. Let $d_{\mathrm{model}}$ denote the native embedding dimensionality of the underlying model. The set of training dimensionalities is defined as
+\[
+\mathcal{M}
+=
+\{d_{\mathrm{model}}\}
+\cup
+\left\{
+2^k
+\;\middle|\;
+k\in\mathbb{N},\;
+2\leq 2^k<d_{\mathrm{model}}
+\right\}.
+\]
+For models with at least 768 dimensions, this dimension is also included:
+\[
+\mathcal{M}\gets\mathcal{M}\cup\{768\}
+\qquad
+\text{if } d_{\mathrm{model}}\geq768.
+\]
+This additional dimensionality permits direct comparison with MPNet and Granite, whose native embedding dimensionality is 768~\cite{allmpnet:modelcard,granite:modelcard}. For each $m\in\mathcal{M}$, let
+\[
+\phi_m(x)=\phi(x)_{1:m}
+\]
+denote the prefix consisting of the first $m$ components of the embedding of concept $x$. The traversal-cost difference at dimensionality $m$ is then defined as
+\[
+\begin{aligned}
+\Delta_m
+&=
+\left[
+d\bigl(\phi_m(c),\phi_m(p)\bigr)
++
+d\bigl(\phi_m(p),\phi_m(e)\bigr)
+\right]
+\\
+&\quad-
+\left[
+d\bigl(\phi_m(c),\phi_m(n)\bigr)
++
+d\bigl(\phi_m(n),\phi_m(e)\bigr)
+\right].
+\end{aligned}
+\]
+The dimension-specific regularization term is defined as
+\[
+\mathcal{R}_m
+=
+\sum_{x\in\{c,e,p,n\}}
+\left(\lVert\phi_m(x)\rVert_2-1\right)^2.
+\]
+The corresponding dimension-specific loss is
+\[
+\mathcal{L}_m
+=
+\sigma(\Delta_m)+\mathcal{R}_m.
+\]
+The overall training loss sums the losses across all selected dimensionalities
+\[
+\mathcal{L}_{\mathrm{total}}
+=
+\sum_{m\in\mathcal{M}}\mathcal{L}_m.
+\]
+Applying the objective at multiple prefix lengths encourages information relevant to causal graph traversal to be concentrated in the earlier embedding dimensions. This enables a single fine-tuned model to support different embedding dimensionalities without additional training, allowing the representation size to be selected according to the desired trade-off between computational efficiency and heuristic quality.
+
+\section{Validation Procedure}
+\label{sec:train_validation}
+
+Although the training objective optimizes local ranking decisions, validation measures whether the learned embedding space improves global graph traversal. At the beginning of each validation epoch, embeddings for all graph nodes are recomputed using the current state of the model being fine-tuned and stored in a temporary lookup cache. For each current-node and target-node pair $(p_i,p_k)$ in the validation data, an $A^*$ search is executed using these updated embeddings. The number of visited nodes required to reach the target is recorded as $v(p_i,p_k)$. The primary validation metric is the average number of visited nodes
+\[
+\text{AvgVisited}
+=
+\frac{1}{|Q|}
+\sum_{(p_i,p_k)\in Q}
+v(p_i,p_k),
+\]
+where $Q$ denotes the set of evaluated node pairs. Lower values indicate that fewer graph nodes are visited on average before reaching the target and therefore correspond to more efficient traversal.
+
+\section{Hyperparameter Optimization}
+\label{sec:train_hyperparameters}
+
+Before final training, model-specific hyperparameter optimization is performed with Optuna~\cite{akiba:2019}. The search jointly optimizes the learning rate, activation function, and distance metric using the Tree-structured Parzen Estimator sampler~\cite{bergstra:2011}. The activation function is selected from ReLU and GELU, the distance metric from cosine and Euclidean distance, and the learning rate is sampled logarithmically from $[2.5 \times 10^{-5}, 3 \times 10^{-5}].$
+This interval was selected based on preliminary experiments indicating stable and competitive validation performance within this range. Each trial performs a short training run and is evaluated by the average number of nodes visited during validation $A^*$ searches. Early stopping terminates training when this metric no longer improves~\cite{prechelt:1998}, while Optuna's MedianPruner stops trials that underperform the median result of previously completed trials at the same training step~\cite{optuna:medianpruner}. The search uses 50 trials, at most 10 epochs per trial, a patience of 5 validation epochs, the AdamW optimizer~\cite{loshchilov:2019}, and a ReduceLROnPlateau scheduler~\cite{pytorch:reducelronplateau}. The effective batch size is fixed at 128. When a smaller physical batch size is used, gradients are accumulated over multiple batches before each parameter update using PyTorch Lightning's gradient-accumulation~\cite{ott:2018,lightning:gradientaccumulation}. The configuration with the lowest average number of visited nodes is selected for final training.
+
+\section{Final Model Training}
+\label{sec:train_final_training}
+
+After hyperparameter optimization, each embedding model is fine-tuned using its best-performing configuration. Final training uses a maximum of 50 epochs with early stopping and a patience of 10 validation epochs. The checkpoint with the lowest average number of visited nodes on the validation set is retained as the final model and saved together with its training metadata.
+
+\section{Final Embedding Precomputation}
+\label{sec:train_final_precomputation}
+
+After training, embeddings are precomputed for all graph-node concepts required during evaluation and inference. The node concepts are stored in a fixed order in a shared JSONL file. All embedding matrices follow this same ordering, allowing each node concept to be mapped to its row index and its embedding to be retrieved directly from the corresponding memory-mapped NumPy matrix~\cite{harris:2020}. The model first produces embeddings at its native dimensionality. For every Matryoshka dimension used in the experiments, the corresponding prefix of each full embedding is stored in a separate matrix. During graph traversal, $A^*$ loads the matrix for the selected model and dimension instead of computing embeddings with the encoder at runtime. This reduces inference time and enables direct indexed access to all node embeddings. The approach therefore trades additional disk space for lower runtime.

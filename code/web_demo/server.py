@@ -117,7 +117,21 @@ BEST_MODEL_ACTIVATION = "relu"
 BEST_MODEL_DISTANCE = "euclid"
 BEST_MODEL_DIMENSION = 32
 DEFAULT_GRAPH_NAME = DEFAULT_INFERENCE_GRAPH
-DEMO_GRAPH_CHOICES = SUPPORTED_INFERENCE_GRAPHS
+
+
+def get_demo_graph_choices(load_all: bool | None = None) -> tuple[str, ...]:
+    if load_all is None:
+        load_all = LOAD_ALL_MODELS
+    return SUPPORTED_INFERENCE_GRAPHS if load_all else (DEFAULT_GRAPH_NAME,)
+
+
+def get_enabled_algorithms(load_all: bool | None = None) -> tuple[str, ...]:
+    if load_all is None:
+        load_all = LOAD_ALL_MODELS
+    return ("bfs", "rl", "astar") if load_all else ("astar",)
+
+
+DEMO_GRAPH_CHOICES = get_demo_graph_choices()
 
 MODEL_DIM_HINTS = {
     **MODEL_DIMENSIONS,
@@ -216,7 +230,8 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# The web demo exposes the three graph variants used by the evaluation workflow.
+# Full mode exposes all evaluation graph variants; limited mode exposes only
+# CauseNet Precision through DEMO_GRAPH_CHOICES.
 # Startup deliberately loads and prepares every graph, graph preview, A* runtime,
 # and RL runtime. A slow startup is preferable to a UI that occasionally blocks
 # on a first graph/model request. Parsed graph and preview caches still make
@@ -249,7 +264,14 @@ def options():
     models = get_demo_models(discover_models())
     methods = discover_search_methods(models)
     available_graphs = get_available_demo_graphs()
-    graphs = [graph_option_payload(graph_name) for graph_name in available_graphs]
+    enabled_algorithms = {method["algorithm"] for method in methods}
+    graphs = [
+        graph_option_payload(
+            graph_name,
+            enabled_algorithms=enabled_algorithms,
+        )
+        for graph_name in available_graphs
+    ]
     default_graph = (
         DEFAULT_GRAPH_NAME
         if DEFAULT_GRAPH_NAME in available_graphs
@@ -456,6 +478,15 @@ def run_inference(request: InferenceRequest) -> dict[str, Any]:
 
     graph_id = validate_demo_graph_name(graph_id)
     algorithm = normalize_algorithm(request.algorithm)
+    if algorithm not in get_enabled_algorithms():
+        enabled = ", ".join(get_enabled_algorithms())
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{algorithm.upper()} is disabled in this web-demo mode. "
+                f"Enabled algorithms: {enabled}."
+            ),
+        )
     if not graph_supports_algorithm(graph_id, algorithm):
         raise HTTPException(
             status_code=400,
@@ -757,7 +788,11 @@ def parse_algorithm_config(model_type, raw_config: dict[str, Any]):
         raise HTTPException(status_code=400, detail=exc.errors()) from exc
 
 
-def graph_option_payload(graph_name: str) -> dict[str, Any]:
+def graph_option_payload(
+    graph_name: str,
+    *,
+    enabled_algorithms: set[str] | None = None,
+) -> dict[str, Any]:
     graph_name = canonical_graph_name(graph_name)
     config = GRAPH_CONFIGS[graph_name]
     return {
@@ -768,7 +803,11 @@ def graph_option_payload(graph_name: str) -> dict[str, Any]:
         "size_label": format_graph_size(config["nodes"], config["edges"]),
         "bfs_p95_cap": config["bfs_p95_cap"],
         "bfs_p95_cap_source": config["bfs_p95_cap_source"],
-        "supported_algorithms": list(config["supported_algorithms"]),
+        "supported_algorithms": [
+            algorithm
+            for algorithm in config["supported_algorithms"]
+            if enabled_algorithms is None or algorithm in enabled_algorithms
+        ],
         "cache": {
             "cache_suffix": config["cache_suffix"],
             "node_universe": config["node_universe"],
@@ -1036,6 +1075,14 @@ def preload_demo_graphs() -> None:
 
 def preload_demo_rl_runtime() -> None:
     """Load the RL embedder and all enabled RL graph views before serving."""
+    if not LOAD_ALL_MODELS:
+        _model_preload_status["rl"] = {
+            "loaded": False,
+            "skipped": True,
+            "reason": "RL is disabled in limited web-demo mode",
+        }
+        return
+
     policy = get_rl_policy_config(DEFAULT_RL_POLICY_ID)
     started = time.perf_counter()
     status: dict[str, Any] = {
@@ -2016,52 +2063,71 @@ def get_demo_models(
 
 def discover_search_methods(
     models: tuple[dict[str, Any], ...] | None = None,
+    *,
+    load_all: bool | None = None,
 ) -> tuple[dict[str, Any], ...]:
+    if load_all is None:
+        load_all = LOAD_ALL_MODELS
     if models is None:
-        models = get_demo_models(discover_models())
+        models = get_demo_models(discover_models(), load_all=load_all)
 
     methods: dict[str, dict[str, Any]] = {}
 
     def add_method(method: dict[str, Any]) -> None:
         methods.setdefault(method["id"], method)
 
-    add_method(
-        {
-            "id": stable_config_identity(algorithm="bfs"),
-            "algorithm": "bfs",
-            "label": "BFS",
-            "supported_graphs": [
-                graph
-                for graph in SUPPORTED_INFERENCE_GRAPHS
-                if graph_supports_algorithm(graph, "bfs")
-            ],
-            "config": {},
-        }
-    )
+    if load_all:
+        graph_choices = get_demo_graph_choices(load_all=True)
+        add_method(
+            {
+                "id": stable_config_identity(algorithm="bfs"),
+                "algorithm": "bfs",
+                "label": "BFS",
+                "supported_graphs": [
+                    graph
+                    for graph in graph_choices
+                    if graph_supports_algorithm(graph, "bfs")
+                ],
+                "config": {},
+            }
+        )
 
-    policy = get_rl_policy_config(DEFAULT_RL_POLICY_ID)
-    add_method(
-        {
-            "id": stable_config_identity(
-                algorithm="rl",
-                policy_config_id=policy.id,
-                checkpoint_id=str(policy.checkpoint_path),
-            ),
-            "algorithm": "rl",
-            "label": policy.label,
-            "description": policy.description,
-            "supported_graphs": list(policy.supported_graphs),
-            "config": policy.public_config(),
-        }
-    )
+        policy = get_rl_policy_config(DEFAULT_RL_POLICY_ID)
+        add_method(
+            {
+                "id": stable_config_identity(
+                    algorithm="rl",
+                    policy_config_id=policy.id,
+                    checkpoint_id=str(policy.checkpoint_path),
+                ),
+                "algorithm": "rl",
+                "label": policy.label,
+                "description": policy.description,
+                "supported_graphs": [
+                    graph
+                    for graph in graph_choices
+                    if graph in policy.supported_graphs
+                ],
+                "config": policy.public_config(),
+            }
+        )
 
     for model in models:
-        add_method(astar_method_payload(model))
+        add_method(
+            astar_method_payload(
+                model,
+                graph_choices=get_demo_graph_choices(load_all=load_all),
+            )
+        )
 
     return tuple(sorted(methods.values(), key=method_sort_key))
 
 
-def astar_method_payload(model: dict[str, Any]) -> dict[str, Any]:
+def astar_method_payload(
+    model: dict[str, Any],
+    *,
+    graph_choices: tuple[str, ...] = SUPPORTED_INFERENCE_GRAPHS,
+) -> dict[str, Any]:
     label = format_model_display_label(
         model["id"],
         is_finetuned=model["is_finetuned"],
@@ -2106,7 +2172,7 @@ def astar_method_payload(model: dict[str, Any]) -> dict[str, Any]:
         "label": label,
         "supported_graphs": [
             graph
-            for graph in SUPPORTED_INFERENCE_GRAPHS
+            for graph in graph_choices
             if graph_supports_algorithm(graph, "astar")
         ],
         "config": config,

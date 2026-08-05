@@ -2,8 +2,8 @@
 
 import os
 
-# False: expose and preload BFS, RL, and Granite FT at d=32 only.
-# True: expose and preload every available A* model and Matryoshka dimension.
+# False: CauseNet Precision with Granite FT at d=32 and A* only.
+# True: every graph, A* model/dimension, BFS, and RL.
 load_all = False
 os.environ["WEB_DEMO_LOAD_ALL"] = str(load_all).lower()
 

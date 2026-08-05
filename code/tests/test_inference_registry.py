@@ -26,7 +26,9 @@ from web_demo.server import (
     config_defaults,
     discover_search_methods,
     get_default_bfs_cap,
+    get_demo_graph_choices,
     get_demo_models,
+    get_enabled_algorithms,
     get_graph_warmup_query,
     graph_option_payload,
     group_graphs_by_embedding_universe,
@@ -204,7 +206,7 @@ class InferenceRegistryTests(unittest.TestCase):
             normalize=False,
         )
         models = get_demo_models((fake_model(), granite), load_all=False)
-        methods = discover_search_methods(models)
+        methods = discover_search_methods(models, load_all=False)
         astar_methods = [
             method
             for method in methods
@@ -215,10 +217,31 @@ class InferenceRegistryTests(unittest.TestCase):
         self.assertEqual(models[0]["label"], "Granite FT ReLU+Euclidean")
         self.assertEqual(models[0]["dims"], [32])
         self.assertEqual(len(astar_methods), 1)
+        self.assertEqual(
+            [method["algorithm"] for method in methods],
+            ["astar"],
+        )
         self.assertEqual(astar_methods[0]["config"]["dimensions"], [32])
         self.assertEqual(
             get_demo_models((fake_model(), granite), load_all=True),
             (fake_model(), granite),
+        )
+        self.assertEqual(get_demo_graph_choices(load_all=False), ("causenet",))
+        self.assertEqual(get_enabled_algorithms(load_all=False), ("astar",))
+        self.assertEqual(
+            get_demo_graph_choices(load_all=True),
+            SUPPORTED_INFERENCE_GRAPHS,
+        )
+        self.assertEqual(
+            get_enabled_algorithms(load_all=True),
+            ("bfs", "rl", "astar"),
+        )
+        self.assertEqual(
+            {method["algorithm"] for method in discover_search_methods(
+                (fake_model(), granite),
+                load_all=True,
+            )},
+            {"astar", "bfs", "rl"},
         )
 
     def test_astar_dimension_is_selected_separately_from_model_choice(self):
@@ -478,6 +501,24 @@ class InferenceRegistryTests(unittest.TestCase):
         self.assertIn("prefers-reduced-motion: reduce", styles_css)
         self.assertIn('list="source-suggestions"', index_html)
         self.assertIn('list="target-suggestions"', index_html)
+        self.assertIn('id="save-path-gif"', index_html)
+        self.assertIn('id="gif-show-endpoint-names"', index_html)
+        self.assertIn("gif.js@0.2.0/dist/gif.js", index_html)
+        self.assertIn("preserveDrawingBuffer: true", app_js)
+        self.assertIn('els.savePathGif.addEventListener("click", saveFoundPathAsGif)', app_js)
+        self.assertIn("setPathExportAvailable(result.found)", app_js)
+        self.assertIn("maxWidth: 1600", app_js)
+        self.assertIn("quality: 8", app_js)
+        self.assertIn("els.gifShowEndpointNames.checked", app_js)
+        self.assertIn("if (showEndpointNames)", app_js)
+        self.assertIn("function drawGifDirectionOverlay(", app_js)
+        self.assertIn("graph.linkDirectionalParticles(0)", app_js)
+        self.assertIn("pathParticleAccessor", app_js)
+        self.assertIn("link.path ? 4 : 0", app_js)
+        self.assertIn("link.path ? 3 : 0", app_js)
+        self.assertIn("gif.addFrame(capture.context", app_js)
+        self.assertIn("path.gif`", app_js)
+        self.assertIn('els.reloadSubgraph.addEventListener("click", reloadSubgraph)', app_js)
 
     def test_ignorable_graph_nodes_are_removed_before_indexing(self):
         graph = nx.DiGraph()

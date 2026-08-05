@@ -155,9 +155,19 @@
             <section class="graph-panel">
                 <div class="graph-toolbar">
                     <span id="graph-caption">Loading graph sample...</span>
-                    <button id="reload-subgraph" class="uk-button uk-button-default uk-button-small" type="button" title="Reload sampled graph">
-                        <span data-uk-icon="icon: refresh; ratio: 0.8"></span>
-                    </button>
+                    <div class="graph-toolbar-actions">
+                        <label class="gif-name-option" title="Include the cause and effect names in the exported GIF">
+                            <input id="gif-show-endpoint-names" class="uk-checkbox" type="checkbox" checked>
+                            <span>Names in GIF</span>
+                        </label>
+                        <button id="save-path-gif" class="uk-button uk-button-default uk-button-small" type="button" title="Run an inference that finds a path before saving" disabled>
+                            <span data-uk-icon="icon: download; ratio: 0.8"></span>
+                            <span id="save-path-gif-label">Save path GIF</span>
+                        </button>
+                        <button id="reload-subgraph" class="uk-button uk-button-default uk-button-small" type="button" title="Reload sampled graph">
+                            <span data-uk-icon="icon: refresh; ratio: 0.8"></span>
+                        </button>
+                    </div>
                 </div>
                 <div id="graph"></div>
             </section>
@@ -185,6 +195,7 @@
 </footer>
 
 <script src="https://unpkg.com/3d-force-graph@1.77.0/dist/3d-force-graph.min.js"></script>
+<script src="https://unpkg.com/gif.js@0.2.0/dist/gif.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

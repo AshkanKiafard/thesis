@@ -10,6 +10,7 @@
 %% - master       For a master thesis   (M.Sc. Computer Science for Digital Media)
 %% - buw          For a thesis in Weimar 
 %% - ul           For a thesis in Leipzig
+%% - uks          For a thesis in Kassel
 %% - fsu          For a thesis in Jena
 %% - pb           For a thesis in Paderborn
 %% Default: [german,bachelor,buw]
@@ -116,6 +117,9 @@
 }
 \DeclareOption{ul}{%
     \renewcommand{\thesisuniversity}{ul}
+}
+\DeclareOption{uks}{%
+    \renewcommand{\thesisuniversity}{uks}
 }
 \DeclareOption{fsu}{%
     \renewcommand{\thesisuniversity}{fsu}
@@ -251,6 +255,11 @@
     \global\thesisfrontpagefaculty{Institute of Computer Science}
     \global\thesisfrontpagecourse{Degree Programme }
   }{}
+  \ifthenelse{\equal{\thesisuniversity}{uks}}{%
+    \global\thesisfrontpageuniversity{University of Kassel} 
+    \global\thesisfrontpagefaculty{Department of Electrical Engineering and Computer Science}
+    \global\thesisfrontpagecourse{Degree Programme }
+  }{}
   \ifthenelse{\equal{\thesisuniversity}{fsu}}{% 
     \global\thesisfrontpageuniversity{Friedrich-Schiller-Universität Jena} 
     \global\thesisfrontpagefaculty{Institute of Computer Science}
@@ -271,6 +280,11 @@
   \ifthenelse{\equal{\thesisuniversity}{ul}}{%
     \global\thesisfrontpageuniversity{Universit{\"a}t Leipzig} 
     \global\thesisfrontpagefaculty{Institut f{\"u}r Informatik}
+    \global\thesisfrontpagecourse{Studiengang }
+  }{}
+  \ifthenelse{\equal{\thesisuniversity}{uks}}{%
+    \global\thesisfrontpageuniversity{Universit{\"a}t Kassel} 
+    \global\thesisfrontpagefaculty{Fachbereich Elektrotechnik/Informatik}
     \global\thesisfrontpagecourse{Studiengang }
   }{}
   \ifthenelse{\equal{\thesisuniversity}{fsu}}{% 
@@ -294,6 +308,10 @@
       \global\thesisprogramme{Informatik, B.Sc.}
       %\global\thesisprogramme{Digital Humanities, B.Sc.}
     }{}
+    \ifthenelse{\equal{\thesisuniversity}{uks}}{% 
+      \global\thesisprogramme{Informatik, B.Sc.}
+      %\global\thesisprogramme{Digital Humanities, B.Sc.}
+    }{}
     \ifthenelse{\equal{\thesisuniversity}{fsu}}{% 
       \global\thesisprogramme{Informatik, B.Sc.}
     }{}
@@ -306,6 +324,9 @@
       \global\thesisprogramme{Medieninformatik}
     }{}
     \ifthenelse{\equal{\thesisuniversity}{ul}}{% 
+      \global\thesisprogramme{Computer Science, B.Sc.}
+    }{}
+    \ifthenelse{\equal{\thesisuniversity}{uks}}{% 
       \global\thesisprogramme{Computer Science, B.Sc.}
     }{}
     \ifthenelse{\equal{\thesisuniversity}{fsu}}{% 
@@ -325,6 +346,10 @@
       \global\thesisprogramme{Informatik, M.Sc.}
       %\global\thesisprogramme{Digital Humanities, M.Sc.}
     }{}
+    \ifthenelse{\equal{\thesisuniversity}{uks}}{% 
+      \global\thesisprogramme{Informatik, M.Sc.}
+      %\global\thesisprogramme{Digital Humanities, M.Sc.}
+    }{}
     \ifthenelse{\equal{\thesisuniversity}{fsu}}{% 
       \global\thesisprogramme{Informatik, M.Sc.}
       %\global\thesisprogramme{Computational and Data Science, M.Sc.}
@@ -338,6 +363,11 @@
       \global\thesisprogramme{Computer Science for Digital Media}
     }{}
     \ifthenelse{\equal{\thesisuniversity}{ul}}{%  
+      \global\thesisprogramme{Computer Science, M.Sc.}
+      %\global\thesisprogramme{Digital Humanities, M.Sc.}
+      %\global\thesisprogramme{Data Science, M.Sc.}
+    }{}
+    \ifthenelse{\equal{\thesisuniversity}{uks}}{%  
       \global\thesisprogramme{Computer Science, M.Sc.}
       %\global\thesisprogramme{Digital Humanities, M.Sc.}
       %\global\thesisprogramme{Data Science, M.Sc.}
@@ -392,7 +422,7 @@
   \begin{titlepage}
 		\vspace{2cm}
 		\hspace*{-1cm}
-    \parbox{10cm}{\normalsize
+    \parbox{\linewidth}{\normalsize
       \the\thesisfrontpageuniversity\\
       \the\thesisfrontpagefaculty\\
       \the\thesisfrontpagecourse\the\thesisprogramme}

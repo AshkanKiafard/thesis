@@ -36,3 +36,73 @@ DEFAULT_TEST_DATASETS = (
     str(FILTERED_DATASETS_DIR / "msmarco_test_filtered.json"),
     str(FILTERED_DATASETS_DIR / "sem_test_filtered.json"),
 )
+
+# Shared settings for evaluating the validation-selected fine-tuned models at
+# fixed A* visit budgets. Model descriptors are path-independent so evaluation,
+# visualization, and reporting code can reuse the same stable configuration.
+BUDGET_TRADEOFF_VISIT_BUDGETS = (
+    5,
+    10,
+    20,
+    30,
+    40,
+    50,
+    75,
+    100,
+    150,
+    200,
+)
+
+VALIDATION_SELECTED_FINETUNED_MODELS = (
+    {
+        "model": "FT A*: MPNet",
+        "checkpoint_name": (
+            "all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_v3_finetuned"
+        ),
+        "embedding_dimension": 128,
+        "activation_function": "ReLU",
+        "distance_metric": "Cosine",
+        "existing_validation_budget": 34,
+    },
+    {
+        "model": "FT A*: BGE",
+        "checkpoint_name": (
+            "bge-large-en-v1.5_relu_euclid_nonorm_matryoshka_v3_finetuned"
+        ),
+        "embedding_dimension": 1024,
+        "activation_function": "ReLU",
+        "distance_metric": "Euclidean",
+        "existing_validation_budget": 191,
+    },
+    {
+        "model": "FT A*: mxbai",
+        "checkpoint_name": (
+            "mxbai-embed-large-v1_relu_euclid_nonorm_matryoshka_v3_finetuned"
+        ),
+        "embedding_dimension": 768,
+        "activation_function": "ReLU",
+        "distance_metric": "Euclidean",
+        "existing_validation_budget": 154,
+    },
+    {
+        "model": "FT A*: Qwen3-0.6B",
+        "checkpoint_name": (
+            "Qwen3-Embedding-0.6B_relu_euclid_nonorm_matryoshka_v3_finetuned"
+        ),
+        "embedding_dimension": 32,
+        "activation_function": "ReLU",
+        "distance_metric": "Euclidean",
+        "existing_validation_budget": 39,
+    },
+    {
+        "model": "FT A*: Granite",
+        "checkpoint_name": (
+            "granite-embedding-english-r2_relu_euclid_nonorm_"
+            "matryoshka_v3_finetuned"
+        ),
+        "embedding_dimension": 32,
+        "activation_function": "ReLU",
+        "distance_metric": "Euclidean",
+        "existing_validation_budget": 27,
+    },
+)

@@ -1,0 +1,100 @@
+\chapter{Algorithmic Details}
+\label{app:algorithmic-details}
+
+This appendix summarizes the two implementation-level procedures that are most relevant for reproducing the method, namely bounded embedding-guided $A^*$ search and the construction of search-aligned training quadruples. Low-level implementation details are omitted for brevity and documented in the accompanying source repository.\footnote{\url{https://git.webis.de/code-teaching/theses/thesis-kiafard.git}}
+
+\begin{algorithm}[H]
+\caption{Bounded embedding-guided $A^*$ search}
+\label{alg:bounded-astar}
+\begin{algorithmic}[1]
+\Require Directed graph $G=(V,E)$, source node $a$, target node $b$, embedding function $\phi$, distance function $d$, visit budget $\tau$
+\Ensure A path from $a$ to $b$ if found, otherwise $\emptyset$
+\State $open \gets$ priority queue containing $(0,0,a)$
+\State $best\_g[a] \gets 0$
+\State $parent[a] \gets \textsc{None}$
+\State $closed \gets \emptyset$
+\While{$open$ is not empty}
+    \State $(f,g,u) \gets$ entry with smallest priority from $open$
+    \If{$u=b$}
+        \State \Return reconstructed path from $a$ to $b$
+    \EndIf
+    \If{$u \in closed$}
+        \State \textbf{continue}
+    \EndIf
+    \State $closed \gets closed \cup \{u\}$
+    \If{$\tau \neq -1$ \textbf{and} $|closed| > \tau$}
+        \State \Return $\emptyset$
+    \EndIf
+    \ForAll{$v \in N^{+}(u)$ with $v \notin closed$}
+        \State $g' \gets g + d(\phi(u),\phi(v))$
+        \If{$v \notin best\_g$ \textbf{or} $g' < best\_g[v]$}
+            \State $best\_g[v] \gets g'$
+            \State $parent[v] \gets u$
+            \State $h' \gets d(\phi(v),\phi(b))$
+            \State insert $(g'+h',g',v)$ into $open$
+        \EndIf
+    \EndFor
+\EndWhile
+\State \Return $\emptyset$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{Construction of search-aligned training quadruples}
+\label{alg:training-dataset}
+\begin{algorithmic}[1]
+\Require Causal training pairs $Q$, causal graph $G=(V,E)$, base embedding model $M$, distance function $d$
+\Ensure Training set $D$ of quadruples $(c,e,p,n)$
+\State Define the embedding function $\phi(v) \gets M(v)$
+\State Precompute embeddings $\mathbf{z}_v \gets \phi(v)$ for all $v \in V$
+\State $D \gets \emptyset$
+\ForAll{$(A,B) \in Q$}
+    \State Let $a,b\in V$ be the graph nodes corresponding to $A,B$
+    \State $P \gets$ path returned by $A^*$ on $G$ from $a$ to $b$ using $\phi$, $d$, and $\tau=-1$
+    \If{$P=\emptyset$ or $|P| < 2$}
+        \State \textbf{continue}
+    \EndIf
+    \For{$i \gets 0$ to $|P|-2$}
+        \State $c \gets P_i$
+        \State $p \gets P_{i+1}$
+        \State $e \gets b$
+        \ForAll{$n \in N^+(c) \setminus \{p\}$}
+            \State $D \gets D \cup \{(c,e,p,n)\}$
+        \EndFor
+    \EndFor
+\EndFor
+\State \Return $D$
+\end{algorithmic}
+\end{algorithm}
+
+\clearpage
+
+\chapter{Additional Evaluation Details}
+\label{app:evaluation-details}
+
+This appendix provides supplementary evaluation details supporting the results in Chapter~\ref{chap:results}. It reports the selected training hyperparameters, the search budgets used for bounded graph traversal, and the detailed F\textsubscript{1} significance tests for the final comparison.
+
+\section{Training Hyperparameters}
+\label{app:training-hyperparameters}
+
+Table~\ref{tab:training-hyperparameters} reports the selected hyperparameters for the fine-tuned embedding models.
+
+\input{tables/training_hyperparameters}
+
+\clearpage
+
+\section{Expansion Thresholds}
+\label{app:expansion-thresholds}
+
+Table~\ref{tab:p95-visited-nodes} reports the expansion thresholds selected from the 95th percentile of successful searches on the training split.
+
+\input{tables/p95_visited_nodes}
+
+\clearpage
+
+\section{\texorpdfstring{F\textsubscript{1}}{F1} Significance Tests}
+\label{app:f1-significance-tests}
+
+Tables~\ref{tab:f1-significance-causenet-precision}--\ref{tab:f1-significance-ceg} report paired stratified bootstrap tests for F\textsubscript{1} differences between the selected $A^*$ configuration and the baselines. Positive $\Delta$ values indicate higher F\textsubscript{1} for $A^*$, while negative values favor the baseline. $\Delta$ is reported in percentage points. The 95\% confidence intervals are unadjusted, and $p_{\mathrm{Bonf.}}$ denotes the Bonferroni-adjusted bootstrap p-value.
+
+\input{tables/f1_significance_tests}

@@ -1,0 +1,19 @@
+\begin{table}[H]
+\centering
+\small
+\caption{$A^*$ expansion thresholds derived from the p95 visited-node counts on MS MARCO train with CauseNet Precision.}
+\label{tab:p95-visited-nodes}
+\begin{tabular}{@{}p{2.39cm}rrrrrrrrrrr@{}}
+\toprule
+\textbf{Model} & \multicolumn{11}{c}{\textbf{Dimension}} \\
+\cmidrule(l){2-12}
+ & \textbf{2} & \textbf{4} & \textbf{8} & \textbf{16} & \textbf{32} & \textbf{64} & \textbf{128} & \textbf{256} & \textbf{512} & \textbf{768} & \textbf{1024} \\
+\midrule
+Qwen3-0.6B & $638$ & $210$ & $47$ & $43$ & $39$ & $46$ & $61$ & $72$ & $84$ & $84$ & $91$ \\
+MPNet & $890$ & $233$ & $136$ & $58$ & $46$ & $36$ & $34$ & $34$ & $45$ & $56$ & -- \\
+BGE & $247$ & $210$ & $199$ & $198$ & $196$ & $199$ & $195$ & $195$ & $195$ & $194$ & $191$ \\
+Granite & $140$ & $27$ & $14$ & $17$ & $27$ & $35$ & $46$ & $52$ & $63$ & $67$ & -- \\
+mxbai & $216$ & $199$ & $189$ & $187$ & $190$ & $192$ & $179$ & $175$ & $165$ & $154$ & $156$ \\
+\bottomrule
+\end{tabular}
+\end{table}

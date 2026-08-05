@@ -33,6 +33,14 @@ from core.utils import (
     get_model_base_name,
     is_finetuned_model_name,
 )
+from evaluation.run_budget_tradeoff import (
+    BUDGETS as TRADEOFF_BUDGETS,
+    MODEL_NAMES as TRADEOFF_MODEL_NAMES,
+    PLOT_PDF_PATH as TRADEOFF_PDF_PATH,
+    PLOT_PNG_PATH as TRADEOFF_PNG_PATH,
+    RESULTS_CSV_PATH as TRADEOFF_RESULTS_PATH,
+    validate_aggregated_results as validate_tradeoff_results,
+)
 
 # -------------------------------------------------------------------------
 # Paths / global config
@@ -194,6 +202,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--tradeoff",
+        action="store_true",
+        help=(
+            "Create the budget trade-off figure from "
+            "data/evaluation/budget_tradeoff/budget_tradeoff_results.csv."
+        ),
+    )
+    parser.add_argument(
         "--dim",
         type=int,
         default=32,
@@ -201,8 +217,28 @@ def parse_args():
     )
     args = parser.parse_args()
 
-    if not args.all and not args.dataset and not args.thesis:
-        parser.error("dataset is required unless --all or --thesis is set")
+    if not args.all and not args.dataset and not args.thesis and not args.tradeoff:
+        parser.error("dataset is required unless --all, --thesis, or --tradeoff is set")
+
+    if args.tradeoff:
+        incompatible = []
+        if args.dataset:
+            incompatible.append("dataset")
+        if args.all:
+            incompatible.append("--all")
+        if args.ablation:
+            incompatible.append("--ablation")
+        if args.thesis:
+            incompatible.append("--thesis")
+        if args.graph:
+            incompatible.append("--graph")
+        if args.run_suffix:
+            incompatible.append("--run-suffix")
+        if incompatible:
+            parser.error(
+                "--tradeoff is an independent mode and cannot be combined with: "
+                + ", ".join(incompatible)
+            )
 
     if args.thesis:
         if args.all or args.ablation:
@@ -2858,12 +2894,13 @@ THESIS_RESULTS_PATH = (
 THESIS_OUTPUT_DIR = THESIS_PLOTS_DIR
 THESIS_OUTPUT_STEM = "causenet_msmarco_valid_thesis"
 THESIS_PNG_DPI = 400
-THESIS_METRIC_KEYS = (
+THESIS_RESULT_METRIC_KEYS = (
     "f1_score",
     "accuracy",
     "avg_nodes_visited",
     "avg_time_ms",
 )
+THESIS_BUDGET_KEY = "search_budget"
 
 # Both BFS configurations are retained because both are present as distinct
 # baselines. RL is included when its row is available.
@@ -2929,23 +2966,31 @@ THESIS_SYSTEM_STYLES = {
         "marker": "^",
     },
     THESIS_FINETUNED_ASTAR_MODELS[3]: {
-        "color": "#CC7A00",
+        "color": "#CC79A7",
         "marker": "D",
     },
     THESIS_FINETUNED_ASTAR_MODELS[4]: {
-        "color": "#56B4E9",
-        "marker": "v",
+        "color": "#E69F00",
+        "marker": "P",
     },
 }
 
 
-def make_thesis_metric_row(model, dimension, algorithm, result):
+def make_thesis_metric_row(model, dimension, algorithm, result, used_config):
     metrics = result.get("metrics", {})
+    if algorithm == "A*":
+        search_budget = used_config.get("astar_max_visits")
+    elif algorithm == "BFS":
+        search_budget = used_config.get("bfs_max_visits")
+    else:
+        search_budget = None
+
     return {
         "model": model,
         "dimension": dimension,
         "algorithm": algorithm,
-        **{key: metrics.get(key) for key in THESIS_METRIC_KEYS},
+        THESIS_BUDGET_KEY: search_budget,
+        **{key: metrics.get(key) for key in THESIS_RESULT_METRIC_KEYS},
     }
 
 
@@ -2968,6 +3013,7 @@ def load_thesis_selected_rows():
     for entry in eval_data:
         model = entry.get("model")
         evaluations = entry.get("evaluation", {})
+        used_config = entry.get("used_config", {})
 
         if model in THESIS_BASELINE_MODELS:
             algorithm = THESIS_BASELINE_ALGORITHMS[model]
@@ -2977,7 +3023,11 @@ def load_thesis_selected_rows():
                     f"{model} has no {algorithm!r} evaluation in "
                     f"{THESIS_RESULTS_PATH}"
                 )
-            rows.append(make_thesis_metric_row(model, None, algorithm, result))
+            rows.append(
+                make_thesis_metric_row(
+                    model, None, algorithm, result, used_config
+                )
+            )
             continue
 
         if model in THESIS_FINETUNED_ASTAR_MODELS:
@@ -2987,7 +3037,11 @@ def load_thesis_selected_rows():
             dimension = entry.get("dimension")
             if dimension is None:
                 raise ValueError(f"Whitelisted model {model} has no dimension")
-            rows.append(make_thesis_metric_row(model, int(dimension), "A*", result))
+            rows.append(
+                make_thesis_metric_row(
+                    model, int(dimension), "A*", result, used_config
+                )
+            )
             continue
 
         if model:
@@ -3026,10 +3080,12 @@ def validate_thesis_rows(rows):
         seen_runs.add(run_key)
 
         missing_metrics = [
-            key for key in THESIS_METRIC_KEYS if row[key] is None
+            key for key in THESIS_RESULT_METRIC_KEYS if row[key] is None
         ]
         if missing_metrics:
             raise ValueError(f"Missing metrics {missing_metrics} for {run_key}")
+        if row["algorithm"] == "A*" and row[THESIS_BUDGET_KEY] is None:
+            raise ValueError(f"Missing p95 search budget for {run_key}")
 
 
 def group_thesis_rows_by_model(rows):
@@ -3076,7 +3132,6 @@ def plot_thesis_metric_panel(
     rows,
     metric_key,
     title,
-    ylabel,
     panel_label,
     log_scale=False,
 ):
@@ -3093,8 +3148,8 @@ def plot_thesis_metric_panel(
             markerfacecolor=style["color"],
             markeredgecolor=style["color"],
             markeredgewidth=0.75,
-            markersize=5.4,
-            linewidth=1.6,
+            markersize=6.0,
+            linewidth=1.8,
             zorder=3 + draw_index * 0.05,
             **style,
         )
@@ -3102,18 +3157,28 @@ def plot_thesis_metric_panel(
     for model in THESIS_BASELINE_MODELS:
         if model not in grouped:
             continue
-        baseline_value = float(grouped[model][0][metric_key])
+        raw_baseline_value = grouped[model][0][metric_key]
+        if raw_baseline_value is None:
+            continue
+        baseline_value = float(raw_baseline_value)
+        if log_scale and baseline_value <= 0:
+            continue
         ax.axhline(
             baseline_value,
             zorder=2,
             **THESIS_SYSTEM_STYLES[model],
         )
 
-    ax.set_title(f"{panel_label}  {title}", loc="left", fontweight="semibold")
-    ax.set_xlabel("Embedding dimension")
-    ax.set_ylabel(ylabel)
+    ax.set_title(
+        f"{panel_label}  {title}",
+        loc="left",
+        fontsize=14,
+        fontweight="semibold",
+    )
+    ax.set_xlabel("Embedding dimension", fontsize=12)
     ax.set_xticks(range(len(dimensions)))
     ax.set_xticklabels([str(dimension) for dimension in dimensions], rotation=35)
+    ax.tick_params(axis="both", which="major", labelsize=11.5)
     ax.grid(axis="y", which="major", color="#D2D2D2", linewidth=0.65)
     ax.grid(axis="y", which="minor", color="#E8E8E8", linewidth=0.45)
     ax.set_axisbelow(True)
@@ -3127,7 +3192,9 @@ def plot_thesis_metric_panel(
     elif log_scale:
         ax.set_yscale("log")
         positive_values = [
-            float(row[metric_key]) for row in rows if row[metric_key] > 0
+            float(row[metric_key])
+            for row in rows
+            if row[metric_key] is not None and float(row[metric_key]) > 0
         ]
         ax.set_ylim(min(positive_values) / 1.3, max(positive_values) * 1.5)
 
@@ -3162,7 +3229,7 @@ def save_thesis_figure(fig, stem):
 
     for suffix in (".png", ".pdf"):
         path = THESIS_OUTPUT_DIR / f"{stem}{suffix}"
-        save_options = {"bbox_inches": "tight", "pad_inches": 0.08}
+        save_options = {"bbox_inches": "tight", "pad_inches": 0.03}
         if suffix == ".png":
             save_options["dpi"] = THESIS_PNG_DPI
         fig.savefig(path, **save_options)
@@ -3172,90 +3239,39 @@ def save_thesis_figure(fig, stem):
 
 
 def create_thesis_main_figure(rows):
-    fig, axes = plt.subplots(1, 3, figsize=(15.8, 5.25))
-    fig.suptitle(
-        "CauseNet Precision - MS MARCO Validation",
-        fontsize=14,
-        fontweight="semibold",
-    )
-
-    plot_thesis_metric_panel(
-        axes[0],
-        rows,
-        "f1_score",
-        r"F$_1$ Score",
-        r"F$_1$ score",
-        "(a)",
-    )
-
-    plot_thesis_metric_panel(
-        axes[1],
-        rows,
-        "avg_nodes_visited",
-        "Visited Nodes",
-        "Average visited nodes (log scale)",
-        "(b)",
-        log_scale=True,
-    )
-
-    plot_thesis_metric_panel(
-        axes[2],
-        rows,
-        "avg_time_ms",
-        "Runtime",
-        "Average runtime in ms (log scale)",
-        "(c)",
-        log_scale=True,
-    )
-
-    fig.legend(
-        handles=build_thesis_legend_handles(rows),
-        loc="lower center",
-        ncol=4,
-        frameon=False,
-        columnspacing=1.8,
-        handlelength=2.8,
-    )
-    fig.tight_layout(rect=(0.0, 0.18, 1.0, 0.93), w_pad=2.0)
-    paths = save_thesis_figure(fig, f"{THESIS_OUTPUT_STEM}_main")
-    plt.close(fig)
-    return paths
-
-
-def create_thesis_appendix_figure(rows):
     fig, axes = plt.subplots(2, 2, figsize=(12.6, 9.0))
-    fig.suptitle(
-        "CauseNet precision graph - MS MARCO validation",
-        fontsize=14,
-        fontweight="semibold",
-    )
 
     plot_thesis_metric_panel(
         axes[0, 0],
         rows,
         "f1_score",
-        "F1 score",
-        "F1 score",
+        r"F$_1$ score",
         "(a)",
     )
+
     plot_thesis_metric_panel(
-        axes[0, 1], rows, "accuracy", "Accuracy", "Accuracy", "(b)"
+        axes[0, 1],
+        rows,
+        THESIS_BUDGET_KEY,
+        "p95 budget τ",
+        "(b)",
+        log_scale=True,
     )
+
     plot_thesis_metric_panel(
         axes[1, 0],
         rows,
         "avg_nodes_visited",
-        "Search effort",
-        "Average visited nodes (log scale)",
+        "Search effort (visited nodes)",
         "(c)",
         log_scale=True,
     )
+
     plot_thesis_metric_panel(
         axes[1, 1],
         rows,
         "avg_time_ms",
-        "Runtime",
-        "Average runtime in ms (log scale)",
+        "Runtime (ms)",
         "(d)",
         log_scale=True,
     )
@@ -3265,11 +3281,12 @@ def create_thesis_appendix_figure(rows):
         loc="lower center",
         ncol=4,
         frameon=False,
-        columnspacing=1.8,
-        handlelength=2.8,
+        fontsize=10,
+        columnspacing=1.3,
+        handlelength=2.5,
     )
-    fig.tight_layout(rect=(0.0, 0.10, 1.0, 0.95), h_pad=2.1, w_pad=1.9)
-    paths = save_thesis_figure(fig, f"{THESIS_OUTPUT_STEM}_appendix")
+    fig.tight_layout(rect=(0.0, 0.09, 1.0, 0.99), h_pad=1.5, w_pad=1.0)
+    paths = save_thesis_figure(fig, f"{THESIS_OUTPUT_STEM}_main")
     plt.close(fig)
     return paths
 
@@ -3319,18 +3336,158 @@ def print_thesis_selection_report(rows, excluded_systems):
 
 
 def plot_thesis_causenet_msmarco_valid():
-    """Create the fixed main and appendix thesis figures."""
+    """Create the fixed 2-by-2 thesis figure."""
 
     apply_thesis_plot_style()
     rows, excluded_systems = load_thesis_selected_rows()
     print_thesis_selection_report(rows, excluded_systems)
 
     output_paths = create_thesis_main_figure(rows)
-    output_paths += create_thesis_appendix_figure(rows)
 
     print("\nCreated thesis figures:")
     for path in output_paths:
         print(f"  - {path}")
+
+
+# -------------------------------------------------------------------------
+# Fixed budget trade-off figure: CauseNet / MS MARCO validation / v3
+# -------------------------------------------------------------------------
+
+TRADEOFF_PNG_DPI = 400
+TRADEOFF_ANNOTATION_OFFSETS = (
+    (0, 9),
+    (0, -12),
+    (8, 7),
+    (-8, -11),
+    (9, -8),
+    (-9, 8),
+)
+
+
+def load_budget_tradeoff_rows():
+    """Load and strictly validate the expected five-by-ten result matrix."""
+
+    if not TRADEOFF_RESULTS_PATH.is_file():
+        raise FileNotFoundError(
+            "Budget trade-off results do not exist. Run "
+            "`python -m evaluation.run_budget_tradeoff` first. "
+            f"Expected: {TRADEOFF_RESULTS_PATH}"
+        )
+
+    tradeoff_df = pd.read_csv(TRADEOFF_RESULTS_PATH, sep=";")
+    rows = validate_tradeoff_results(tradeoff_df.to_dict(orient="records"))
+    return pd.DataFrame(rows)
+
+
+def get_tradeoff_style(model_name):
+    checkpoint_name = next(
+        checkpoint
+        for checkpoint, display_name in THESIS_DISPLAY_LABELS.items()
+        if display_name == model_name
+    )
+    return THESIS_SYSTEM_STYLES[checkpoint_name]
+
+
+def annotate_tradeoff_budgets(ax, line_index, subset, color):
+    """Use staggered offsets so nearby budget labels remain distinguishable."""
+
+    for point_index, row in enumerate(subset.itertuples(index=False)):
+        offset_index = (point_index + line_index * 2) % len(
+            TRADEOFF_ANNOTATION_OFFSETS
+        )
+        x_offset, y_offset = TRADEOFF_ANNOTATION_OFFSETS[offset_index]
+        ax.annotate(
+            rf"$\tau={int(row.budget)}$",
+            xy=(row.average_visited_nodes, row.f1),
+            xytext=(x_offset, y_offset),
+            textcoords="offset points",
+            ha="center",
+            va="center",
+            fontsize=6.5,
+            color=color,
+            bbox={
+                "boxstyle": "round,pad=0.14",
+                "facecolor": "white",
+                "edgecolor": "none",
+                "alpha": 0.78,
+            },
+            annotation_clip=True,
+            zorder=8,
+        )
+
+
+def create_budget_tradeoff_figure(tradeoff_df):
+    """Plot measured search effort against F1 in ascending budget order."""
+
+    apply_thesis_plot_style()
+    fig, ax = plt.subplots(figsize=(10.2, 6.6))
+
+    for line_index, model_name in enumerate(TRADEOFF_MODEL_NAMES):
+        subset = tradeoff_df[tradeoff_df["model"] == model_name].sort_values(
+            "budget"
+        )
+        style = get_tradeoff_style(model_name)
+        ax.plot(
+            subset["average_visited_nodes"],
+            subset["f1"],
+            label=model_name,
+            color=style["color"],
+            marker=style["marker"],
+            markerfacecolor=style["color"],
+            markeredgecolor="white",
+            markeredgewidth=0.7,
+            markersize=6.2,
+            linewidth=1.8,
+            zorder=3 + line_index * 0.05,
+        )
+        annotate_tradeoff_budgets(ax, line_index, subset, style["color"])
+
+    f1_values = tradeoff_df["f1"].astype(float)
+    f1_range = max(float(f1_values.max() - f1_values.min()), 0.02)
+    lower = max(0.0, float(f1_values.min()) - 0.14 * f1_range)
+    upper = min(1.0, float(f1_values.max()) + 0.14 * f1_range)
+    ax.set_ylim(lower, upper)
+    ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
+    ax.set_xlabel("Average Visited Nodes", fontsize=12)
+    ax.set_ylabel(r"F$_1$ Score", fontsize=12)
+    ax.grid(axis="both", which="major", color="#D7D7D7", linewidth=0.65)
+    ax.set_axisbelow(True)
+    ax.margins(x=0.08)
+    ax.legend(
+        loc="best",
+        frameon=True,
+        fontsize=9,
+        handlelength=2.5,
+        borderpad=0.7,
+    )
+    fig.tight_layout(pad=0.7)
+    return fig
+
+
+def plot_budget_tradeoff():
+    tradeoff_df = load_budget_tradeoff_rows()
+    fig = create_budget_tradeoff_figure(tradeoff_df)
+    TRADEOFF_PDF_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    fig.savefig(
+        TRADEOFF_PDF_PATH,
+        bbox_inches="tight",
+        pad_inches=0.04,
+    )
+    fig.savefig(
+        TRADEOFF_PNG_PATH,
+        dpi=TRADEOFF_PNG_DPI,
+        bbox_inches="tight",
+        pad_inches=0.04,
+    )
+    plt.close(fig)
+
+    print(
+        "Created budget trade-off figures for "
+        f"{len(TRADEOFF_MODEL_NAMES)} models and {len(TRADEOFF_BUDGETS)} budgets:"
+    )
+    print(f"  - {TRADEOFF_PDF_PATH}")
+    print(f"  - {TRADEOFF_PNG_PATH}")
 
 
 # -------------------------------------------------------------------------
@@ -3339,6 +3496,10 @@ def plot_thesis_causenet_msmarco_valid():
 
 if __name__ == "__main__":
     args = parse_args()
+
+    if args.tradeoff:
+        plot_budget_tradeoff()
+        raise SystemExit(0)
 
     if args.thesis:
         plot_thesis_causenet_msmarco_valid()

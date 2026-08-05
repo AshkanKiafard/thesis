@@ -9,6 +9,9 @@ const state = {
   bfsDefaults: new Map(),
   suggestionRequestIds: { source: 0, target: 0 },
   busy: false,
+  lastInferenceResult: null,
+  gifExporting: false,
+  gifWorkerUrl: null,
 };
 
 const els = {
@@ -38,6 +41,9 @@ const els = {
   pickTarget: document.getElementById("pick-target"),
   controls: document.getElementById("controls"),
   runButton: document.getElementById("run-button"),
+  savePathGif: document.getElementById("save-path-gif"),
+  savePathGifLabel: document.getElementById("save-path-gif-label"),
+  gifShowEndpointNames: document.getElementById("gif-show-endpoint-names"),
   reloadSubgraph: document.getElementById("reload-subgraph"),
   caption: document.getElementById("graph-caption"),
   resultStatus: document.getElementById("result-status"),
@@ -57,7 +63,16 @@ const colors = {
   pathLink: "#c084fc",
 };
 
-const graph = ForceGraph3D()(els.graphContainer)
+const gifExport = {
+  durationMs: 2000,
+  frameDelayMs: 100,
+  maxWidth: 1600,
+  workerScript: "https://unpkg.com/gif.js@0.2.0/dist/gif.worker.js",
+};
+
+const graph = ForceGraph3D({
+  rendererConfig: { antialias: true, alpha: true, preserveDrawingBuffer: true },
+})(els.graphContainer)
   .backgroundColor("#121417")
   .nodeId("id")
   .nodeLabel((node) => `${node.label}<br>degree: ${node.degree}`)
@@ -96,7 +111,8 @@ els.graphSelect.addEventListener("change", handleGraphChange);
 els.bfsSearchCap.addEventListener("input", handleBfsCapInput);
 els.pickSource.addEventListener("click", () => setPickMode("source"));
 els.pickTarget.addEventListener("click", () => setPickMode("target"));
-els.reloadSubgraph.addEventListener("click", () => loadSubgraph());
+els.savePathGif.addEventListener("click", saveFoundPathAsGif);
+els.reloadSubgraph.addEventListener("click", reloadSubgraph);
 els.controls.addEventListener("submit", runInference);
 els.sourceInput.addEventListener("input", () => handleEndpointInput("source"));
 els.targetInput.addEventListener("input", () => handleEndpointInput("target"));
@@ -229,6 +245,12 @@ function drawGraph(payload) {
   graph.height(els.graphContainer.clientHeight);
   setTimeout(() => graph.zoomToFit(650, 72), 350);
   setTimeout(() => graph.zoomToFit(650, 72), 1300);
+}
+
+function reloadSubgraph() {
+  clearPath();
+  setStatus("Ready", "idle");
+  loadSubgraph();
 }
 
 async function handleNodeClick(node) {
@@ -503,6 +525,8 @@ function renderResult(result) {
   els.pathList.innerHTML = "";
   els.pathList.className = `path-list ${result.found ? "path-found" : "path-missing"}`;
   state.lastPathNodes = new Set(result.path || []);
+  state.lastInferenceResult = result.found ? result : null;
+  setPathExportAvailable(result.found);
 
   if (result.found) {
     setResultStatus(result.config_label, "Path found", "found");
@@ -525,11 +549,256 @@ function renderResult(result) {
 
 function clearPath() {
   state.lastPathNodes = new Set();
+  state.lastInferenceResult = null;
+  setPathExportAvailable(false);
   els.metricHops.textContent = "-";
   els.metricVisited.textContent = "-";
   els.metricRuntime.textContent = "-";
   els.pathList.innerHTML = "";
   els.pathList.className = "path-list";
+}
+
+function setPathExportAvailable(available) {
+  els.savePathGif.disabled = !available || state.gifExporting;
+  els.savePathGif.title = available
+    ? "Save the current path with directional movement as an animated GIF"
+    : "Run an inference that finds a path before saving";
+}
+
+async function saveFoundPathAsGif() {
+  const result = state.lastInferenceResult;
+  if (!result?.found || !result.path?.length) {
+    setPathExportAvailable(false);
+    return;
+  }
+
+  hideError();
+  setGifExporting(true, "Preparing GIF...");
+  try {
+    if (typeof GIF !== "function") {
+      throw new Error("The GIF encoder did not load.");
+    }
+
+    const workerScript = await getGifWorkerUrl();
+    const renderer = graph.renderer();
+    const sourceCanvas = renderer.domElement;
+    const capture = createGifCaptureCanvas(sourceCanvas);
+    const gif = new GIF({
+      workers: 2,
+      quality: 8,
+      repeat: 0,
+      width: capture.canvas.width,
+      height: capture.canvas.height,
+      workerScript,
+    });
+
+    const pathParticleAccessor = graph.linkDirectionalParticles();
+    graph.linkDirectionalParticles(0);
+    graph.resumeAnimation();
+    try {
+      await captureGifFrames(
+        gif,
+        renderer,
+        sourceCanvas,
+        capture,
+        result,
+        els.gifShowEndpointNames.checked,
+      );
+    } finally {
+      graph.linkDirectionalParticles(pathParticleAccessor);
+    }
+    setGifExporting(true, "Encoding GIF...");
+    const blob = await renderGif(gif);
+    downloadBlob(blob, pathGifFilename(result));
+  } catch (error) {
+    showError(`Could not save the path GIF: ${error.message}`);
+  } finally {
+    setGifExporting(false);
+  }
+}
+
+function createGifCaptureCanvas(sourceCanvas) {
+  const scale = Math.min(1, gifExport.maxWidth / sourceCanvas.width);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(sourceCanvas.width * scale));
+  canvas.height = Math.max(1, Math.round(sourceCanvas.height * scale));
+  const context = canvas.getContext("2d", { alpha: false });
+  if (!context) throw new Error("Canvas capture is unavailable.");
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  return { canvas, context };
+}
+
+async function captureGifFrames(
+  gif,
+  renderer,
+  sourceCanvas,
+  capture,
+  result,
+  showEndpointNames,
+) {
+  const frameCount = Math.ceil(gifExport.durationMs / gifExport.frameDelayMs);
+  for (let index = 0; index < frameCount; index += 1) {
+    if (index > 0) await wait(gifExport.frameDelayMs);
+    renderer.render(graph.scene(), graph.camera());
+    capture.context.drawImage(
+      sourceCanvas,
+      0,
+      0,
+      capture.canvas.width,
+      capture.canvas.height,
+    );
+    drawGifDirectionOverlay(
+      capture,
+      result,
+      index / (frameCount - 1),
+      showEndpointNames,
+    );
+    gif.addFrame(capture.context, { copy: true, delay: gifExport.frameDelayMs });
+    const percent = Math.round(((index + 1) / frameCount) * 100);
+    setGifExporting(true, `Recording ${percent}%`);
+  }
+}
+
+function drawGifDirectionOverlay(
+  capture,
+  result,
+  frameProgress,
+  showEndpointNames,
+) {
+  const path = result.path || [];
+  if (path.length < 2) return;
+
+  const nodesById = new Map(
+    graph.graphData().nodes.map((node) => [node.id, node]),
+  );
+  const travelProgress = Math.max(0, Math.min(1, (frameProgress - 0.1) / 0.8));
+  const context = capture.context;
+
+  context.save();
+  for (let index = 4; index >= 0; index -= 1) {
+    const trailProgress = Math.max(0, travelProgress - index * 0.018);
+    const point = projectGifPathPoint(path, nodesById, trailProgress, capture.canvas);
+    if (!point) continue;
+
+    const strength = 1 - index / 6;
+    context.beginPath();
+    context.arc(point.x, point.y, 4 + strength * 4, 0, Math.PI * 2);
+    context.fillStyle = `rgba(255, 209, 102, ${0.2 + strength * 0.75})`;
+    context.shadowColor = "rgba(255, 209, 102, 0.95)";
+    context.shadowBlur = 8 + strength * 8;
+    context.fill();
+  }
+  context.restore();
+
+  if (showEndpointNames) {
+    drawGifDirectionLabel(context, capture.canvas, result.source, result.target);
+  }
+}
+
+function projectGifPathPoint(path, nodesById, progress, canvas) {
+  const edgeCount = path.length - 1;
+  const scaledProgress = Math.min(progress * edgeCount, edgeCount - Number.EPSILON);
+  const edgeIndex = Math.min(Math.floor(scaledProgress), edgeCount - 1);
+  const edgeProgress = progress >= 1 ? 1 : scaledProgress - edgeIndex;
+  const source = nodesById.get(path[edgeIndex]);
+  const target = nodesById.get(path[edgeIndex + 1]);
+  if (!hasGraphPosition(source) || !hasGraphPosition(target)) return null;
+
+  const projected = graph.camera().position.clone().set(
+    source.x + (target.x - source.x) * edgeProgress,
+    source.y + (target.y - source.y) * edgeProgress,
+    source.z + (target.z - source.z) * edgeProgress,
+  );
+  projected.project(graph.camera());
+  return {
+    x: (projected.x + 1) * canvas.width / 2,
+    y: (1 - projected.y) * canvas.height / 2,
+  };
+}
+
+function hasGraphPosition(node) {
+  return node && [node.x, node.y, node.z].every(Number.isFinite);
+}
+
+function drawGifDirectionLabel(context, canvas, source, target) {
+  const fontSize = Math.max(13, Math.round(canvas.width / 55));
+  const label = `${source}  →  ${target}`;
+  context.save();
+  context.font = `600 ${fontSize}px sans-serif`;
+  context.textBaseline = "middle";
+  const paddingX = 12;
+  const boxHeight = fontSize + 16;
+  const boxWidth = Math.min(
+    canvas.width - 24,
+    context.measureText(label).width + paddingX * 2,
+  );
+  context.fillStyle = "rgba(18, 20, 23, 0.82)";
+  context.fillRect(12, 12, boxWidth, boxHeight);
+  context.fillStyle = "#ffd166";
+  context.fillText(label, 12 + paddingX, 12 + boxHeight / 2, boxWidth - paddingX * 2);
+  context.restore();
+}
+
+function renderGif(gif) {
+  return new Promise((resolve, reject) => {
+    gif.on("progress", (progress) => {
+      setGifExporting(true, `Encoding ${Math.round(progress * 100)}%`);
+    });
+    gif.on("finished", resolve);
+    gif.on("abort", () => reject(new Error("GIF encoding was aborted.")));
+    gif.render();
+  });
+}
+
+async function getGifWorkerUrl() {
+  if (state.gifWorkerUrl) return state.gifWorkerUrl;
+  const response = await fetch(gifExport.workerScript);
+  if (!response.ok) {
+    throw new Error(`GIF worker download failed (${response.status}).`);
+  }
+  const workerSource = await response.text();
+  state.gifWorkerUrl = URL.createObjectURL(new Blob(
+    [workerSource],
+    { type: "text/javascript" },
+  ));
+  return state.gifWorkerUrl;
+}
+
+function setGifExporting(exporting, label = "Save path GIF") {
+  state.gifExporting = exporting;
+  els.savePathGifLabel.textContent = label;
+  els.gifShowEndpointNames.disabled = exporting;
+  setPathExportAvailable(Boolean(state.lastInferenceResult?.found));
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const download = document.createElement("a");
+  download.href = url;
+  download.download = filename;
+  document.body.append(download);
+  download.click();
+  download.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function pathGifFilename(result) {
+  const graphName = filenamePart(result.graph_id, "graph");
+  const source = filenamePart(result.source, "source");
+  const target = filenamePart(result.target, "target");
+  return `${graphName}-${source}-to-${target}-path.gif`;
+}
+
+function filenamePart(value, fallback) {
+  const normalized = String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return normalized || fallback;
 }
 
 function renderBfsCapInfo(payload = null) {
@@ -737,6 +1006,10 @@ function debounce(fn, delay) {
     window.clearTimeout(handle);
     handle = window.setTimeout(() => fn(...args), delay);
   };
+}
+
+function wait(delay) {
+  return new Promise((resolve) => window.setTimeout(resolve, delay));
 }
 
 function formatNumber(value) {

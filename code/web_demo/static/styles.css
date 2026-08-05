@@ -404,6 +404,36 @@
     font-size: 0.9rem;
 }
 
+.graph-toolbar-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.gif-name-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-right: 4px;
+    color: var(--demo-muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+.gif-name-option .uk-checkbox {
+    margin: 0;
+}
+
+#save-path-gif {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
 #graph {
     height: 634px;
     background: var(--demo-canvas);
@@ -440,5 +470,14 @@
     .pick-mode,
     .metrics {
         grid-template-columns: 1fr;
+    }
+
+    .graph-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .graph-toolbar-actions {
+        justify-content: flex-start;
     }
 }

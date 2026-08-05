@@ -1,0 +1,135 @@
+\documentclass[english,bachelor,uks]{webisthesis} % Weimar
+% \documentclass[german,bachelor,fsu]{webisthesis} % Jena
+% \documentclass[german,bachelor,ul]{webisthesis} % Leipzig
+% \documentclass[german,master,buw,web]{webisthesis} % Weimar, for web page
+% \documentclass[german,bachelor,fsu,web]{webisthesis} % Jena, for web page
+% \documentclass[german,bachelor,ul,web]{webisthesis} % Leipzig, for web page
+%
+% Non-default programme
+% ---------------------
+% \documentclass[english,master,buw]{webisthesis}\global\thesisprogramme{Human-Computer Interaction}
+% \documentclass[english,master,buw]{webisthesis}\global\thesisfrontpagefaculty{Faculty of Civil Engineering/Faculty of Media}\global\thesisprogramme{Digital Engineering}
+% \documentclass[german,bachelor,buw]{webisthesis}\global\thesisprogramme{Informatik\\Schwerpunkt Medieninformatik}
+% \documentclass[german,bachelor,buw]{webisthesis}\global\thesisprogramme{Informatik\\Schwerpunkt Security and Data Science}
+%
+% When you change the language, pdflatex may halt on recompilation.
+% Just hit enter to continue and recompile again. This should fix it.
+
+
+%
+% Values
+% ------
+\ThesisSetTitle{Learning Heuristics for Efficient Causal Question Answering Using A* Search}
+\ThesisSetKeywords{Causal Question Answering, Causal Knowledge Graphs, A* Search, Heuristic Graph Search, Sentence Embeddings, Matryoshka Embeddings, Graph Traversal}
+\ThesisSetLocation{Kassel} 
+
+\ThesisSetAuthor{Ashkan Kiafard}
+\ThesisSetStudentNumber{35825953}
+\ThesisSetDateOfBirth{23}{06}{2002}
+\ThesisSetPlaceOfBirth{Iran}
+
+% Supervisors should usually be Professors from the candidate's university. A second supervisor is not always needed. 
+\ThesisSetSupervisors{Prof.\ Dr.\ Martin Potthast,Prof.\ Dr.\ Oliver Hohlfeld}
+
+\ThesisSetSubmissionDate{31}{7}{2026}
+
+%
+% Suggested Packages
+% ------------------
+\usepackage[numbers,sort&compress]{natbib}
+%   Allows citing in different ways (e.g., only the authors if you use the
+%   citation again within a short time).
+%
+\usepackage{booktabs}
+%    For tables ``looking the right way''.
+%
+% \usepackage{tabularx}
+%    Enables tables with columns that automatically fill the page width.
+%
+% \usepackage[ruled,algochapter]{algorithm2e}
+%    A package for pseudo code algorithms.
+%
+\usepackage{amsmath}
+%    For tabular-style formatting of mathematical environments.
+%
+
+\usepackage{fontawesome}
+%    For lots of awesome glyphs: https://mirror.physik.tu-berlin.de/pub/CTAN/fonts/fontawesome/doc/fontawesome.pdf
+
+\usepackage{amssymb}
+\usepackage{graphicx}
+
+%
+% Commenting (by your supervisor)
+% -------------------------------
+\usepackage{xcolor}
+\usepackage{soul}
+\newcommand{\bscom}[2]{%
+  % #1 Original text.
+  % #2 Replacement text.
+    \st{\scriptsize\,#1}{\color{blue}\scriptsize\,#2}%
+  }
+
+\usepackage{float}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{siunitx}
+\sisetup{
+    group-separator = {,},
+    group-minimum-digits = 4
+}
+  
+% Create links in the pdf document
+% Hyperref has some incompatibilities with other packages
+% Some other packages must be loaded before, some after hyperref
+% Additional options to the hyperref package can be provided in the braces [], like in
+% \usehyperref[backref] % This will add back references in the bibliography that some people like ... some don't ... so better ask your supervisor ;-)
+\usehyperref
+
+\begin{document}
+\begin{frontmatter}
+
+\begin{abstract}
+Identifying causal relationships is important across domains such as healthcare, economics, public policy, and environmental science. A fundamental task is determining whether a causal relation exists between two concepts, expressed as the binary question ``Does \(A\) cause \(B\)?''. While large language models can answer such questions directly, their responses may hallucinate relations and often lack an explicit reasoning path. Causal knowledge graphs provide a structured and interpretable alternative, allowing binary causal question answering to be formulated as directed graph traversal. However, exhaustive methods such as Breadth-First Search (BFS) become expensive on large causal graphs. This thesis proposes an embedding-guided \(A^*\) method for efficient causal path discovery. Embedding distances are used as edge costs and heuristic estimates toward the target concept. Because pretrained embeddings are not optimized for causal reachability, the embedding space is fine-tuned using successful search trajectories. Matryoshka Representation Learning further enables compact embeddings that reduce computational cost while preserving effectiveness. The final configuration uses fine-tuned Granite Embedding R2 with a 32-dimensional Matryoshka prefix, ReLU activation, Euclidean distance, and a search budget of \(\tau=27\). Experiments on binary causal question answering datasets derived from MS MARCO and SemEval across CauseNet Precision, CauseNet Full, and CEG Filtered show substantial efficiency gains. On the larger CauseNet Full and CEG Filtered graphs, the selected \(A^*\) configuration is at least \(9.8\times\) faster than capped BFS and \(32.1\times\) faster than uncapped BFS, while reducing visited nodes by more than \(400\times\) and \(1{,}100\times\), respectively. Compared with the LSTM-based reinforcement learning baseline of \citeauthor{bluebaum:2024}, it achieves higher F\textsubscript{1} and lower runtime in all final test settings, with at least a \(39.7\times\) speedup. Overall, the results show that learning an embedding-based heuristic provides an efficient alternative to learning a traversal policy while keeping causal graph search explicit and interpretable.
+\end{abstract}
+
+
+\tableofcontents
+
+% \chapter*{Acknowledgements} % optional
+% I thank the authors of the webisthesis template for their excellent work!
+
+% \listoffigures % optional, usually not needed
+
+% \listoftables % optional, usually not needed
+
+% \listofalgorithms % optional, usually not needed
+%    requires package algorithm2e
+
+% optional: list of symbols/notation (e.g., using the nomencl package) but usually not needed
+\end{frontmatter}
+
+\include{chapters/introduction} 
+
+\include{chapters/foundations}
+
+\include{chapters/related_work}
+
+\include{chapters/methodology}
+
+\include{chapters/train}
+
+\include{chapters/results}
+
+\include{chapters/discussion}
+
+\include{chapters/conclusion}
+
+\bibliographystyle{unsrtnat}
+\bibliography{literature}
+
+\appendix
+\include{chapters/appendix}
+
+\end{document}

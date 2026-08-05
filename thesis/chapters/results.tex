@@ -1,0 +1,104 @@
+\chapter{Results}
+\label{chap:results}
+
+This chapter evaluates the proposed embedding-guided $A^*$ search for binary causal question answering in terms of effectiveness and efficiency. Section~\ref{sec:results-evaluation-setup} describes the experimental setup. Section~\ref{sec:results-finetuning} addresses RQ1 by examining whether fine-tuning improves the embedding heuristic, while Section~\ref{sec:results-matryoshka} addresses RQ2 by analyzing the effect of Matryoshka dimensionality on effectiveness and efficiency. Section~\ref{sec:results-comparison} addresses RQ3 by comparing the selected $A^*$ configuration with BFS and RL and RQ4 by evaluating its performance across datasets and graph variants. Finally, Section~\ref{sec:results-ablation} examines the effects of the activation function and distance metric through an ablation study.
+
+\section{Evaluation Setup}
+\label{sec:results-evaluation-setup}
+
+This section describes the evaluation procedure, datasets, causal graphs, models and baselines, and the methodology used throughout the experiments.
+
+\subsection{Evaluation Procedure}
+\label{sec:results-procedure}
+
+The evaluation is organized in two stages. First, MS MARCO validation with CauseNet Precision is used to analyze fine-tuning and Matryoshka dimensionality and select the final \(A^*\) configuration. Second, the selected configuration is evaluated on the MS MARCO and SemEval test splits across CauseNet Precision, CauseNet Full, and CEG Filtered, a filtered version of the Cause Effect Graph (CEG), and compared with BFS and RL.
+
+\subsection{Datasets}
+\label{sec:results-datasets}
+
+The causal question-answering datasets used in this thesis are derived subsets rather than the complete original datasets. The MS MARCO data are based on causal questions extracted from the original MS MARCO dataset~\citep{nguyen:2016} as part of Webis-CausalQA-22~\citep{bondarenko:2022}, while the SemEval data are based on the causal-relation subset of SemEval-2010 Task 8~\citep{hendrickx:2010} introduced by \citet{sharp:2016}. The binary causal splits for both datasets were provided by \citeauthor{bluebaum:2024}. During evaluation, examples are skipped if either the potential cause or effect is absent from the evaluated graph. Table~\ref{tab:dataset-statistics} reports the resulting dataset sizes and class balances before and after graph-node coverage filtering. Because filtering changes both sample size and class balance across graphs, cross-graph effectiveness results should be interpreted accordingly. This is particularly important for CEG Filtered on the MS MARCO test split, where only 48 examples remain after filtering.
+
+\input{tables/dataset_statistics}
+
+\subsection{Causal Graphs}
+\label{sec:results-graphs}
+
+The evaluation uses three graph settings. CauseNet Precision is the high-precision subset of CauseNet~\citep{heindorf:2020} and is used for training, validation, model selection, and the main comparison to prior work. CauseNet Full is used to test scalability to a substantially larger graph. The third evaluated graph is a filtered version of the original CEG~\citep{li:2020}. Because CEG is very dense and contains many low-confidence edges, filtering is applied using the causal-strength formulation of \citet{luo:2016}, which combines necessity and sufficiency scores. For each CEG edge from cause \(c\) to effect \(e\), the causal strength is computed as\looseness=-1
+\[
+    \mathrm{CS}(c,e)
+    =
+    \mathrm{necessity}(c,e)^{\lambda}
+    \cdot
+    \mathrm{sufficiency}(c,e)^{1-\lambda}.
+\]
+This thesis uses \(\lambda = 0.9\), following \citeauthor{luo:2016}, and keeps only edges with \(\mathrm{CS}(c,e) \geq 0.1\). All graph files are loaded with a common preprocessing step that removes empty or punctuation-only concepts and self-loops and normalizes concept labels by replacing underscores with spaces and stripping surrounding whitespace. Table~\ref{tab:graph-statistics} summarizes the resulting graph sizes.\footnote{The publicly available CEG release, in which cause--effect pairs with a reported frequency of \(5\) or lower are already excluded, contains approximately \(92.3\) million edges. In contrast, the official CEG release documentation~\citep{li:2020} reports approximately \(89.1\) million cause--effect pairs for this version. The available release information is insufficient to determine the source of this discrepancy conclusively. The official CauseNet statistics report \(199{,}806\) relations and \(80{,}223\) concepts for CauseNet Precision and \(11{,}609{,}890\) relations and \(12{,}186{,}195\) concepts for CauseNet Full~\citep{heindorf:2020}. The slightly smaller counts in Table~\ref{tab:graph-statistics} result from the preprocessing used in this thesis, which removes empty or punctuation-only concepts and self-loops and normalizes concept labels.}
+
+\input{tables/graph_statistics}
+
+\subsection{Models and Baselines}
+\label{sec:results-models}
+
+For embedding-guided \(A^*\), five embedding backbones are evaluated alongside the RL baseline of \citet{bluebaum:2024}. The \(A^*\) models and RL policy are trained using the MS MARCO training split and CauseNet Precision. Unlike the original RL setup, the policy is trained and evaluated without inverse edges because these may introduce transitions that do not represent causality in the queried direction. This ensures that all methods operate on the same forward directed-reachability task. Table~\ref{tab:model-overview} defines the model identifiers, parameter counts, embedding dimensions, and concise labels used throughout the results.
+
+\input{tables/models}
+
+\subsection{Evaluation Methodology}
+\label{sec:results-methodology}
+
+This section describes the methodology used for the experimental evaluation, including search budgets, evaluation metrics, runtime measurement, model selection, and statistical significance testing.
+
+\subsubsection{Search Budgets}
+
+The evaluation reports two BFS variants and budgeted \(A^*\). BFS (uncapped) runs without a visit limit and serves as the exhaustive reachability baseline. For BFS (capped) and \(A^*\), budgets are set to the 95th percentile of visited nodes from successful searches on the MS MARCO training split with CauseNet Precision. BFS uses one global cap, whereas \(A^*\) uses a separate budget for each embedding model and Matryoshka dimension. The selected Granite model at dimension 32 uses \(\tau=27\); all \(A^*\) thresholds are reported in Table~\ref{tab:p95-visited-nodes}. Following \citet{bluebaum:2024}, RL has no visited-node budget and instead uses beam search with width \(50\), a \textsc{stay} action, and a rollout length of two.
+
+\subsubsection{Evaluation Metrics}
+
+Effectiveness is measured using precision, recall, and F\textsubscript{1}. Efficiency is measured using the average number of visited nodes and the average runtime per query in milliseconds. For BFS and \(A^*\), visited nodes count nodes processed during graph search, whereas for RL, following the original implementation, they count unique nodes in retained beam paths until the target is first encountered. Runtime additionally reflects neural inference, distance computation, and implementation overhead, whereas visited nodes provide a hardware-independent measure of traversal effort that is less sensitive to system load and hardware variation. The two metrics therefore capture complementary aspects of algorithmic search effort and practical execution cost.
+
+\subsubsection{Runtime Evaluation}
+
+All evaluation runs were executed through the Webis SLURM infrastructure on the \texttt{gammaweb10} node of the Gammaweb partition using eight CPU cores, 128\,GB of memory, and one \texttt{hopper} GPU.\footnote{Further details are available at \url{https://webis.de/facilities.html}.} Embedding-based computations use CUDA where applicable, whereas BFS runs on the CPU. Runtime is measured per query using Python's \texttt{time.perf\_counter()}, with CUDA synchronization before and after traversal. One untimed warm-up traversal is performed per strategy. Graph loading, embedding precomputation, and cache loading are excluded, and reported runtimes are averages over a single evaluation run.
+
+\subsubsection{Model Selection}
+
+The final \(A^*\) configuration is selected from the validation results using an effectiveness--efficiency criterion. Only fine-tuned candidates with an F\textsubscript{1} score of at least \(80.0\) are considered. Among these candidates, the configuration with the lowest runtime is selected, followed by visited nodes and F\textsubscript{1} as tie-breakers.
+
+\subsubsection{Statistical Significance Testing}
+
+Statistical significance is tested only for the final test comparison. For each dataset--graph setting, the selected \(A^*\) configuration is compared with BFS (uncapped), BFS (capped), and RL using a paired stratified bootstrap test \citep{koehn:2004,dror:2018}. Positive and negative examples are resampled separately over \(10{,}000\) bootstrap samples. With a family-wise significance level of \(\alpha=0.05\), Bonferroni correction over the three comparisons gives a threshold of \(\alpha/3 \approx 0.0167\). Reported p-values are Bonferroni-adjusted, while the 95\% confidence intervals are unadjusted. Results are reported in Tables~\ref{tab:f1-significance-causenet-precision}--\ref{tab:f1-significance-ceg}.
+
+\section{Effect of Fine-Tuning}
+\label{sec:results-finetuning}
+
+RQ1 examines whether fine-tuning improves the embedding heuristic used by $A^*$. Table~\ref{tab:validation-full-dim} compares each model before and after fine-tuning at its full embedding dimension on MS MARCO validation with CauseNet Precision, using the best hyperparameter configuration from Table~\ref{tab:training-hyperparameters}. Pretrained embeddings already provide effective heuristics, reaching F\textsubscript{1} scores between 86.2 and 87.1 but requiring 66.1 to 142.0 visited nodes on average. Fine-tuning substantially reduces search effort for most models: Qwen3-0.6B decreases from 105.4 to 21.7 visited nodes, Granite from 142.0 to 18.4, MPNet from 85.1 to 13.0, and mxbai from 66.1 to 39.0. However, this efficiency gain generally comes with lower F\textsubscript{1}. The strongest decline occurs for BGE, whose F\textsubscript{1} drops from 86.6 to 79.2 while visited nodes decrease only slightly. The baselines show the same effectiveness--efficiency trade-off. Uncapped BFS achieves the highest F\textsubscript{1} of 90.6 but visits 3,762.7 nodes on average, whereas RL explores far fewer nodes but reaches only 58.3 F\textsubscript{1} and has the highest runtime. Overall, fine-tuning primarily improves search efficiency rather than predictive effectiveness, while retaining substantially higher F\textsubscript{1} and lower runtime than RL because embedding-guided \(A^*\) uses precomputed node embeddings and avoids neural inference during traversal.
+
+\input{tables/valid_res} 
+
+\section{Effect of Matryoshka Dimensionality}
+\label{sec:results-matryoshka}
+
+RQ2 examines how the Matryoshka embedding dimension affects the trade-off between efficiency and effectiveness. Figure~\ref{fig:metrics_summary} reports F\textsubscript{1}, the 95th-percentile visit budget $\tau$, average visited nodes, and runtime on MS MARCO validation with CauseNet Precision. Overall, reducing the embedding dimension often lowers the required visit budget, runtime, and search effort, but the relationship is not monotonic. Some intermediate dimensions require fewer node visits than larger representations, suggesting that the earlier Matryoshka dimensions already capture the information most useful for heuristic guidance, while additional dimensions do not necessarily improve the search ordering. A lower p95 budget therefore indicates that successful searches typically require fewer node expansions, which is also reflected in lower average visited nodes and runtime. Very small prefixes, however, may preserve too little information for reliable heuristic guidance, which can increase the required budget and search effort or reduce F\textsubscript{1}. This pattern is clearest for Granite. Reducing Granite from its full embedding dimension to 32 dimensions lowers the average from 18.4 to 10.3 visited nodes and from 3.6 to 2.3\,ms per query while maintaining an F\textsubscript{1} score of 81.9. At 8 dimensions, runtime falls further to 1.4\,ms, but the F\textsubscript{1} score drops to 76.4. Qwen3-0.6B at 32 dimensions achieves a slightly higher F\textsubscript{1} of 82.1 but is less efficient than Granite, while MPNet reaches 83.9 at 128 dimensions with higher runtime. The mxbai configurations remain comparatively expensive, and no fine-tuned BGE configuration reaches the required F\textsubscript{1} threshold of 80.0. The fine-tuned Granite model with a 32-dimensional Matryoshka prefix is therefore selected as the final configuration, combining a low visit budget, runtime, and search effort while meeting the F\textsubscript{1} threshold.
+
+\begin{figure}[t]
+    \centering
+    \makebox[\textwidth][c]{%
+        \includegraphics[width=1.05\textwidth]{figures/causenet_msmarco_valid_thesis_main.pdf}%
+    }
+        \caption{Validation performance on MS MARCO with the CauseNet Precision graph across Matryoshka embedding dimensions. The figure compares F\textsubscript{1}, the 95th-percentile visit budget $\tau$, average visited nodes, and average runtime for fine-tuned $A^*$ models and baseline methods; budget, visited nodes, and runtime use logarithmic vertical axes.}
+    \label{fig:metrics_summary}
+\end{figure}
+
+\section{Final Test Results}
+\label{sec:results-comparison}
+
+RQ3 compares the selected $A^*$ configuration with BFS and RL, while RQ4 examines its performance across datasets and graph variants. Table~\ref{tab:final-results} reports the results on MS MARCO and SemEval for CauseNet Precision, CauseNet Full, and CEG Filtered. Across all six settings, $A^*$ achieves higher F\textsubscript{1}, visits fewer nodes, and has lower runtime than RL. Compared with BFS, the results reveal a clearer effectiveness--efficiency trade-off. On CauseNet Precision, BFS achieves the highest F\textsubscript{1} on both datasets, whereas $A^*$ remains competitive while reducing traversal to only a few nodes and milliseconds per query. On CauseNet Full, this efficiency advantage becomes substantially more pronounced, with $A^*$ retaining competitive F\textsubscript{1} while avoiding the tens to hundreds of thousands of nodes explored by uncapped BFS. On CEG Filtered, $A^*$ achieves the highest observed F\textsubscript{1} on both datasets, reaching 92.0 on MS MARCO and 69.9 on SemEval while remaining substantially more efficient than the baselines. The paired F\textsubscript{1} significance tests show that BFS is significantly better than $A^*$ only on MS MARCO for CauseNet Precision and CauseNet Full. RL achieves significantly lower F\textsubscript{1} than $A^*$ in four of six settings, while no differences on CEG Filtered remain significant after Bonferroni correction. Overall, $A^*$ provides a strong effectiveness--efficiency trade-off, particularly on larger and denser graphs.
+
+\input{tables/test_res}
+
+\section{Activation and Distance Ablation}
+\label{sec:results-ablation}
+
+This section analyzes the effects of the activation function and distance metric during fine-tuning. The same Granite model is trained with all four combinations of ReLU or GELU and Euclidean or cosine distance while keeping all other settings fixed. The resulting models are compared across all test settings using the selected 32-dimensional Matryoshka prefix and \(A^*\) budget \(\tau=27\). Table~\ref{tab:activation-distance-ablation} shows that ReLU matches or exceeds GELU in F\textsubscript{1} across all six settings for the same distance metric. Cosine distance often improves precision but lowers recall, whereas Euclidean distance is more consistent overall. ReLU--Euclidean achieves the best or tied-best F\textsubscript{1} in five of six settings and the fewest visited nodes in all six, while ReLU--Cosine achieves the best F\textsubscript{1} only on CEG Filtered with SemEval. Runtime differences between configurations are small and less consistent across settings. Because the ablation and final test results shown in Table~\ref{tab:final-results} were obtained in separate runs, ReLU--Euclidean runtimes differ by at most \(0.1\,\mathrm{ms}\). Overall, the ablation supports ReLU--Euclidean as the strongest and most traversal-efficient configuration.
+
+
+\input{tables/ablation_res}

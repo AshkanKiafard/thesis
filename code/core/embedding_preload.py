@@ -1,10 +1,9 @@
 import time
-from pathlib import Path
 
 from core.config import DEFAULT_EMBEDDING_BATCH_SIZE
 from core.embeddings import load_st_embedding_cache_index
 from core.indexed_graph import build_indexed_graph
-from core.utils import is_valid_graph_node
+from core.utils import get_embedding_cache_path, is_valid_graph_node
 
 
 def load_embedding_cache(save_path, node_universe):
@@ -20,15 +19,6 @@ def load_embedding_cache(save_path, node_universe):
         print("No existing cache found. Starting fresh.")
 
     return embeddings, text_to_idx, vectors
-
-
-def get_embedding_cache_path(embeddings_dir, model_path, cache_suffix=None):
-    raw_name = Path(model_path).name
-
-    if cache_suffix:
-        raw_name = f"{raw_name}_{cache_suffix}"
-
-    return Path(embeddings_dir) / f"{raw_name}_embeddings.npy"
 
 
 def preload_graph_embeddings(

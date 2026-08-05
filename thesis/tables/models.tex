@@ -1,0 +1,36 @@
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\caption{Models used in the evaluation. The table reports the model labels used throughout this thesis, the corresponding model identifiers, parameter counts, and native embedding dimensions $d$.}
+\label{tab:model-overview}
+\begin{tabular}{@{}p{3.55cm}p{7.45cm}r r@{}}
+\toprule
+\textbf{Model label} & \textbf{Model identifier} & \textbf{Params.} & $\boldsymbol{d}$ \\
+\midrule
+RL \citep{bluebaum:2024}
+& LSTM policy model
+& 12M & -- \\
+
+MPNet \citep{song:2020mpnet,allmpnet:modelcard}
+& \texttt{sentence-transformers/all-mpnet-base-v2}
+& 109M & 768 \\
+
+BGE \citep{xiao:2024,bge:modelcard}
+& \texttt{BAAI/bge-large-en-v1.5}
+& 335M & 1024 \\
+
+Granite \citep{awasthy:2025graniter2,granite:modelcard}
+& \texttt{ibm-granite/granite-embedding-english-r2}
+& 149M & 768 \\
+
+mxbai \citep{mixedbread:2024mxbai,mxbai:modelcard}
+& \texttt{mixedbread-ai/mxbai-embed-large-v1}
+& 335M & 1024 \\
+
+Qwen3-0.6B \citep{zhang:2025qwen3embedding,qwen3:modelcard}
+& \texttt{Qwen/Qwen3-Embedding-0.6B}
+& 0.6B & 1024 \\
+\bottomrule
+\end{tabular}
+\end{table}

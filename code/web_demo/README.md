@@ -16,16 +16,18 @@ http://127.0.0.1:8000
 Choose the startup model scope in `app.py`:
 
 ```python
-load_all = False  # Granite FT ReLU+Euclidean at d=32, plus BFS and RL
-load_all = True   # every available A* model and Matryoshka dimension
+load_all = False  # CauseNet Precision + Granite FT d=32 + A* only
+load_all = True   # every graph, A* model/dimension, BFS, and RL
 ```
 
 The limited setting constrains Granite to `d=32` before its embedding index is
-allocated, which is appropriate for the local 12 GB GPU. Change it to `True`
-on the server with sufficient GPU memory.
+allocated, exposes only CauseNet Precision, and skips BFS and RL. This is
+appropriate for the local 12 GB GPU. Change it to `True` on a server with
+sufficient GPU memory to expose and preload everything.
 
 The demo serves a Webis-template-based page and API endpoints from
-`web_demo.server`. The UI exposes exactly these causal graphs:
+`web_demo.server`. Limited mode exposes only CauseNet Precision. Full mode
+exposes all three causal graphs:
 
 ```text
 CauseNet Precision   80,214 nodes      197,376 edges

@@ -59,6 +59,47 @@ def get_embedding_cache_suffix(graph_name):
     return None
 
 
+def get_embedding_cache_path(
+    embeddings_dir,
+    model_path,
+    cache_suffix=None,
+) -> Path:
+    """Return the logical cache path used by ``STEmbedder``.
+
+    The persisted vector matrix adds ``_vectors`` to this path's stem.  Keeping
+    the logical-path construction here lets pre-embedding, evaluation, and
+    input validation resolve the same artifact.
+    """
+
+    raw_name = model_registry.model_name(model_path)
+    if cache_suffix:
+        raw_name = f"{raw_name}_{cache_suffix}"
+
+    return Path(embeddings_dir) / f"{raw_name}_embeddings.npy"
+
+
+def get_dimension_embedding_cache_path(cache_file, dim: int) -> Path:
+    """Return the logical Matryoshka cache path for ``dim`` dimensions."""
+
+    cache_file = Path(cache_file)
+    suffix = f"_dim{dim}_embeddings.npy"
+    name = cache_file.name
+
+    if name.endswith("_embeddings.npy"):
+        return cache_file.with_name(
+            f"{name[:-len('_embeddings.npy')]}{suffix}"
+        )
+
+    return cache_file.with_name(f"{cache_file.stem}_dim{dim}.npy")
+
+
+def get_embedding_cache_vectors_path(cache_file) -> Path:
+    """Return the persisted NumPy vector file for a logical cache path."""
+
+    cache_stem = Path(cache_file).with_suffix("")
+    return cache_stem.with_name(f"{cache_stem.name}_vectors.npy")
+
+
 def normalize_node_universe(node_universe: str | None) -> str:
     if node_universe is None:
         return MERGED_NODE_UNIVERSE

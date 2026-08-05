@@ -12,6 +12,9 @@ from sentence_transformers import SentenceTransformer
 from core.config import DEFAULT_EMBEDDING_BATCH_SIZE
 from core.constants import DistanceMetric, EMBEDDINGS_DIR
 from core.utils import (
+    get_dimension_embedding_cache_path,
+    get_embedding_cache_path,
+    get_embedding_cache_vectors_path,
     get_node_universe_for_cache_suffix,
     get_node_universe_path,
     is_valid_graph_node,
@@ -31,12 +34,11 @@ class EmbeddingCacheValidationError(ValueError):
 
 def _embedding_cache_paths(cache_file, node_universe=None):
     cache_file = Path(cache_file)
-    cache_stem = cache_file.with_suffix("")
     node_universe = normalize_node_universe(node_universe)
 
     return {
         "texts": get_node_universe_path(cache_file.parent, node_universe),
-        "vectors": cache_stem.with_name(f"{cache_stem.name}_vectors.npy"),
+        "vectors": get_embedding_cache_vectors_path(cache_file),
     }
 
 
@@ -563,10 +565,11 @@ class STEmbedder:
         # Store embedding caches inside the configured project data directory.
         cache_dir = EMBEDDINGS_DIR
         os.makedirs(cache_dir, exist_ok=True)
-        cache_name = self.model_name
-        if cache_suffix:
-            cache_name = f"{cache_name}_{cache_suffix}"
-        self.cache_file = cache_dir / f"{cache_name}_embeddings.npy"
+        self.cache_file = get_embedding_cache_path(
+            cache_dir,
+            model_path,
+            cache_suffix,
+        )
 
         (
             self.cache,
@@ -740,15 +743,16 @@ class STEmbedder:
         return self._active_tensor_dim() or self.get_model_dim()
 
     def get_dimension_cache_file(self, dim: int) -> Path:
-        suffix = f"_dim{dim}_embeddings.npy"
-        name = self.cache_file.name
+        return get_dimension_embedding_cache_path(self.cache_file, dim)
 
-        if name.endswith("_embeddings.npy"):
-            return self.cache_file.with_name(
-                f"{name[:-len('_embeddings.npy')]}{suffix}"
-            )
+    def get_active_cache_file(self) -> Path:
+        active_dim = self._active_tensor_dim()
+        if active_dim is None:
+            return self.cache_file
+        return self.get_dimension_cache_file(active_dim)
 
-        return self.cache_file.with_name(f"{self.cache_file.stem}_dim{dim}.npy")
+    def get_active_cache_vectors_file(self) -> Path:
+        return get_embedding_cache_vectors_path(self.get_active_cache_file())
 
     def get_node_universe_file(self) -> Path:
         return get_node_universe_path(self.cache_file.parent, self.node_universe)

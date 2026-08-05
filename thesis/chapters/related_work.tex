@@ -1,0 +1,58 @@
+\chapter{Related Work}
+\label{chap:related_work}
+
+This chapter reviews the main prior work on which this thesis builds. Section~\ref{sec:rw_causal_qa} introduces causal question answering and distinguishes between text-based and graph-based approaches. Section~\ref{sec:rw_causal_graphs} discusses causal knowledge graphs, their
+construction, and their properties. Subsections~\ref{sec:rw_causenet} and~\ref{sec:rw_causalbank} present CauseNet and the Cause Effect Graph (CEG), the causal graph resources used in this work. Section~\ref{sec:rw_rl} discusses reinforcement learning for graph traversal, which serves as the main learned traversal baseline. Finally, Section~\ref{sec:rw_learned_heuristics} reviews previous work on learned heuristics for search and relates it to the setting investigated in this thesis.
+
+\section{Causal Question Answering}
+\label{sec:rw_causal_qa}
+
+Causal question answering aims to determine causal relationships between events or concepts. Questions may ask whether one event causes another, request the causes or effects of an event, or involve interventional and counterfactual scenarios~\cite{bondarenko:2022,wang:2024}. The task is relevant in practice, as \citet{bondarenko:2022} estimate that at least $5\%$ of search-engine queries are causal. This thesis focuses on binary causal questions of the form ``Does $A$ cause $B$?'' Methods for causal question answering can broadly be divided into text-based and graph-based approaches. Text-based methods infer causal relationships from patterns, retrieved evidence, statistical associations, or neural language models. Although large language models perform well on some causal reasoning benchmarks~\cite{kiciman:2024}, controlled evaluations report only a preliminary understanding of causal graphs~\cite{chen:2024}, frequent confusion between causal and temporal relations~\cite{miliani:2025}, and substantial performance drops on fresh, nearly unseen data~\cite{chi:2024}. These findings suggest that current models often recall learned causal associations more reliably than they perform systematic causal reasoning~\cite{wu:2024}. Graph-based approaches instead represent causal relations explicitly, enabling algorithmic reasoning over their structure. In the binary setting considered in this thesis, questions are answered through directed paths, which provide interpretable evidence in the form of a causal path between the concepts.
+
+\section{Causal Knowledge Graphs}
+\label{sec:rw_causal_graphs}
+
+Causal knowledge graphs encode directed cause--effect relationships between concepts, enabling structured reasoning over causal chains and dependencies. Such causal representations are relevant across many application domains, especially when decisions depend on understanding how events, interventions, or conditions influence one another~\cite{richens:2020,guevara:2025,blackwell:2013}. General-purpose knowledge graphs such as Wikidata~\cite{vrandecic:2014}, DBpedia~\cite{auer:2007}, and ConceptNet~\cite{speer:2017} contain a wide variety of relation types. However, causal relations are not their primary focus, which limits their suitability for causal reasoning tasks. Dedicated causal knowledge graphs address this limitation by explicitly organizing knowledge around directed cause--effect dependencies.
+
+Causal knowledge graphs can be characterized by their construction, domain specificity, and level of normalization. They may be created manually or automatically. Manual construction provides greater control over relation quality but scales poorly, whereas automatic extraction enables large-scale coverage at the cost of increased noise. Prominent automatically extracted open-domain examples are CauseNet~\cite{heindorf:2020} and CEG~\cite{li:2020}. Their broad scope increases coverage but may also introduce heterogeneous and ambiguous relations. In contrast, domain-specific resources focus on particular fields, such as biomedical literature or economics, allowing more constrained vocabularies and richer domain context at the cost of narrower coverage~\cite{kilicoglu:2012,garg:2025}. Knowledge graphs also differ in their level of normalization. Strongly normalized resources, such as Wikidata and DBpedia, represent entities in structured and canonical forms~\cite{vrandecic:2014,auer:2007}. Weakly normalized resources represent textual concepts, phrases, or lexical terms more directly. CauseNet uses textual causal concepts as graph nodes, whereas CEG represents causal relations between lemmatized terms rather than canonical entities~\cite{heindorf:2020,li:2020}. Strong normalization improves consistency and reduces duplication, while weak normalization preserves a broader range of linguistic expressions at the cost of greater ambiguity.
+
+Overall, these characteristics create a trade-off between relation quality, coverage, and scalability. Large-scale, automatically constructed causal knowledge graphs provide broad coverage for open-domain reasoning, but their size, noise, and heterogeneous or weakly normalized representations make efficient and reliable graph traversal challenging.
+
+\subsection{CauseNet}
+\label{sec:rw_causenet}
+
+CauseNet~\cite{heindorf:2020} is a large-scale causal knowledge graph containing millions of cause--effect relations extracted from web data. It was constructed by identifying linguistic patterns that express causality and applying them to semi-structured and unstructured text sources. The resulting graph contains over $11$ million causal relations with an estimated precision of approximately $83\%$. Each relation connects two textual concepts through a directed edge and includes provenance information that allows the extracted claim to be traced back to its source sentence. Since the graph is constructed automatically, it contains noisy and potentially spurious relations. CauseNet therefore also provides a high-precision subset containing approximately $200{,}000$ relations with a reported precision of $96\%$~\cite{heindorf:2020}. The full graph offers broader coverage, whereas the high-precision subset prioritizes relation quality. Figure~\ref{fig:causenet_example} shows an example excerpt from CauseNet.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1\linewidth]{figures/causenet.pdf}
+    \caption{Example excerpt from CauseNet showing causal relations between concepts such as smoking, cancer, and death~\cite{heindorf:2020}.}
+    \label{fig:causenet_example}
+\end{figure}
+
+\subsection{CausalBank and CEG}
+\label{sec:rw_causalbank}
+
+\citet{li:2020} introduce two related open-domain causal resources extracted automatically from the English Common Crawl corpus, namely CausalBank and CEG. CausalBank is a sentence-level corpus containing approximately $314$ million cause--effect pairs identified using lexical patterns that explicitly express causal relations. CEG aggregates these extracted relations into a directed graph between lemmatized terms. As this thesis investigates graph traversal, it uses CEG rather than the sentence-level CausalBank corpus. Each edge records the occurrence frequency of the corresponding term pair together with necessity and sufficiency causality scores. \citeauthor{li:2020} report approximately $89.1$ million relations after removing those with a frequency of five or lower~\cite{li:2020}.
+
+\section{RL-Agent for Graph Traversal}
+\label{sec:rw_rl}
+
+\citet{bluebaum:2024} propose a reinforcement learning (RL) approach to binary
+causal question answering through graph traversal. Their agent is trained on
+CauseNet to learn a policy that maps the query and current graph node to a
+distribution over neighboring nodes. During inference, multiple paths are
+sampled, and a positive causal relation is predicted if one reaches the target
+node. By directing traversal toward promising neighbors, the approach reduces
+the number of explored nodes by up to $99\%$ compared with BFS while maintaining
+comparable accuracy~\cite{bluebaum:2024}. Despite these gains, the method requires training an RL agent and repeatedly evaluating its policy during traversal, resulting in additional computational overhead.
+
+\section{Learned Heuristics for Search}
+\label{sec:rw_learned_heuristics}
+
+Informed search algorithms such as $A^*$ rely on heuristic functions to estimate
+the remaining cost from a current state to the goal. Designing effective
+heuristics manually often requires substantial domain knowledge and
+problem-specific experimentation, which has motivated approaches that learn
+these estimates from data. \citet{numeroso:2022} propose a
+neural method for learning consistent heuristic functions that can be integrated directly into $A^*$ search. On synthetic pathfinding tasks, their learned heuristics reduce search effort compared with Dijkstra's algorithm while preserving optimality. This thesis instead investigates learned heuristics for binary causal question answering over large-scale causal knowledge graphs.

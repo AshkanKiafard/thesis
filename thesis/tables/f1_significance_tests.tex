@@ -1,0 +1,56 @@
+\begin{table}[H]
+\centering
+\small
+\caption{Paired stratified bootstrap significance tests on CauseNet Precision.}
+\label{tab:f1-significance-causenet-precision}
+\begin{tabular}{@{}p{4.2cm}lrrrr@{}}
+\toprule
+\textbf{Dataset} & \textbf{Baseline} & $\boldsymbol{\Delta}$ & \textbf{95\% CI} & $\boldsymbol{p_{\mathrm{Bonf.}}}$ & \textbf{Sig.} \\
+\midrule
+MS MARCO & BFS (uncapped) & $-5.1$ & $[-8.3,-2.4]$ & $0.0048$ & yes \\
+MS MARCO & BFS (capped)   & $-4.7$ & $[-7.6,-2.3]$ & $0.0060$ & yes \\
+MS MARCO & RL             & $+15.2$ & $[+9.6,+21.2]$ & $0.0003$ & yes \\
+SemEval  & BFS (uncapped) & $-5.5$ & $[-11.8,+0.0]$ & $0.2100$ & no \\
+SemEval  & BFS (capped)   & $-5.1$ & $[-10.9,-0.4]$ & $0.1575$ & no \\
+SemEval  & RL             & $+15.7$ & $[+7.0,+25.6]$ & $0.0036$ & yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Paired stratified bootstrap significance tests on CauseNet Full.}
+\label{tab:f1-significance-causenet-full}
+\begin{tabular}{@{}p{4cm}lrrrr@{}}
+\toprule
+\textbf{Dataset} & \textbf{Baseline} & $\boldsymbol{\Delta}$ & \textbf{95\% CI} & $\boldsymbol{p_{\mathrm{Bonf.}}}$ & \textbf{Sig.} \\
+\midrule
+MS MARCO & BFS (uncapped) & $-9.5$ & $[-13.3,-6.1]$ & $0.0006$ & yes \\
+MS MARCO & BFS (capped)   & $+6.0$ & $[+2.6,+9.8]$ & $0.0051$ & yes \\
+MS MARCO & RL             & $+10.6$ & $[+6.0,+15.4]$ & $0.0003$ & yes \\
+SemEval  & BFS (uncapped) & $+7.7$ & $[+0.8,+14.0]$ & $0.0702$ & no \\
+SemEval  & BFS (capped)   & $+3.0$ & $[-2.9,+9.2]$ & $0.9860$ & no \\
+SemEval  & RL             & $+23.0$ & $[+13.4,+33.7]$ & $0.0003$ & yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\small
+\caption{Paired stratified bootstrap significance tests on CEG Filtered.}
+\label{tab:f1-significance-ceg}
+\begin{tabular}{@{}p{4.2cm}lrrrr@{}}
+\toprule
+\textbf{Dataset} & \textbf{Baseline} & $\boldsymbol{\Delta}$ & \textbf{95\% CI} & $\boldsymbol{p_{\mathrm{Bonf.}}}$ & \textbf{Sig.} \\
+\midrule
+MS MARCO & BFS (uncapped) & $+1.0$ & $[+0.0,+3.2]$ & $1.0000$ & no \\
+MS MARCO & BFS (capped)   & $+4.1$ & $[-0.9,+10.2]$ & $0.3516$ & no \\
+MS MARCO & RL             & $+7.3$ & $[+0.6,+15.7]$ & $0.1671$ & no \\
+SemEval  & BFS (uncapped) & $+1.2$ & $[-4.0,+6.1]$ & $1.0000$ & no \\
+SemEval  & BFS (capped)   & $+1.8$ & $[-4.1,+8.1]$ & $1.0000$ & no \\
+SemEval  & RL             & $+9.7$ & $[-0.9,+21.5]$ & $0.2760$ & no \\
+\bottomrule
+\end{tabular}
+\end{table}

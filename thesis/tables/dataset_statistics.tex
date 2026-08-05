@@ -1,0 +1,34 @@
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{6pt}
+\caption{Number of causal questions in MS MARCO and SemEval before and after graph-node coverage filtering. ``Total'' counts all causal samples in each local split. The graph columns count samples where both the potential cause and effect are covered by the corresponding graph.}
+\label{tab:dataset-statistics}
+\begin{tabular}{@{}p{2.75cm}rrrrrrrr@{}}
+\toprule
+\textbf{Split}
+& \multicolumn{2}{c}{\textbf{Total}}
+& \multicolumn{2}{c}{\textbf{CauseNet\textsubscript{Prec}}}
+& \multicolumn{2}{c}{\textbf{CauseNet\textsubscript{Full}}}
+& \multicolumn{2}{c}{\textbf{CEG\textsubscript{Filtered}}} \\
+\cmidrule(lr){2-3}
+\cmidrule(lr){4-5}
+\cmidrule(lr){6-7}
+\cmidrule(l){8-9}
+& \textbf{Pos.} & \textbf{Neg.}
+& \textbf{Pos.} & \textbf{Neg.}
+& \textbf{Pos.} & \textbf{Neg.}
+& \textbf{Pos.} & \textbf{Neg.} \\
+\midrule
+\multicolumn{9}{@{}l}{MS MARCO \citep{nguyen:2016,bluebaum:2024}} \\
+Train      & $1{,}837$ & $0$  & $1{,}213$ & $0$  & $1{,}618$ & $0$  & $389$ & $0$ \\
+Validation & $194$     & $47$ & $137$     & $22$ & $176$     & $35$ & $44$  & $8$ \\
+Test       & $223$     & $40$ & $143$     & $20$ & $189$     & $31$ & $41$  & $7$ \\
+\addlinespace[2pt]
+\multicolumn{9}{@{}l}{SemEval \citep{hendrickx:2010,sharp:2016,bluebaum:2024}} \\
+Train      & $694$ & $690$ & $541$ & $177$ & $680$ & $615$ & $496$ & $416$ \\
+Validation & $84$  & $89$  & $66$  & $28$  & $81$  & $77$  & $57$  & $65$ \\
+Test       & $87$  & $86$  & $66$  & $24$  & $84$  & $76$  & $57$  & $53$ \\
+\bottomrule
+\end{tabular}
+\end{table}

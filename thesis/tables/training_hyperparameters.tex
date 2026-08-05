@@ -1,0 +1,17 @@
+\begin{table}[H]
+\centering
+\small
+\caption{Selected final-training hyperparameters and zero-indexed final improving epoch for each fine-tuned embedding model.}
+\label{tab:training-hyperparameters}
+\begin{tabular}{@{}p{6cm}llr r@{}}
+\toprule
+\textbf{Model} & \textbf{Activation} & \textbf{Distance} & \textbf{lr [$10^{-5}$]} & \textbf{Epoch} \\
+\midrule
+MPNet & ReLU & Cosine & $2.933$ & $1$ \\
+BGE & ReLU & Euclidean & $2.815$ & $0$ \\
+mxbai & ReLU & Euclidean & $2.944$ & $0$ \\
+Granite & ReLU & Euclidean & $2.717$ & $10$ \\
+Qwen3-0.6B & ReLU & Euclidean & $2.904$ & $0$ \\
+\bottomrule
+\end{tabular}
+\end{table}
