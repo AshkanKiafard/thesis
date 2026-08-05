@@ -52,7 +52,7 @@ class P95VisitedNodesReportTests(unittest.TestCase):
         latex = render_latex(
             [
                 {
-                    "model": "Qwen 0.6B",
+                    "model": "Qwen",
                     "values": {
                         "2": {"cap": 1277},
                         "4": {"cap": None},

@@ -85,7 +85,7 @@ VALIDATION_SELECTED_FINETUNED_MODELS = (
         "existing_validation_budget": 154,
     },
     {
-        "model": "FT A*: Qwen3-0.6B",
+        "model": "FT A*: Qwen",
         "checkpoint_name": (
             "Qwen3-Embedding-0.6B_relu_euclid_nonorm_matryoshka_v3_finetuned"
         ),

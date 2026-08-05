@@ -42,7 +42,7 @@ MODEL_ORDER = {
 }
 
 COMPACT_MODEL_LABELS = {
-    "Qwen3-Embedding-0.6B": "Qwen 0.6B",
+    "Qwen3-Embedding-0.6B": "Qwen",
     "all-mpnet-base-v2": "MPNet",
     "bge-large-en-v1.5": "BGE",
     "granite-embedding-english-r2": "Granite Emb.",

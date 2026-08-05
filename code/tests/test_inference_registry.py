@@ -86,7 +86,7 @@ class InferenceRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             format_model_display_label("Qwen/Qwen3-Embedding-0.6B"),
-            "Qwen3-0.6B Base",
+            "Qwen Base",
         )
         self.assertEqual(activation_label("relu"), "ReLU")
         self.assertEqual(activation_label("gelu"), "GELU")
@@ -126,7 +126,7 @@ class InferenceRegistryTests(unittest.TestCase):
                 dimension=64,
                 include_dimension=True,
             ),
-            "Qwen3-0.6B FT GELU+Cosine (d=64)",
+            "Qwen FT GELU+Cosine (d=64)",
         )
 
     def test_method_identity_deduplicates_only_equivalent_configs(self):

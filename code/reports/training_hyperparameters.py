@@ -36,7 +36,7 @@ DISPLAY_NAMES = {
     "BAAI/bge-large-en-v1.5": "BGE",
     "mixedbread-ai/mxbai-embed-large-v1": "MXBAI Embed",
     "ibm-granite/granite-embedding-english-r2": "Granite Embed",
-    "Qwen/Qwen3-Embedding-0.6B": "Qwen 0.6B",
+    "Qwen/Qwen3-Embedding-0.6B": "Qwen",
 }
 
 

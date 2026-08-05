@@ -52,7 +52,7 @@ EMBEDDING_MODELS: dict[str, EmbeddingModel] = {
     ),
     "qwen3_0_6b": EmbeddingModel(
         key="qwen3_0_6b",
-        label="Qwen3-0.6B",
+        label="Qwen",
         identifier="Qwen/Qwen3-Embedding-0.6B",
         parameters="595M",
         full_dimension=1024,
