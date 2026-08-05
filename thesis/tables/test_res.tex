@@ -2,7 +2,8 @@
 \centering
 \small
 \setlength{\tabcolsep}{2pt}
-\caption{Final test results for the selected $A^*$ configuration compared with uncapped BFS (BFS-U), capped BFS (BFS-C), and the reinforcement-learning baseline. CauseNet Prec. denotes CauseNet Precision. Precision (P), recall (R), and F\textsubscript{1} are reported in percent. T denotes runtime in milliseconds per query and N the average number of visited nodes. Asterisks mark F\textsubscript{1} scores that differ significantly from the selected $A^*$ configuration in the same dataset--graph setting according to a paired stratified bootstrap test with Bonferroni correction.}
+\sisetup{detect-weight=true}
+\caption{Final test results for the selected $A^*$ configuration compared with uncapped BFS (BFS-U), capped BFS (BFS-C), and the reinforcement-learning baseline. CauseNet Prec. denotes CauseNet Precision. Precision (P), recall (R), and F\textsubscript{1} are reported in percent. T denotes runtime in milliseconds per query and N the average number of visited nodes. Asterisks mark F\textsubscript{1} scores that differ significantly from the selected $A^*$ configuration in the same dataset--graph setting according to a paired stratified bootstrap test with Bonferroni correction. Bold indicates the best value in each metric column separately within each dataset--graph setting.}
 \label{tab:final-results}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{@{}ll
@@ -33,56 +34,56 @@ S[table-format=6.1]
 \midrule
 
 CauseNet Prec. & BFS-U
-& 87.1 & 94.4 & {90.6$^{*}$} & 3.7 & 2731.3
-& 89.2 & 87.9 & 88.5 & 6.4 & 7506.5 \\
+& 87.1 & {\bfseries 94.4} & {\bfseries 90.6$^{*}$} & 3.7 & 2731.3
+& 89.2 & {\bfseries 87.9} & {\bfseries 88.5} & 6.4 & 7506.5 \\
 
 CauseNet Prec. & BFS-C
 & 87.5 & 93.0 & {90.2$^{*}$} & 3.4 & 2182.9
 & 91.8 & 84.8 & 88.2 & 4.8 & 4460.9 \\
 
 CauseNet Prec. & RL
-& 89.2 & 58.0 & {70.3$^{*}$} & 67.2 & 32.0
-& 97.1 & 51.5 & {67.3$^{*}$} & 113.4 & 38.3 \\
+& {\bfseries 89.2} & 58.0 & {70.3$^{*}$} & 67.2 & 32.0
+& {\bfseries 97.1} & 51.5 & {67.3$^{*}$} & 113.4 & 38.3 \\
 
 CauseNet Prec. & $A^*$
-& 86.4 & 84.6 & 85.5 & 1.7 & 7.7
-& 94.2 & 74.2 & 83.1 & 2.9 & 13.3 \\
+& 86.4 & 84.6 & 85.5 & {\bfseries 1.7} & {\bfseries 7.7}
+& 94.2 & 74.2 & 83.1 & {\bfseries 2.9} & {\bfseries 13.3} \\
 
 \midrule
 
 CauseNet Full & BFS-U
-& 85.6 & 94.7 & {89.9$^{*}$} & 345.4 & 77445.8
-& 56.3 & 95.2 & 70.8 & 872.9 & 335879.4 \\
+& 85.6 & {\bfseries 94.7} & {\bfseries 89.9$^{*}$} & 345.4 & 77445.8
+& 56.3 & {\bfseries 95.2} & 70.8 & 872.9 & 335879.4 \\
 
 CauseNet Full & BFS-C
 & 85.0 & 66.1 & {74.4$^{*}$} & 158.2 & 4922.7
 & 85.1 & 67.9 & 75.5 & 211.2 & 7264.6 \\
 
 CauseNet Full & RL
-& 88.6 & 57.7 & {69.9$^{*}$} & 654.6 & 44.6
-& 94.3 & 39.3 & {55.5$^{*}$} & 886.6 & 52.7 \\
+& {\bfseries 88.6} & 57.7 & {69.9$^{*}$} & 654.6 & 44.6
+& {\bfseries 94.3} & 39.3 & {55.5$^{*}$} & 886.6 & 52.7 \\
 
 CauseNet Full & $A^*$
-& 85.2 & 76.2 & 80.4 & 10.8 & 8.5
-& 83.8 & 73.8 & 78.5 & 21.5 & 16.3 \\
+& 85.2 & 76.2 & 80.4 & {\bfseries 10.8} & {\bfseries 8.5}
+& 83.8 & 73.8 & {\bfseries 78.5} & {\bfseries 21.5} & {\bfseries 16.3} \\
 
 \midrule
 
 CEG Filtered & BFS-U
-& 85.1 & 97.6 & 90.9 & 384.1 & 4130.8
-& 52.8 & 98.2 & 68.7 & 795.7 & 8800.1 \\
+& 85.1 & {\bfseries 97.6} & 90.9 & 384.1 & 4130.8
+& 52.8 & {\bfseries 98.2} & 68.7 & 795.7 & 8800.1 \\
 
 CEG Filtered & BFS-C
 & 87.8 & 87.8 & 87.8 & 306.4 & 2438.6
 & 59.0 & 80.7 & 68.1 & 535.1 & 4735.7 \\
 
 CEG Filtered & RL
-& 89.2 & 80.5 & 84.6 & 5138.5 & 24.3
-& 77.8 & 49.1 & 60.2 & 5047.4 & 54.7 \\
+& {\bfseries 89.2} & 80.5 & 84.6 & 5138.5 & 24.3
+& {\bfseries 77.8} & 49.1 & 60.2 & 5047.4 & 54.7 \\
 
 CEG Filtered & $A^*$
-& 87.0 & 97.6 & 92.0 & 2.3 & 2.3
-& 58.1 & 87.7 & 69.9 & 6.5 & 8.0 \\
+& 87.0 & {\bfseries 97.6} & {\bfseries 92.0} & {\bfseries 2.3} & {\bfseries 2.3}
+& 58.1 & 87.7 & {\bfseries 69.9} & {\bfseries 6.5} & {\bfseries 8.0} \\
 
 \bottomrule
 \end{tabular}%

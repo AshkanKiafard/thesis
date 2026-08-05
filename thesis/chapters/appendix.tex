@@ -77,7 +77,7 @@ This appendix provides supplementary evaluation details supporting the results i
 \section{Training Hyperparameters}
 \label{app:training-hyperparameters}
 
-Table~\ref{tab:training-hyperparameters} reports the selected hyperparameters for the fine-tuned embedding models.
+Table~\ref{tab:training-hyperparameters} reports the final training configuration for each fine-tuned embedding model. The reported hyperparameters were selected during hyperparameter tuning and used for the final training run. The epoch denotes the zero-indexed last validation improvement before early stopping with a patience of 10. Consequently, a reported epoch of $n$ indicates that training stopped after epoch $n+10$, while the checkpoint from epoch $n$ was retained as the final model.
 
 \input{tables/training_hyperparameters}
 
@@ -86,7 +86,7 @@ Table~\ref{tab:training-hyperparameters} reports the selected hyperparameters fo
 \section{Expansion Thresholds}
 \label{app:expansion-thresholds}
 
-Table~\ref{tab:p95-visited-nodes} reports the expansion thresholds selected from the 95th percentile of successful searches on the training split.
+Table~\ref{tab:p95-visited-nodes} lists the resulting visit budgets $\tau$ for the pretrained models at their full embedding dimensions and for the fine-tuned models across all evaluated Matryoshka dimensions. Each budget is computed independently as the $p_{95}$ of visited nodes from successful $A^*$ searches on the MS MARCO training split with CauseNet Precision.
 
 \input{tables/p95_visited_nodes}
 

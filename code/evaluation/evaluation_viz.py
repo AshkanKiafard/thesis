@@ -3354,14 +3354,14 @@ def plot_thesis_causenet_msmarco_valid():
 # -------------------------------------------------------------------------
 
 TRADEOFF_PNG_DPI = 400
-TRADEOFF_ANNOTATION_OFFSETS = (
-    (0, 9),
-    (0, -12),
-    (8, 7),
-    (-8, -11),
-    (9, -8),
-    (-9, 8),
-)
+TRADEOFF_X_TICKS = (4, 5, 10, 20, 40, 70)
+TRADEOFF_SHORT_MODEL_NAMES = {
+    "FT A*: MPNet": "MPNet",
+    "FT A*: BGE": "BGE",
+    "FT A*: mxbai": "mxbai",
+    "FT A*: Qwen": "Qwen",
+    "FT A*: Granite": "Granite",
+}
 
 
 def load_budget_tradeoff_rows():
@@ -3388,44 +3388,26 @@ def get_tradeoff_style(model_name):
     return THESIS_SYSTEM_STYLES[checkpoint_name]
 
 
-def annotate_tradeoff_budgets(ax, line_index, subset, color):
-    """Use staggered offsets so nearby budget labels remain distinguishable."""
-
-    for point_index, row in enumerate(subset.itertuples(index=False)):
-        offset_index = (point_index + line_index * 2) % len(
-            TRADEOFF_ANNOTATION_OFFSETS
-        )
-        x_offset, y_offset = TRADEOFF_ANNOTATION_OFFSETS[offset_index]
-        ax.annotate(
-            rf"$\tau={int(row.budget)}$",
-            xy=(row.average_visited_nodes, row.f1),
-            xytext=(x_offset, y_offset),
-            textcoords="offset points",
-            ha="center",
-            va="center",
-            fontsize=6.5,
-            color=color,
-            bbox={
-                "boxstyle": "round,pad=0.14",
-                "facecolor": "white",
-                "edgecolor": "none",
-                "alpha": 0.78,
-            },
-            annotation_clip=True,
-            zorder=8,
-        )
-
-
 def create_budget_tradeoff_figure(tradeoff_df):
-    """Plot measured search effort against F1 in ascending budget order."""
+    """Plot clean trade-off curves above an aligned per-model budget key."""
 
     apply_thesis_plot_style()
-    fig, ax = plt.subplots(figsize=(10.2, 6.6))
+    fig = plt.figure(figsize=(10.2, 7.6))
+    grid = fig.add_gridspec(
+        2,
+        1,
+        height_ratios=(4.4, 1.7),
+        hspace=0.08,
+    )
+    ax = fig.add_subplot(grid[0])
+    budget_ax = fig.add_subplot(grid[1], sharex=ax)
+    model_subsets = {}
 
     for line_index, model_name in enumerate(TRADEOFF_MODEL_NAMES):
         subset = tradeoff_df[tradeoff_df["model"] == model_name].sort_values(
             "budget"
         )
+        model_subsets[model_name] = subset
         style = get_tradeoff_style(model_name)
         ax.plot(
             subset["average_visited_nodes"],
@@ -3440,7 +3422,6 @@ def create_budget_tradeoff_figure(tradeoff_df):
             linewidth=1.8,
             zorder=3 + line_index * 0.05,
         )
-        annotate_tradeoff_budgets(ax, line_index, subset, style["color"])
 
     f1_values = tradeoff_df["f1"].astype(float)
     f1_range = max(float(f1_values.max() - f1_values.min()), 0.02)
@@ -3448,19 +3429,127 @@ def create_budget_tradeoff_figure(tradeoff_df):
     upper = min(1.0, float(f1_values.max()) + 0.14 * f1_range)
     ax.set_ylim(lower, upper)
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
-    ax.set_xlabel("Average Visited Nodes", fontsize=12)
+    visited_values = tradeoff_df["average_visited_nodes"].astype(float)
+    if (visited_values <= 0).any():
+        raise ValueError(
+            "Average visited nodes must be positive for the logarithmic axis"
+        )
+
+    ax.set_xscale("log")
+    ax.set_xlim(
+        float(visited_values.min()) / 1.08,
+        float(visited_values.max()) * 1.08,
+    )
     ax.set_ylabel(r"F$_1$ Score", fontsize=12)
+    ax.text(
+        0.012,
+        0.982,
+        "(a) Efficiency–effectiveness trade-off",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=10,
+        zorder=5,
+    )
     ax.grid(axis="both", which="major", color="#D7D7D7", linewidth=0.65)
     ax.set_axisbelow(True)
-    ax.margins(x=0.08)
-    ax.legend(
-        loc="best",
-        frameon=True,
-        fontsize=9,
-        handlelength=2.5,
-        borderpad=0.7,
+    ax.tick_params(
+        axis="x",
+        which="both",
+        bottom=False,
+        labelbottom=False,
     )
-    fig.tight_layout(pad=0.7)
+    ax.spines["bottom"].set_visible(False)
+    ax.legend(
+        loc="lower center",
+        bbox_to_anchor=(0.5, 1.01),
+        ncol=len(TRADEOFF_MODEL_NAMES),
+        frameon=True,
+        fontsize=8.2,
+        handlelength=2.2,
+        columnspacing=1.2,
+        borderpad=0.5,
+    )
+
+    lane_positions = list(reversed(range(len(TRADEOFF_MODEL_NAMES))))
+    for lane_position, model_name in zip(
+        lane_positions,
+        TRADEOFF_MODEL_NAMES,
+    ):
+        subset = model_subsets[model_name]
+        style = get_tradeoff_style(model_name)
+        x_values = subset["average_visited_nodes"].astype(float)
+        y_values = np.full(len(subset), lane_position, dtype=float)
+        budget_ax.plot(
+            x_values,
+            y_values,
+            color=style["color"],
+            linewidth=0.8,
+            alpha=0.30,
+            zorder=2,
+        )
+        budget_ax.scatter(
+            x_values,
+            y_values,
+            color=style["color"],
+            marker=style["marker"],
+            edgecolor="white",
+            linewidth=0.5,
+            s=29,
+            zorder=3,
+        )
+        for row in subset.itertuples(index=False):
+            budget_ax.annotate(
+                str(int(row.budget)),
+                xy=(row.average_visited_nodes, lane_position),
+                xytext=(0, 7),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=6.7,
+                color="#333333",
+                annotation_clip=True,
+                zorder=4,
+            )
+
+    budget_ax.set_xscale("log")
+    budget_ax.set_xticks(TRADEOFF_X_TICKS)
+    budget_ax.set_xticklabels([str(tick) for tick in TRADEOFF_X_TICKS])
+    budget_ax.set_xlabel("Average Visited Nodes (log scale)", fontsize=12)
+    budget_ax.set_ylim(-0.55, len(TRADEOFF_MODEL_NAMES) - 0.25)
+    budget_ax.set_yticks(lane_positions)
+    budget_ax.set_yticklabels(
+        [
+            TRADEOFF_SHORT_MODEL_NAMES[model_name]
+            for model_name in TRADEOFF_MODEL_NAMES
+        ],
+        fontsize=8,
+    )
+    budget_ax.tick_params(axis="y", length=0, pad=7)
+    budget_ax.grid(axis="x", which="major", color="#D7D7D7", linewidth=0.65)
+    budget_ax.grid(
+        axis="y",
+        which="major",
+        color="#ECECEC",
+        linewidth=0.45,
+    )
+    budget_ax.set_axisbelow(True)
+    budget_ax.spines["top"].set_visible(False)
+    budget_ax.spines["right"].set_visible(False)
+    budget_ax.spines["left"].set_visible(False)
+    budget_ax.set_title(
+        r"(b) Visit-budget mapping",
+        loc="left",
+        fontsize=10,
+        pad=8,
+    )
+
+    fig.subplots_adjust(
+        left=0.10,
+        right=0.985,
+        bottom=0.095,
+        top=0.90,
+    )
     return fig
 
 

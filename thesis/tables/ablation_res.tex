@@ -2,7 +2,8 @@
 \centering
 \small
 \setlength{\tabcolsep}{2pt}
-\caption{Activation and distance ablation for Granite at dimension 32. CauseNet Prec. denotes CauseNet Precision. Precision (P), recall (R), and F\textsubscript{1} are reported in percent. T denotes runtime in milliseconds per query and N the average number of visited nodes. All configurations use the same $A^*$ budget of $\tau=27$.}
+\sisetup{detect-weight=true}
+\caption{Activation and distance ablation for Granite at dimension 32. CauseNet Prec. denotes CauseNet Precision. Precision (P), recall (R), and F\textsubscript{1} are reported in percent. T denotes runtime in milliseconds per query and N the average number of visited nodes. All configurations use the same $A^*$ budget of $\tau=27$. Bold indicates the best value in each metric column separately within each dataset--graph setting.}
 \label{tab:activation-distance-ablation}
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{@{}ll
@@ -33,8 +34,8 @@ S[table-format=2.1]
 \midrule
 
 CauseNet Prec. & ReLU--Euclidean
-& 86.4 & 84.6 & 85.5 & 1.6 & 7.7
-& 94.2 & 74.2 & 83.1 & 2.9 & 13.3 \\
+& 86.4 & {\bfseries 84.6} & {\bfseries 85.5} & {\bfseries 1.6} & {\bfseries 7.7}
+& 94.2 & {\bfseries 74.2} & {\bfseries 83.1} & 2.9 & {\bfseries 13.3} \\
 
 CauseNet Prec. & ReLU--Cosine
 & 86.1 & 69.2 & 76.7 & 2.3 & 11.8
@@ -42,47 +43,47 @@ CauseNet Prec. & ReLU--Cosine
 
 CauseNet Prec. & GELU--Euclidean
 & 86.6 & 76.9 & 81.5 & 2.1 & 10.2
-& 93.9 & 69.7 & 80.0 & 2.0 & 14.6 \\
+& 93.9 & 69.7 & 80.0 & {\bfseries 2.0} & 14.6 \\
 
 CauseNet Prec. & GELU--Cosine
-& 88.0 & 66.4 & 75.7 & 2.7 & 14.2
-& 95.5 & 63.6 & 76.4 & 2.7 & 17.4 \\
+& {\bfseries 88.0} & 66.4 & 75.7 & 2.7 & 14.2
+& {\bfseries 95.5} & 63.6 & 76.4 & 2.7 & 17.4 \\
 
 \midrule
 
 CauseNet Full & ReLU--Euclidean
-& 85.2 & 76.2 & 80.4 & 10.8 & 8.5
-& 83.8 & 73.8 & 78.5 & 21.5 & 16.3 \\
+& 85.2 & {\bfseries 76.2} & {\bfseries 80.4} & 10.8 & {\bfseries 8.5}
+& 83.8 & {\bfseries 73.8} & {\bfseries 78.5} & 21.5 & {\bfseries 16.3} \\
 
 CauseNet Full & ReLU--Cosine
-& 85.6 & 69.3 & 76.6 & 10.2 & 11.5
+& 85.6 & 69.3 & 76.6 & {\bfseries 10.2} & 11.5
 & 86.8 & 70.2 & 77.6 & 19.7 & 17.3 \\
 
 CauseNet Full & GELU--Euclidean
-& 86.3 & 73.5 & 79.4 & 11.3 & 9.8
+& {\bfseries 86.3} & 73.5 & 79.4 & 11.3 & 9.8
 & 82.9 & 69.0 & 75.3 & 13.3 & 17.2 \\
 
 CauseNet Full & GELU--Cosine
 & 85.6 & 63.0 & 72.6 & 11.2 & 13.7
-& 87.7 & 59.5 & 70.9 & 11.2 & 19.6 \\
+& {\bfseries 87.7} & 59.5 & 70.9 & {\bfseries 11.2} & 19.6 \\
 
 \midrule
 
 CEG Filtered & ReLU--Euclidean
-& 87.0 & 97.6 & 92.0 & 2.4 & 2.3
-& 58.1 & 87.7 & 69.9 & 6.5 & 8.0 \\
+& {\bfseries 87.0} & {\bfseries 97.6} & {\bfseries 92.0} & {\bfseries 2.4} & {\bfseries 2.3}
+& 58.1 & 87.7 & 69.9 & 6.5 & {\bfseries 8.0} \\
 
 CEG Filtered & ReLU--Cosine
-& 87.0 & 97.6 & 92.0 & 3.0 & 4.0
-& 61.2 & 91.2 & 73.2 & 8.1 & 11.0 \\
+& {\bfseries 87.0} & {\bfseries 97.6} & {\bfseries 92.0} & 3.0 & 4.0
+& 61.2 & {\bfseries 91.2} & {\bfseries 73.2} & 8.1 & 11.0 \\
 
 CEG Filtered & GELU--Euclidean
-& 87.0 & 97.6 & 92.0 & 2.5 & 3.3
-& 57.0 & 86.0 & 68.5 & 6.2 & 8.5 \\
+& {\bfseries 87.0} & {\bfseries 97.6} & {\bfseries 92.0} & 2.5 & 3.3
+& 57.0 & 86.0 & 68.5 & {\bfseries 6.2} & 8.5 \\
 
 CEG Filtered & GELU--Cosine
 & 86.7 & 95.1 & 90.7 & 7.1 & 7.0
-& 61.8 & 82.5 & 70.7 & 11.5 & 13.4 \\
+& {\bfseries 61.8} & 82.5 & 70.7 & 11.5 & 13.4 \\
 
 \bottomrule
 \end{tabular}%
