@@ -21,26 +21,46 @@ This project uses a middle ground:
 
 ## How it works
 
+The workflow separates the construction of search-aligned supervision from hyperparameter optimization, final model training, and query-time graph traversal.
+
 ```mermaid
-flowchart LR
-  subgraph Offline["Offline: learn and cache the heuristic"]
-    Q["Positive causal pairs"] --> B["Run A* with base embeddings"]
-    B --> P["Successful causal paths"]
-    P --> R["Ranking examples:<br/>preferred successor vs. alternatives"]
-    R --> F["Fine-tune Sentence Transformer<br/>across Matryoshka prefixes"]
-    F --> E["Precompute embeddings<br/>for graph nodes"]
+flowchart TB
+  subgraph Data["1. Search-aligned dataset creation"]
+    PAIRS["MS MARCO causal pairs + CauseNet Precision"] --> BASE["Run uncapped A* with base-model embeddings"]
+    BASE --> PATHS["Retain successful causal paths"]
+    PATHS --> QUADS["Create ranking quadruples:<br/>(current, target, preferred successor, alternative successor)"]
   end
 
-  subgraph Online["Online: answer one question"]
-    I["Does A cause B?"] --> N["Resolve A and B<br/>to graph nodes"]
-    N --> S["Bounded A*<br/>f(n) = g(n) + h(n), tau = 27"]
-    E --> S
-    S --> Y["Path found:<br/>Yes + explicit path"]
-    S --> X["Queue or budget exhausted:<br/>No under this search"]
+  subgraph Tuning["2. Hyperparameter optimization"]
+    QUADS --> OPTUNA["Optuna search:<br/>learning rate, activation, distance metric"]
+    OPTUNA --> VALIDATE["Search-based validation:<br/>minimize average visited nodes"]
+  end
+
+  subgraph Training["3. Final training and precomputation"]
+    VALIDATE -->|"Best hyperparameters"| TRAIN["Train the final model<br/>with Matryoshka ranking loss"]
+    TRAIN --> SELECT["Select Granite R2, d = 32<br/>ReLU + Euclidean"]
+    SELECT --> CACHE["Precompute graph-node embeddings<br/>and indexed graph structures"]
+  end
+
+  subgraph Inference["4. Query-time inference"]
+    QUESTION["Question: Does A cause B?"] --> MAP["Resolve A and B to graph nodes"]
+    MAP --> ASTAR["Bounded A* with cached 32D embeddings:<br/>f(n) = g(n) + h(n), tau = 27"]
+    CACHE --> ASTAR
+    ASTAR --> REACHED{"Target reached?"}
+    REACHED -->|Yes| YES["Return Yes + explicit causal path"]
+    REACHED -->|No| NO["Return No under the bounded search"]
   end
 ```
 
-For a node `n`, A* prioritizes the smallest estimated total cost:
+1. **Create the fine-tuning dataset.** Positive MS MARCO training pairs covered by CauseNet Precision are traversed with uncapped A* using each pretrained embedding model. Every successful path is converted into quadruples of `(current node, target, preferred successor, alternative successor)`. These examples teach the model to rank the path successor ahead of competing outgoing neighbors.
+
+2. **Optimize hyperparameters.** Optuna runs 50 trials per embedding backbone, searching the learning rate, activation function (`ReLU` or `GELU`), and distance metric (`cosine` or `Euclidean`). Each trial is evaluated through actual A* traversals on the validation data. The optimization target is the average number of visited nodes, with pruning and early stopping to avoid unproductive runs.
+
+3. **Train the final models.** Each backbone is trained again with its best hyperparameters for up to 50 epochs. The ranking objective is applied simultaneously to nested Matryoshka prefixes, concentrating graph-search information in the leading dimensions. The resulting graph-node embeddings are precomputed as memory-mapped NumPy arrays and paired with indexed adjacency structures for efficient inference.
+
+4. **Select and run the final configuration.** Fine-tuned validation candidates must reach at least 80.0 F1; the lowest-runtime candidate is selected, followed by visited nodes and F1 as tie-breakers. This procedure selects Granite Embedding R2 at 32 dimensions with ReLU and Euclidean distance. At query time, concepts `A` and `B` are resolved to graph nodes, and bounded A* searches for a directed path with `τ = 27`.
+
+For a candidate node `n`, A* prioritizes the smallest estimated total cost:
 
 ```text
 f(n) = g(n) + h(n)
@@ -49,7 +69,7 @@ g(n): accumulated embedding distance from the source to n
 h(n): Euclidean embedding distance from n to the target
 ```
 
-The edge cost between two adjacent concepts is also their Euclidean embedding distance. Fine-tuning turns successful search paths into pairwise ranking examples: the next node on a discovered path should receive a lower estimated traversal cost than the current node’s alternative successors.
+The edge cost between adjacent concepts is their Euclidean embedding distance. The same distance from `n` to the target is used as the heuristic. Fine-tuning therefore reshapes the embedding space so that successors on successful causal paths receive more favorable A* priorities than alternative neighbors.
 
 The same objective is applied to nested Matryoshka prefixes. This makes the first 32 dimensions useful on their own, reducing stored vector width and distance-computation work by **24×** relative to Granite’s native 768-dimensional representation.
 
@@ -112,13 +132,17 @@ The source values for the final comparison are in [`thesis/tables/test_res.tex`]
 - **Comparative evaluation:** evaluates fine-tuned and pretrained embedding models against uncapped/capped BFS, Dijkstra, and an LSTM RL baseline on multiple graphs and datasets.
 - **End-to-end tooling:** includes preprocessing, Optuna hyperparameter search, PyTorch Lightning training, embedding precomputation, evaluation, significance tests, plots, and a FastAPI demo.
 
-## Interactive 3D demo
+## Interactive demonstration
 
 The repository includes a FastAPI application with a 3d-force-graph frontend. It lets users choose a causal graph and search configuration, run a query, inspect hops/visited nodes/runtime, and explore the discovered path in an interactive 3D neighborhood.
 
+> **Planned hosted deployment:** [pathfinding.demo.causenet.org](https://pathfinding.demo.causenet.org/) — the deployment URL specified in the thesis.
+
 ![Interactive causal path visualization](code/docs/readme/causal-path-demo.png)
 
-The default launcher uses the selected Granite model at `d=32` on CauseNet Precision:
+### Run locally
+
+The default local launcher uses the selected Granite model at `d=32` on CauseNet Precision:
 
 ```powershell
 cd code
@@ -270,7 +294,3 @@ The complete LaTeX source for the 2026 bachelor thesis, **“Learning Heuristics
   year   = {2026}
 }
 ```
-
-## License
-
-No repository license has been added yet. Until a license is provided, the code should be treated as all rights reserved.
