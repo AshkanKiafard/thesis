@@ -56,6 +56,7 @@ from core.utils import (
     load_causal_graph,
     load_rl_graph,
     traverse_graph,
+    validate_fine_tuned_model_set,
 )
 from evaluation.select_best_model import select_best_astar_model, print_selection
 
@@ -113,10 +114,10 @@ def build_output_paths(
     Build evaluation output paths from dataset name and run suffix.
 
     Example:
-    data/datasets/msmarco_valid_filtered.json + v3
+    data/datasets/msmarco_valid_filtered.json + v4
     ->
-    data/evaluation/causenet/msmarco_valid/v3/evaluation_results.json
-    data/evaluation/causenet/msmarco_valid/v3/evaluation_results.csv
+    data/evaluation/causenet/msmarco_valid/v4/evaluation_results.json
+    data/evaluation/causenet/msmarco_valid/v4/evaluation_results.csv
     """
     graph_name = canonical_graph_name(graph_name)
     dataset_stem = Path(dataset_path).stem
@@ -759,7 +760,7 @@ def parse_args():
         "--run-suffix",
         type=str,
         required=True,
-        help="Final-training run suffix, e.g. v3.",
+        help="Final-training run suffix, e.g. v4.",
     )
     parser.add_argument(
         "--graph",
@@ -939,6 +940,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--fine-tuned-only",
+        action="store_true",
+        help=(
+            "On validation splits, evaluate exactly one fine-tuned model per "
+            "configured base model and skip pretrained base models."
+        ),
+    )
+    parser.add_argument(
         "--force-model-results",
         action="store_true",
         help=(
@@ -1004,6 +1013,8 @@ if __name__ == "__main__":
         raise ValueError("--ablation requires --dim, e.g. --dim 32")
     if args.ablation and (args.best_model_path is not None or args.best_model_dim is not None):
         raise ValueError("--ablation cannot be combined with --best-model-path/--best-model-dim")
+    if args.ablation and args.fine_tuned_only:
+        raise ValueError("--ablation cannot be combined with --fine-tuned-only")
     if args.ablation:
         args.skip_dijkstra = True
         args.force_model_results = True
@@ -1109,7 +1120,18 @@ if __name__ == "__main__":
             )
     else:
         fine_tuned_models = get_fine_tuned_models(run_suffix)
-        model_queue = sort_model_queue(list(BASE_MODELS) + fine_tuned_models, run_suffix)
+        if args.fine_tuned_only:
+            validate_fine_tuned_model_set(
+                fine_tuned_models,
+                BASE_MODELS,
+                run_suffix,
+            )
+            model_queue = sort_model_queue(fine_tuned_models, run_suffix)
+        else:
+            model_queue = sort_model_queue(
+                list(BASE_MODELS) + fine_tuned_models,
+                run_suffix,
+            )
         print("Model queue:", model_queue)
 
     (
@@ -1614,11 +1636,15 @@ if __name__ == "__main__":
         )
         raise SystemExit(0)
 
-    if args.ablation and evaluation_errors:
+    if evaluation_errors:
         failed_models = [get_model_name(path) for path, _ in evaluation_errors]
-        raise RuntimeError(
-            "Joint four-model ablation evaluation was incomplete. Failed "
-            f"models: {failed_models}"
+        stage_label = (
+            "Joint four-model ablation evaluation"
+            if args.ablation
+            else "Embedding-guided evaluation"
         )
+        raise RuntimeError(
+            f"{stage_label} was incomplete. Failed models: {failed_models}"
+        ) from evaluation_errors[0][1]
 
     print("\nAll evaluations complete.")

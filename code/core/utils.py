@@ -749,6 +749,38 @@ def get_fine_tuned_models(run_suffix: str):
     ]
 
 
+def validate_fine_tuned_model_set(
+    model_paths,
+    expected_base_models,
+    run_suffix: str,
+):
+    """Require exactly one fine-tuned run artifact per expected base model."""
+    expected_base_names = {
+        get_model_base_name(model_path)
+        for model_path in expected_base_models
+    }
+    paths_by_base_name = defaultdict(list)
+
+    for model_path in model_paths:
+        paths_by_base_name[get_model_base_name(model_path)].append(model_path)
+
+    found_base_names = set(paths_by_base_name)
+    missing = sorted(expected_base_names - found_base_names)
+    unexpected = sorted(found_base_names - expected_base_names)
+    duplicates = {
+        base_name: sorted(paths)
+        for base_name, paths in paths_by_base_name.items()
+        if len(paths) != 1
+    }
+
+    if missing or unexpected or duplicates:
+        raise ValueError(
+            "Incomplete or ambiguous fine-tuned model set for run suffix "
+            f"{run_suffix!r}: missing={missing}, unexpected={unexpected}, "
+            f"duplicates={duplicates}"
+        )
+
+
 def build_finetuned_model_name(
     base_model_name: str,
     activation: str,

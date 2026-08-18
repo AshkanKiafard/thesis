@@ -44,6 +44,7 @@ from core.utils import (
     get_matryoshka_dims,
     load_causal_graph,
     load_rl_graph,
+    validate_fine_tuned_model_set,
 )
 
 # -------------------------------------------------------------------------
@@ -63,9 +64,9 @@ def build_output_paths(
     Build output path from dataset name and run suffix.
 
     Example:
-    data/datasets/msmarco_valid_filtered.json + v3
+    data/datasets/msmarco_valid_filtered.json + v4
     ->
-    data/evaluation/causenet/msmarco_valid/v3/visited_nodes_analysis.json
+    data/evaluation/causenet/msmarco_valid/v4/visited_nodes_analysis.json
     """
     graph_name = canonical_graph_name(graph_name)
     dataset_stem = Path(dataset_path).stem
@@ -133,6 +134,33 @@ def already_done(existing_results, model, dimension=None, strategy=None):
             return True
 
     return False
+
+
+def get_embedding_strategy_items(skip_dijkstra=False):
+    strategy_items = [("A*", ts.astar_traverse)]
+
+    if not skip_dijkstra:
+        strategy_items.append(("Dijkstra", ts.dijkstra_traverse))
+
+    return strategy_items
+
+
+def validate_expected_analysis_results(results, expected_keys):
+    completed_keys = {
+        (
+            entry.get("model"),
+            entry.get("dimension"),
+            entry.get("analysis", {}).get("strategy"),
+        )
+        for entry in results
+    }
+    missing_keys = sorted(expected_keys - completed_keys)
+
+    if missing_keys:
+        raise RuntimeError(
+            "Visited-node analysis finished with missing model/dimension/"
+            f"strategy rows: {missing_keys}"
+        )
 
 
 def percentile(values, p):
@@ -296,7 +324,7 @@ def parse_args():
         "--run-suffix",
         type=str,
         required=True,
-        help="Final-training run suffix, e.g. v3.",
+        help="Final-training run suffix, e.g. v4.",
     )
     parser.add_argument(
         "--graph",
@@ -339,6 +367,27 @@ def parse_args():
             "data/evaluation/ablation."
         ),
     )
+    parser.add_argument(
+        "--fine-tuned-only",
+        action="store_true",
+        help=(
+            "Analyze exactly one fine-tuned model for each configured base "
+            "model and skip pretrained base models."
+        ),
+    )
+    parser.add_argument(
+        "--skip-dijkstra",
+        action="store_true",
+        help="Collect A* visited-node distributions without Dijkstra.",
+    )
+    parser.add_argument(
+        "--skip-baselines",
+        action="store_true",
+        help=(
+            "Do not collect fresh BFS or RL distributions. Existing baseline "
+            "rows in the output artifact are preserved."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -356,6 +405,8 @@ if __name__ == "__main__":
         raise ValueError("--embedding-batch-size must be greater than 0")
     if args.ablation and args.dim is None:
         raise ValueError("--ablation requires --dim, e.g. --dim 32")
+    if args.ablation and args.fine_tuned_only:
+        raise ValueError("--ablation cannot be combined with --fine-tuned-only")
 
     if args.ablation:
         model_queue = get_ablation_fine_tuned_models(run_suffix)
@@ -370,7 +421,15 @@ if __name__ == "__main__":
             )
     else:
         fine_tuned_models = get_fine_tuned_models(run_suffix)
-        model_queue = list(BASE_MODELS) + fine_tuned_models
+        if args.fine_tuned_only:
+            validate_fine_tuned_model_set(
+                fine_tuned_models,
+                BASE_MODELS,
+                run_suffix,
+            )
+            model_queue = fine_tuned_models
+        else:
+            model_queue = list(BASE_MODELS) + fine_tuned_models
 
     print(f"Run suffix: {run_suffix}")
     print(f"Ablation mode: {args.ablation}")
@@ -378,6 +437,9 @@ if __name__ == "__main__":
     print(f"Graph path: {graph_path}")
     print(f"Embedding device: {args.embedding_device}")
     print(f"Embedding batch size: {args.embedding_batch_size}")
+    print(f"Fine-tuned only: {args.fine_tuned_only}")
+    print(f"Skip Dijkstra: {args.skip_dijkstra}")
+    print(f"Skip baselines: {args.skip_baselines}")
     if args.dim is not None:
         print(f"Restricted Matryoshka dim: {args.dim}")
     embedding_cache_suffix = get_embedding_cache_suffix(graph_name)
@@ -418,7 +480,7 @@ if __name__ == "__main__":
         use_inverse=False,
     )
     rl_graph = None
-    if not args.ablation:
+    if not args.ablation and not args.skip_baselines:
         rl_graph = load_rl_graph(
             graph_path,
             use_inverse=False,
@@ -434,8 +496,9 @@ if __name__ == "__main__":
         for model in (BFS_UNCAPPED_BASELINE_MODEL, BFS_CAPPED_BASELINE_MODEL)
     )
 
-    if args.ablation:
-        print("\n=== skipping baselines in ablation mode ===")
+    if args.ablation or args.skip_baselines:
+        reason = "ablation mode" if args.ablation else "--skip-baselines"
+        print(f"\n=== skipping baselines ({reason}) ===")
     elif not has_bfs_uncapped_result:
         print("\n=== Running BFS Uncapped Baseline ===")
 
@@ -469,7 +532,9 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     # RL baseline
     # -------------------------------------------------------------------------
-    if args.ablation:
+    analysis_errors = []
+
+    if args.ablation or args.skip_baselines:
         pass
     elif not already_done(existing_results, RL_BASELINE_MODEL):
         print("\n=== Running RL Baseline ===")
@@ -516,12 +581,16 @@ if __name__ == "__main__":
 
         except Exception as e:
             print(f"Failed RL: {e}")
+            analysis_errors.append((RL_BASELINE_MODEL, e))
     else:
         print("\n=== skipping RL Baseline ===")
 
     # -------------------------------------------------------------------------
     # Embedding-guided models
     # -------------------------------------------------------------------------
+    strategy_items = get_embedding_strategy_items(args.skip_dijkstra)
+    expected_analysis_keys = set()
+
     for model_path in model_queue:
         model_name = model_path.split("/")[-1]
 
@@ -551,6 +620,12 @@ if __name__ == "__main__":
             else:
                 matryoshka_dims = get_matryoshka_dims(model_dim)
 
+            expected_analysis_keys.update(
+                (model_name, dim, strategy_name)
+                for dim in matryoshka_dims
+                for strategy_name, _ in strategy_items
+            )
+
             print(f"Model dim: {model_dim}")
             print(f"Matryoshka dims: {matryoshka_dims}")
 
@@ -560,10 +635,6 @@ if __name__ == "__main__":
 
             for dim in matryoshka_dims:
                 existing_results = load_results_file(output_json_file)
-                strategy_items = [
-                    ("A*", ts.astar_traverse),
-                    ("Dijkstra", ts.dijkstra_traverse),
-                ]
                 pending_strategy_items = [
                     (strategy_name, strategy)
                     for strategy_name, strategy in strategy_items
@@ -633,6 +704,18 @@ if __name__ == "__main__":
 
         except Exception as e:
             print(f"Error for {model_path}: {e}")
+            analysis_errors.append((model_path, e))
+
+    if analysis_errors:
+        failed_items = [str(item) for item, _ in analysis_errors]
+        raise RuntimeError(
+            "Visited-node analysis failed for: " + ", ".join(failed_items)
+        ) from analysis_errors[0][1]
+
+    validate_expected_analysis_results(
+        load_results_file(output_json_file),
+        expected_analysis_keys,
+    )
 
     print("\nVisited-node collection complete.")
     print(f"Output JSON: {output_json_file}")

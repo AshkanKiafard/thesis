@@ -511,7 +511,7 @@ def parse_args():
         default=DEFAULT_RUN_SUFFIX,
         help=(
             "Run suffix used when dataset_name is not a direct path, "
-            "e.g. v3."
+            "e.g. v4."
         ),
     )
     parser.add_argument(
