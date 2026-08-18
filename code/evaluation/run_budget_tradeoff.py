@@ -42,6 +42,7 @@ from core.utils import (
     get_embedding_cache_path,
     get_embedding_cache_vectors_path,
 )
+from evaluation.select_best_model import select_best_astar_model
 
 
 EXPERIMENT_NAME = "budget_tradeoff"
@@ -157,6 +158,88 @@ MODEL_CONFIGS = tuple(
 )
 MODEL_NAMES = tuple(config.model for config in MODEL_CONFIGS)
 EXPECTED_COMBINATIONS = len(MODEL_CONFIGS) * len(BUDGETS)
+
+TRADEOFF_FAMILY_SPECS = (
+    ("MPNet", "FT A*: MPNet"),
+    ("BGE", "FT A*: BGE"),
+    ("MXBAI", "FT A*: mxbai"),
+    ("Qwen", "FT A*: Qwen"),
+    ("Granite", "FT A*: Granite"),
+)
+
+
+def configure_model_configs(model_configs):
+    global MODEL_CONFIGS
+    global MODEL_NAMES
+    global EXPECTED_COMBINATIONS
+
+    MODEL_CONFIGS = tuple(model_configs)
+    MODEL_NAMES = tuple(config.model for config in MODEL_CONFIGS)
+    EXPECTED_COMBINATIONS = len(MODEL_CONFIGS) * len(BUDGETS)
+
+
+def build_v4_model_configs(selection_result):
+    """Build the established per-family trade-off configs from validation."""
+    summaries = {
+        summary["family"]: summary
+        for summary in selection_result["family_summaries"]
+    }
+    model_configs = []
+
+    for family, display_name in TRADEOFF_FAMILY_SPECS:
+        if family not in summaries:
+            raise ValueError(
+                f"Validation selection has no summary for model family {family}"
+            )
+
+        summary = summaries[family]
+        candidate = summary["fastest_viable"] or summary["fastest_candidate"]
+        checkpoint_name = Path(candidate["model_path"]).name
+        expected_suffix = f"_{RUN_SUFFIX}_finetuned"
+        if not checkpoint_name.endswith(expected_suffix):
+            raise ValueError(
+                f"Refusing non-{RUN_SUFFIX} checkpoint selected for {family}: "
+                f"{checkpoint_name}"
+            )
+        parsed_config = model_registry.parse_model_config(
+            checkpoint_name,
+            is_finetuned=True,
+        )
+        activation = parsed_config["activation"]
+        distance = parsed_config["distance"]
+        budget = candidate.get("astar_max_visits")
+
+        if activation is None or distance is None:
+            raise ValueError(
+                f"Could not parse tuned configuration from {checkpoint_name}"
+            )
+        if budget is None or int(budget) <= 0:
+            raise ValueError(
+                f"Missing positive A* p95 budget for {checkpoint_name}, "
+                f"dimension {candidate['dimension']}"
+            )
+
+        model_configs.append(
+            ModelConfig(
+                model=display_name,
+                checkpoint_name=checkpoint_name,
+                embedding_dimension=int(candidate["dimension"]),
+                activation_function=model_registry.activation_label(activation),
+                distance_metric=model_registry.distance_label(distance),
+                existing_validation_budget=int(budget),
+            )
+        )
+
+    return tuple(model_configs)
+
+
+def configure_from_v4_validation():
+    selection_result = select_best_astar_model(
+        VALIDATION_RESULTS_PATH,
+        min_f1=0.8,
+        variant_filter="finetuned",
+    )
+    configure_model_configs(build_v4_model_configs(selection_result))
 
 
 def parse_args() -> argparse.Namespace:
@@ -627,6 +710,7 @@ def write_results_safely(document: dict) -> None:
 
 def main() -> None:
     args = parse_args()
+    configure_from_v4_validation()
     validate_input_files()
     aggregated_rows, detailed_results = run_experiment(args)
     if len(aggregated_rows) != EXPECTED_COMBINATIONS:

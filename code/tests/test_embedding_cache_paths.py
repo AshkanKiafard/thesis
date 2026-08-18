@@ -8,7 +8,7 @@ from core.utils import (
     get_embedding_cache_path,
     get_embedding_cache_vectors_path,
 )
-from evaluation.run_budget_tradeoff import MODEL_CONFIGS
+from evaluation.run_budget_tradeoff import MODEL_CONFIGS, build_v4_model_configs
 
 
 class EmbeddingCachePathTest(unittest.TestCase):
@@ -55,6 +55,44 @@ class EmbeddingCachePathTest(unittest.TestCase):
                 runtime_vectors = get_embedding_cache_vectors_path(runtime_cache)
 
                 self.assertEqual(config.embedding_path, runtime_vectors)
+
+    def test_v4_tradeoff_configs_come_from_validation_family_summaries(self):
+        family_inputs = (
+            ("MPNet", "all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_v4_finetuned", 128, 31),
+            ("BGE", "bge-large-en-v1.5_gelu_euclid_nonorm_matryoshka_v4_finetuned", 256, 47),
+            ("MXBAI", "mxbai-embed-large-v1_relu_euclid_nonorm_matryoshka_v4_finetuned", 512, 59),
+            ("Qwen", "Qwen3-Embedding-0.6B_gelu_cosine_nonorm_matryoshka_v4_finetuned", 64, 23),
+            ("Granite", "granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v4_finetuned", 32, 19),
+        )
+        family_summaries = []
+        for family, checkpoint, dimension, budget in family_inputs:
+            candidate = {
+                "model_path": f"data/models/lightning/{checkpoint}",
+                "dimension": dimension,
+                "astar_max_visits": budget,
+            }
+            family_summaries.append(
+                {
+                    "family": family,
+                    "fastest_viable": None if family == "BGE" else candidate,
+                    "fastest_candidate": candidate,
+                }
+            )
+
+        configs = build_v4_model_configs(
+            {"family_summaries": family_summaries}
+        )
+
+        self.assertEqual(len(configs), 5)
+        self.assertTrue(
+            all(config.checkpoint_name.endswith("_v4_finetuned") for config in configs)
+        )
+        self.assertEqual(
+            [config.existing_validation_budget for config in configs],
+            [31, 47, 59, 23, 19],
+        )
+        self.assertEqual(configs[1].activation_function, "GELU")
+        self.assertEqual(configs[1].distance_metric, "Euclidean")
 
 
 if __name__ == "__main__":

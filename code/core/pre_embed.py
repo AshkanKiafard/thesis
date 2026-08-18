@@ -15,6 +15,7 @@ if str(CODE_ROOT) not in sys.path:
 from core.config import (
     BASE_MODELS,
     DEFAULT_EMBEDDING_BATCH_SIZE,
+    DEFAULT_RUN_SUFFIX,
 )
 from core.constants import EMBEDDINGS_DIR, LIGHTNING_MODELS_DIR
 from core.embedding_preload import get_embedding_cache_path, load_embedding_cache
@@ -48,8 +49,8 @@ def parse_args():
     parser.add_argument(
         "--run-suffix",
         type=str,
-        default="v3",
-        help="Only include fine-tuned models with this suffix, e.g. v3.",
+        default=DEFAULT_RUN_SUFFIX,
+        help="Only include fine-tuned models with this run suffix.",
     )
     parser.add_argument(
         "--batch-size",

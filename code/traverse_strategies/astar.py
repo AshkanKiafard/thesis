@@ -134,26 +134,42 @@ def _astar_traverse_indexed(
     end_node: str,
     embeder: STEmbedder,
     max_visits: int,
-) -> tuple[list[Any], int]:
+    reachability_only: bool = False,
+) -> tuple[list[Any] | bool, int]:
     start_index = indexed_graph.node_index(start_node)
     end_index = indexed_graph.node_index(end_node)
 
-    path_links = [(start_index, None)]
-    open_set = [(0, 0, start_node, start_index, 0)]
+    if reachability_only and start_index == end_index:
+        return True, 0
+
+    path_links = None if reachability_only else [(start_index, None)]
+    open_set = (
+        [(0, 0, start_node, start_index)]
+        if reachability_only
+        else [(0, 0, start_node, start_index, 0)]
+    )
     best_g = {start_index: 0.0}
     visited = set()
     visited_count = 0
 
-    end_node_embed = embeder.embed_index(end_index)
+    end_node_embed = (
+        None if reachability_only else embeder.embed_index(end_index)
+    )
     adjacency = indexed_graph.adjacency
     assume_normalized = _has_normalized_runtime_embeddings(embeder)
 
     while open_set:
-        f_score, g_score, current_node, current_index, path_index = (
-            heapq.heappop(open_set)
-        )
+        entry = heapq.heappop(open_set)
+        if reachability_only:
+            f_score, g_score, current_node, current_index = entry
+            path_index = None
+        else:
+            f_score, g_score, current_node, current_index, path_index = entry
 
         if current_index == end_index:
+            if reachability_only:
+                return True, visited_count
+
             return _reconstruct_index_path(
                 path_links,
                 path_index,
@@ -167,9 +183,8 @@ def _astar_traverse_indexed(
         visited_count += 1
 
         if max_visits != -1 and visited_count > max_visits:
-            return [], visited_count
+            return (False if reachability_only else []), visited_count
 
-        current_node_embed = embeder.embed_index(current_index)
         successors = [
             successor
             for successor in adjacency[current_index]
@@ -179,6 +194,12 @@ def _astar_traverse_indexed(
         if not successors:
             continue
 
+        if reachability_only and end_index in successors:
+            return True, visited_count
+
+        if end_node_embed is None:
+            end_node_embed = embeder.embed_index(end_index)
+        current_node_embed = embeder.embed_index(current_index)
         successor_embeds = embeder.embed_indices(successors)
         edge_costs, heuristic_costs = _get_distances_pair(
             embeder,
@@ -201,22 +222,28 @@ def _astar_traverse_indexed(
             best_g[successor] = tentative_g
             tentative_f = tentative_g + heuristic
 
-            path_links.append((successor, path_index))
-            successor_path_index = len(path_links) - 1
             successor_node = indexed_graph.node_text(successor)
 
-            heapq.heappush(
-                open_set,
-                (
-                    tentative_f,
-                    tentative_g,
-                    successor_node,
-                    successor,
-                    successor_path_index,
-                ),
-            )
+            if reachability_only:
+                heapq.heappush(
+                    open_set,
+                    (tentative_f, tentative_g, successor_node, successor),
+                )
+            else:
+                path_links.append((successor, path_index))
+                successor_path_index = len(path_links) - 1
+                heapq.heappush(
+                    open_set,
+                    (
+                        tentative_f,
+                        tentative_g,
+                        successor_node,
+                        successor,
+                        successor_path_index,
+                    ),
+                )
 
-    return [], visited_count
+    return (False if reachability_only else []), visited_count
 
 
 def astar_traverse(
@@ -225,12 +252,13 @@ def astar_traverse(
     end_node: str,
     embeder: STEmbedder,
     config: Dict[str, Any] = None
-) -> tuple[list[Any], int]:
+) -> tuple[list[Any] | bool, int]:
     # Allow optional runtime config (for example a max visit limit).
     if config is None:
         config = {}
 
     max_visits = config.get("astar_max_visits", -1)
+    reachability_only = config.get("reachability_only", False)
     indexed_graph = _get_indexed_graph(config, embeder, start_node, end_node)
 
     if indexed_graph is not None:
@@ -240,7 +268,11 @@ def astar_traverse(
             end_node,
             embeder,
             max_visits,
+            reachability_only,
         )
+
+    if reachability_only and start_node == end_node:
+        return True, 0
 
     # Priority queue entries are:
     # (f_score, g_score, current_node, path_link_index)
@@ -248,8 +280,12 @@ def astar_traverse(
     # f = g + h
     # g = current path cost from start to current node
     # h = heuristic estimate from current node to end node
-    path_links = [(start_node, None)]
-    open_set = [(0, 0, start_node, 0)]
+    path_links = None if reachability_only else [(start_node, None)]
+    open_set = (
+        [(0, 0, start_node)]
+        if reachability_only
+        else [(0, 0, start_node, 0)]
+    )
     best_g = {start_node: 0.0}
 
     # Local closed set.
@@ -258,15 +294,23 @@ def astar_traverse(
     visited_count = 0
 
     # Embed the target node once so we do not recompute it for every expansion.
-    end_node_embed = embeder.embed(end_node)
+    end_node_embed = None if reachability_only else embeder.embed(end_node)
     adjacency = graph._succ
     assume_normalized = _has_normalized_runtime_embeddings(embeder)
 
     while open_set:
-        f_score, g_score, current_node, path_index = heapq.heappop(open_set)
+        entry = heapq.heappop(open_set)
+        if reachability_only:
+            f_score, g_score, current_node = entry
+            path_index = None
+        else:
+            f_score, g_score, current_node, path_index = entry
 
         # Goal reached -> return the path and the number of expanded nodes.
         if current_node == end_node:
+            if reachability_only:
+                return True, visited_count
+
             return _reconstruct_path(path_links, path_index), visited_count
 
         # Skip nodes that were already finalized.
@@ -278,9 +322,8 @@ def astar_traverse(
 
         # Optional safety cap for evaluation / runtime control.
         if max_visits != -1 and visited_count > max_visits:
-            return [], visited_count
+            return (False if reachability_only else []), visited_count
 
-        current_node_embed = embeder.embed(current_node)
         successors = [
             successor
             for successor in adjacency.get(current_node, ())
@@ -290,6 +333,12 @@ def astar_traverse(
         if not successors:
             continue
 
+        if reachability_only and end_node in successors:
+            return True, visited_count
+
+        if end_node_embed is None:
+            end_node_embed = embeder.embed(end_node)
+        current_node_embed = embeder.embed(current_node)
         successor_embeds = _embed_many(embeder, successors, config)
         edge_costs, heuristic_costs = _get_distances_pair(
             embeder,
@@ -315,13 +364,18 @@ def astar_traverse(
             # Heuristic is the embedding distance from successor to goal.
             tentative_f = tentative_g + heuristic
 
-            path_links.append((successor, path_index))
-            successor_path_index = len(path_links) - 1
-
-            heapq.heappush(
-                open_set,
-                (tentative_f, tentative_g, successor, successor_path_index)
-            )
+            if reachability_only:
+                heapq.heappush(
+                    open_set,
+                    (tentative_f, tentative_g, successor),
+                )
+            else:
+                path_links.append((successor, path_index))
+                successor_path_index = len(path_links) - 1
+                heapq.heappush(
+                    open_set,
+                    (tentative_f, tentative_g, successor, successor_path_index),
+                )
 
     # No path found.
-    return [], visited_count
+    return (False if reachability_only else []), visited_count

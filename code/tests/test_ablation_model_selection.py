@@ -22,3 +22,24 @@ def test_ablation_model_paths_keep_the_comparison_order(tmp_path, monkeypatch):
     model_paths = utils.get_ablation_fine_tuned_models("v3")
 
     assert [Path(model_path).name for model_path in model_paths] == expected_names
+
+
+def test_ablation_models_follow_the_actual_optuna_selected_reference(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(utils, "LIGHTNING_MODELS_DIR", Path(tmp_path))
+    expected_names = [
+        "granite-embedding-english-r2_relu_cosine_nonorm_matryoshka_v4_finetuned",
+        "granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v4_ablation_finetuned",
+        "granite-embedding-english-r2_gelu_euclid_nonorm_matryoshka_v4_ablation_finetuned",
+        "granite-embedding-english-r2_gelu_cosine_nonorm_matryoshka_v4_ablation_finetuned",
+    ]
+    for model_name in expected_names:
+        (tmp_path / model_name).mkdir()
+
+    assert utils.get_ablation_model_names("v4") == expected_names
+    assert [
+        Path(model_path).name
+        for model_path in utils.get_ablation_fine_tuned_models("v4")
+    ] == expected_names

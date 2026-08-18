@@ -13,6 +13,7 @@ SLURM_JOB_ID = os.environ.get("SLURM_JOB_ID", "local")
 CODE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(CODE_ROOT))
 
+from core.config import DEFAULT_RUN_SUFFIX
 from core.constants import (
     CAUSENET_GRAPH_PATH,
     CHECKPOINTS_DIR,
@@ -101,7 +102,7 @@ def parse_args():
     parser.add_argument(
         "--run-suffix",
         type=str,
-        default="v3",
+        default=DEFAULT_RUN_SUFFIX,
         help="Suffix for checkpoint/log/model directory names",
     )
 

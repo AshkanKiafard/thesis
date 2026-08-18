@@ -11,6 +11,7 @@ from matplotlib.ticker import FormatStrFormatter, MultipleLocator
 import numpy as np
 import pandas as pd
 
+from core.config import DEFAULT_RUN_SUFFIX
 from core.constants import (
     BASELINE_MODEL_NAMES,
     BFS_CAPPED_BASELINE_MODEL,
@@ -159,8 +160,8 @@ def parse_args():
         "--run-suffix",
         default=None,
         help=(
-            "Run suffix used in evaluation and plot paths, e.g. v3. "
-            "Defaults to v3 for single-dataset mode. In --all mode, "
+            "Run suffix used in evaluation and plot paths. Defaults to the "
+            "current model generation for single-dataset mode. In --all mode, "
             "omitting this includes every run suffix."
         ),
     )
@@ -196,7 +197,7 @@ def parse_args():
         "--thesis",
         action="store_true",
         help=(
-            "Create the fixed thesis figures for CauseNet/msmarco_valid/v3 "
+            "Create the fixed thesis figures for CauseNet/MS MARCO validation "
             "using only BFS/RL baselines and fine-tuned A* models. Outputs "
             "are saved under data/plots/thesis."
         ),
@@ -247,8 +248,11 @@ def parse_args():
             parser.error("--thesis is fixed to the msmarco_valid dataset")
         if args.graph and args.graph != "causenet":
             parser.error("--thesis is fixed to the causenet graph")
-        if args.run_suffix and args.run_suffix != "v3":
-            parser.error("--thesis is fixed to run suffix v3")
+        if args.run_suffix and args.run_suffix != DEFAULT_RUN_SUFFIX:
+            parser.error(
+                "--thesis is fixed to current run suffix "
+                f"{DEFAULT_RUN_SUFFIX}"
+            )
 
     return args
 
@@ -2879,7 +2883,7 @@ def plot_ablation_result_set(dataset_name, run_suffix, graph_name, dim):
 
 
 # -------------------------------------------------------------------------
-# Fixed thesis figure: CauseNet / MS MARCO validation / v3
+# Fixed thesis figure: CauseNet / MS MARCO validation / current generation
 # -------------------------------------------------------------------------
 
 # This mode deliberately reads one standard evaluation result file only. It
@@ -2888,7 +2892,7 @@ THESIS_RESULTS_PATH = (
     EVALUATION_DIR
     / "causenet"
     / "msmarco_valid"
-    / "v3"
+    / DEFAULT_RUN_SUFFIX
     / "evaluation_results.json"
 )
 THESIS_OUTPUT_DIR = THESIS_PLOTS_DIR
@@ -2915,26 +2919,25 @@ THESIS_BASELINE_ALGORITHMS = {
     RL_BASELINE_MODEL: "RL",
 }
 
-# Fixed whitelist: unfine-tuned and unrelated fine-tuned/ablation models can
-# never enter the thesis figure merely because new rows appear in the JSON.
-THESIS_FINETUNED_ASTAR_MODELS = (
-    "all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_v3_finetuned",
-    "bge-large-en-v1.5_relu_euclid_nonorm_matryoshka_v3_finetuned",
-    "mxbai-embed-large-v1_relu_euclid_nonorm_matryoshka_v3_finetuned",
-    "Qwen3-Embedding-0.6B_relu_euclid_nonorm_matryoshka_v3_finetuned",
-    "granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v3_finetuned",
+THESIS_FINETUNED_MODEL_SPECS = (
+    ("all-mpnet-base-v2", "FT A*: MPNet", "#0072B2", "o"),
+    ("bge-large-en-v1.5", "FT A*: BGE", "#D55E00", "s"),
+    ("mxbai-embed-large-v1", "FT A*: mxbai", "#009E73", "^"),
+    ("Qwen3-Embedding-0.6B", "FT A*: Qwen", "#CC79A7", "D"),
+    (
+        "granite-embedding-english-r2",
+        "FT A*: Granite",
+        "#E69F00",
+        "P",
+    ),
 )
-THESIS_SYSTEM_ORDER = THESIS_BASELINE_MODELS + THESIS_FINETUNED_ASTAR_MODELS
+THESIS_FINETUNED_ASTAR_MODELS = ()
+THESIS_SYSTEM_ORDER = THESIS_BASELINE_MODELS
 
 THESIS_DISPLAY_LABELS = {
     BFS_UNCAPPED_BASELINE_MODEL: "BFS (uncapped)",
     BFS_CAPPED_BASELINE_MODEL: "BFS (capped)",
     RL_BASELINE_MODEL: "RL baseline",
-    THESIS_FINETUNED_ASTAR_MODELS[0]: "FT A*: MPNet",
-    THESIS_FINETUNED_ASTAR_MODELS[1]: "FT A*: BGE",
-    THESIS_FINETUNED_ASTAR_MODELS[2]: "FT A*: mxbai",
-    THESIS_FINETUNED_ASTAR_MODELS[3]: "FT A*: Qwen",
-    THESIS_FINETUNED_ASTAR_MODELS[4]: "FT A*: Granite",
 }
 
 THESIS_SYSTEM_STYLES = {
@@ -2953,27 +2956,54 @@ THESIS_SYSTEM_STYLES = {
         "linestyle": ":",
         "linewidth": 1.9,
     },
-    THESIS_FINETUNED_ASTAR_MODELS[0]: {
-        "color": "#0072B2",
-        "marker": "o",
-    },
-    THESIS_FINETUNED_ASTAR_MODELS[1]: {
-        "color": "#D55E00",
-        "marker": "s",
-    },
-    THESIS_FINETUNED_ASTAR_MODELS[2]: {
-        "color": "#009E73",
-        "marker": "^",
-    },
-    THESIS_FINETUNED_ASTAR_MODELS[3]: {
-        "color": "#CC79A7",
-        "marker": "D",
-    },
-    THESIS_FINETUNED_ASTAR_MODELS[4]: {
-        "color": "#E69F00",
-        "marker": "P",
-    },
 }
+
+for model_token, display_label, color, marker in THESIS_FINETUNED_MODEL_SPECS:
+    THESIS_DISPLAY_LABELS[model_token] = display_label
+    THESIS_SYSTEM_STYLES[model_token] = {"color": color, "marker": marker}
+
+
+def configure_thesis_finetuned_models(eval_data):
+    """Resolve the five current checkpoints without assuming tuned hparams."""
+    global THESIS_FINETUNED_ASTAR_MODELS
+    global THESIS_SYSTEM_ORDER
+    global THESIS_DISPLAY_LABELS
+    global THESIS_SYSTEM_STYLES
+
+    expected_suffix = f"_{DEFAULT_RUN_SUFFIX}_finetuned"
+    candidate_models = {
+        entry.get("model")
+        for entry in eval_data
+        if isinstance(entry.get("model"), str)
+        and is_finetuned_model_name(entry["model"])
+        and entry["model"].endswith(expected_suffix)
+    }
+
+    resolved_models = []
+    display_labels = dict(THESIS_DISPLAY_LABELS)
+    system_styles = dict(THESIS_SYSTEM_STYLES)
+
+    for model_token, display_label, color, marker in THESIS_FINETUNED_MODEL_SPECS:
+        matches = sorted(
+            model
+            for model in candidate_models
+            if model_token in model
+        )
+        if len(matches) != 1:
+            raise ValueError(
+                "Expected exactly one current fine-tuned thesis checkpoint for "
+                f"{model_token!r}, found {matches}"
+            )
+
+        model = matches[0]
+        resolved_models.append(model)
+        display_labels[model] = display_label
+        system_styles[model] = {"color": color, "marker": marker}
+
+    THESIS_FINETUNED_ASTAR_MODELS = tuple(resolved_models)
+    THESIS_SYSTEM_ORDER = THESIS_BASELINE_MODELS + THESIS_FINETUNED_ASTAR_MODELS
+    THESIS_DISPLAY_LABELS = display_labels
+    THESIS_SYSTEM_STYLES = system_styles
 
 
 def make_thesis_metric_row(model, dimension, algorithm, result, used_config):
@@ -3006,6 +3036,7 @@ def load_thesis_selected_rows():
     eval_data = load_json(THESIS_RESULTS_PATH)
     if not isinstance(eval_data, list):
         raise ValueError(f"Expected a JSON list in {THESIS_RESULTS_PATH}")
+    configure_thesis_finetuned_models(eval_data)
 
     rows = []
     excluded_systems = {}
@@ -3637,7 +3668,7 @@ if __name__ == "__main__":
     else:
         dataset_name = dataset_name_from_arg(args.dataset)
         graph_name = args.graph or DEFAULT_GRAPH_NAME
-        run_suffix = args.run_suffix or "v3"
+        run_suffix = args.run_suffix or DEFAULT_RUN_SUFFIX
 
         if args.ablation:
             plot_ablation_result_set(

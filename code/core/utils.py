@@ -549,11 +549,13 @@ def traverse_graph(
 
     # If either node is not in the graph, no path can exist.
     if start_node not in graph.nodes or end_node not in graph.nodes:
-        return [], 0
+        reachability_only = bool(
+            config and config.get("reachability_only", False)
+        )
+        return (False if reachability_only else []), 0
 
-    # Strategy returns:
-    # - path (list of nodes)
-    # - number of visited nodes (used as cost/efficiency metric)
+    # A strategy returns a path in path mode or a boolean in reachability mode,
+    # plus the number of visited nodes used as the cost/efficiency metric.
     return strategy_fn(graph, start_node, end_node, embeder, config)
 
 
@@ -770,6 +772,31 @@ def get_ablation_reference_model_name(
     normalize_str: str = DEFAULT_ABLATION_NORMALIZE_STR,
     mrl_str: str = DEFAULT_ABLATION_MRL_STR,
 ) -> str:
+    model_prefix = f"{base_model_name}_"
+    model_suffix = (
+        f"_{normalize_str}_{mrl_str}_{run_suffix}_finetuned"
+    )
+    candidates = []
+
+    if os.path.isdir(LIGHTNING_MODELS_DIR):
+        for name in os.listdir(LIGHTNING_MODELS_DIR):
+            model_path = os.path.join(LIGHTNING_MODELS_DIR, name)
+            if (
+                os.path.isdir(model_path)
+                and name.startswith(model_prefix)
+                and name.endswith(model_suffix)
+            ):
+                candidates.append(name)
+
+    if len(candidates) > 1:
+        raise ValueError(
+            "Multiple main ablation-reference models match "
+            f"{base_model_name!r} and run suffix {run_suffix!r}: "
+            f"{sorted(candidates)}"
+        )
+    if len(candidates) == 1:
+        return candidates[0]
+
     activation, distance = DEFAULT_ABLATION_REFERENCE_COMBO
 
     return build_finetuned_model_name(
@@ -790,6 +817,37 @@ def get_ablation_model_names(
     mrl_str: str = DEFAULT_ABLATION_MRL_STR,
 ) -> list[str]:
     """Return all four models in the fixed-order ablation comparison."""
+    reference_name = get_ablation_reference_model_name(
+        run_suffix=run_suffix,
+        base_model_name=base_model_name,
+        normalize_str=normalize_str,
+        mrl_str=mrl_str,
+    )
+    model_prefix = f"{base_model_name}_"
+    model_suffix = (
+        f"_{normalize_str}_{mrl_str}_{run_suffix}_finetuned"
+    )
+    reference_slug = reference_name[
+        len(model_prefix):-len(model_suffix)
+    ]
+    try:
+        reference_activation, reference_distance = reference_slug.split("_", 1)
+    except ValueError as exc:
+        raise ValueError(
+            f"Could not parse activation/distance from {reference_name!r}"
+        ) from exc
+
+    all_combos = (
+        DEFAULT_ABLATION_REFERENCE_COMBO,
+        *DEFAULT_ABLATION_COMBOS,
+    )
+    reference_combo = (reference_activation, reference_distance)
+    if reference_combo not in all_combos:
+        raise ValueError(
+            f"Unsupported ablation reference combination in {reference_name!r}: "
+            f"{reference_combo}"
+        )
+
     variant_names = [
         build_finetuned_model_name(
             base_model_name=base_model_name,
@@ -800,18 +858,11 @@ def get_ablation_model_names(
             run_suffix=run_suffix,
             ablation=True,
         )
-        for activation, distance in DEFAULT_ABLATION_COMBOS
+        for activation, distance in all_combos
+        if (activation, distance) != reference_combo
     ]
 
-    return [
-        get_ablation_reference_model_name(
-            run_suffix=run_suffix,
-            base_model_name=base_model_name,
-            normalize_str=normalize_str,
-            mrl_str=mrl_str,
-        ),
-        *variant_names,
-    ]
+    return [reference_name, *variant_names]
 
 
 def get_ablation_fine_tuned_models(
@@ -823,8 +874,8 @@ def get_ablation_fine_tuned_models(
     """
     Return all four activation/distance comparison model directories.
 
-    The order is fixed for stable tables and plots:
-    relu+euclid (main reference), relu+cosine, gelu+euclid, gelu+cosine.
+    The Optuna-selected main reference comes first, followed by the remaining
+    activation/distance variants in stable canonical order.
     """
     expected_names = get_ablation_model_names(
         run_suffix=run_suffix,

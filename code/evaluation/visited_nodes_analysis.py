@@ -145,6 +145,23 @@ def percentile(values, p):
     return float(np.percentile(values, p))
 
 
+def get_analysis_strategy_config(config, strategy_name, item):
+    strategy_config = dict(config) if config is not None else {}
+
+    if strategy_name in {"A*", "BFS"}:
+        strategy_config["reachability_only"] = True
+
+    if strategy_name == "RL":
+        cause = item["cause"]
+        effect = item["effect"]
+        strategy_config["question"] = item.get(
+            "question",
+            f"can {cause} cause {effect}?",
+        )
+
+    return strategy_config
+
+
 def run_visited_nodes_loop(
         data,
         graph,
@@ -182,15 +199,13 @@ def run_visited_nodes_loop(
 
         start_time = time.time()
 
-        strategy_config = config
-        if strategy_name == "RL":
-            strategy_config = dict(config) if config is not None else {}
-            strategy_config["question"] = item.get(
-                "question",
-                f"can {cause} cause {effect}?"
-            )
+        strategy_config = get_analysis_strategy_config(
+            config,
+            strategy_name,
+            item,
+        )
 
-        path, visited_nodes = traverse_graph(
+        search_result, visited_nodes = traverse_graph(
             graph,
             cause,
             effect,
@@ -201,8 +216,14 @@ def run_visited_nodes_loop(
 
         end_time = time.time()
 
-        pred_label = bool(path)
-        path_length = len(path) if path else 0
+        if isinstance(search_result, bool):
+            pred_label = search_result
+            path = []
+            path_length = 0
+        else:
+            path = search_result
+            pred_label = bool(path)
+            path_length = len(path) if path else 0
         elapsed = end_time - start_time
 
         all_visited_counts.append(int(visited_nodes))

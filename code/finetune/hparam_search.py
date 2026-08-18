@@ -3,6 +3,7 @@ import gc
 import json
 import os
 import sys
+from functools import partial
 from pathlib import Path
 
 import optuna
@@ -27,6 +28,7 @@ from core.constants import (
     LIGHTNING_LOGS_DIR,
     OPTUNA_STUDIES_DIR,
 )
+from core.config import DEFAULT_RUN_SUFFIX
 from finetune.astar_training_core import (
     LitAStar,
     cleanup_zombie_trials,
@@ -48,6 +50,127 @@ torch.set_float32_matmul_precision("medium")
 HPARAM_SEARCH_DEFAULT_BATCH_SIZE = 128
 HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE = 128
 HPARAM_SEARCH_MAX_BATCH_SIZE = 128
+MINIMUM_TERMINAL_TRIALS = 30
+MAXIMUM_TERMINAL_TRIALS = 50
+STUDY_PATIENCE = 5
+TERMINAL_TRIAL_STATES = {"COMPLETE", "PRUNED"}
+
+
+def _trial_state_name(trial):
+    state = trial.state
+    return state if isinstance(state, str) else state.name
+
+
+def terminal_trials(trials):
+    """Return budget-counting trials in trial-number order."""
+    return sorted(
+        (
+            trial
+            for trial in trials
+            if _trial_state_name(trial) in TERMINAL_TRIAL_STATES
+        ),
+        key=lambda trial: trial.number,
+    )
+
+
+def terminal_trial_count(trials):
+    return len(terminal_trials(trials))
+
+
+def trials_without_improvement_after_minimum(
+    trials,
+    minimum_trials=MINIMUM_TERMINAL_TRIALS,
+):
+    """Count budget trials since the latest new best after the minimum."""
+    ordered_trials = terminal_trials(trials)
+    if len(ordered_trials) <= minimum_trials:
+        return 0
+
+    completed_prefix_values = [
+        trial.value
+        for trial in ordered_trials[:minimum_trials]
+        if _trial_state_name(trial) == "COMPLETE" and trial.value is not None
+    ]
+    best_value = min(completed_prefix_values, default=float("inf"))
+    stale_trials = 0
+
+    for trial in ordered_trials[minimum_trials:]:
+        is_new_best = (
+            _trial_state_name(trial) == "COMPLETE"
+            and trial.value is not None
+            and trial.value < best_value
+        )
+
+        if is_new_best:
+            best_value = trial.value
+            stale_trials = 0
+        else:
+            stale_trials += 1
+
+    return stale_trials
+
+
+def run_dynamic_study(study, objective_fn, log=print):
+    """Run the fixed 30/5/50 terminal-trial budget."""
+    current_trial_count = terminal_trial_count(study.trials)
+
+    while current_trial_count < MINIMUM_TERMINAL_TRIALS:
+        trials_to_request = MINIMUM_TERMINAL_TRIALS - current_trial_count
+        log(
+            f"Running {trials_to_request} initial trial(s) to reach "
+            f"{MINIMUM_TERMINAL_TRIALS} budget-counting trials ..."
+        )
+        study.optimize(
+            objective_fn,
+            n_trials=trials_to_request,
+            gc_after_trial=True,
+        )
+        current_trial_count = terminal_trial_count(study.trials)
+
+    stale_trials = trials_without_improvement_after_minimum(study.trials)
+
+    while (
+        current_trial_count < MAXIMUM_TERMINAL_TRIALS
+        and stale_trials < STUDY_PATIENCE
+    ):
+        log(
+            f"Adaptive extension trial {current_trial_count + 1}/"
+            f"{MAXIMUM_TERMINAL_TRIALS} "
+            f"({stale_trials}/{STUDY_PATIENCE} without improvement) ..."
+        )
+        study.optimize(objective_fn, n_trials=1, gc_after_trial=True)
+        current_trial_count = terminal_trial_count(study.trials)
+        stale_trials = trials_without_improvement_after_minimum(study.trials)
+
+    if current_trial_count >= MAXIMUM_TERMINAL_TRIALS:
+        stop_reason = (
+            f"maximum budget of {MAXIMUM_TERMINAL_TRIALS} terminal trials reached"
+        )
+    else:
+        stop_reason = (
+            f"no new best visited-node objective in {STUDY_PATIENCE} "
+            "consecutive adaptive trials"
+        )
+
+    return current_trial_count, stale_trials, stop_reason
+
+
+def validate_study_budget_args(target_trials, minimum_trials, study_patience):
+    if target_trials != MAXIMUM_TERMINAL_TRIALS:
+        raise ValueError(
+            f"trials must be exactly {MAXIMUM_TERMINAL_TRIALS} for the "
+            "dynamic study budget"
+        )
+    if minimum_trials != MINIMUM_TERMINAL_TRIALS:
+        raise ValueError(
+            f"min-trials must be exactly {MINIMUM_TERMINAL_TRIALS} for the "
+            "dynamic study budget"
+        )
+    if study_patience != STUDY_PATIENCE:
+        raise ValueError(
+            f"study-patience must be exactly {STUDY_PATIENCE} for the "
+            "dynamic study budget"
+        )
 
 
 def parse_args():
@@ -97,21 +220,35 @@ def parse_args():
     parser.add_argument(
         "--patience",
         type=int,
-        default=5,
-        help="Number of validation epochs without improvement before early stopping"
+        default=3,
+        help="Number of validation epochs without improvement before early stopping (default: 3)"
     )
 
     parser.add_argument(
         "--trials",
         type=int,
-        default=50,
-        help="Number of Optuna trials for activation, distance metric, and learning rate search"
+        default=MAXIMUM_TERMINAL_TRIALS,
+        help="Maximum number of Optuna trials (default: 50)"
+    )
+
+    parser.add_argument(
+        "--min-trials",
+        type=int,
+        default=MINIMUM_TERMINAL_TRIALS,
+        help="Trials to finish before adaptive study stopping begins (default: 30)"
+    )
+
+    parser.add_argument(
+        "--study-patience",
+        type=int,
+        default=STUDY_PATIENCE,
+        help="Additional terminal trials without a new best objective before stopping (default: 5)"
     )
 
     parser.add_argument(
         "--run-suffix",
         type=str,
-        default="v3",
+        default=DEFAULT_RUN_SUFFIX,
         help="Suffix for Optuna study and hparam-search log names"
     )
 
@@ -239,7 +376,11 @@ def run_training_trial(f_trial, f_model_path, f_curr_model_name, f_train_dataset
 
     pruning_callback.check_pruned()
 
-    score = trainer.callback_metrics["val/astar_cost"].item()
+    # Final training exports its best validation checkpoint, so Optuna must rank
+    # configurations by the same quantity. The callback metric here is only the
+    # last validation value and can be much worse than the best value observed
+    # before the trial stopped.
+    score = early_stop.best_score.item()
 
     del model, trainer, train_loader, valid_loader
     gc.collect()
@@ -312,6 +453,8 @@ if __name__ == "__main__":
     epochs = args.epochs
     patience = args.patience
     target_trials = args.trials
+    requested_minimum_trials = args.min_trials
+    study_patience = args.study_patience
     run_suffix = args.run_suffix
     fixed_activation = canonical_activation(args.activation)
     fixed_distance = canonical_distance(args.distance)
@@ -334,8 +477,15 @@ if __name__ == "__main__":
         raise ValueError("patience must be >= 0")
     if patience >= epochs:
         print("Warning: patience >= epochs, so early stopping will probably not trigger.")
+    validate_study_budget_args(
+        target_trials,
+        requested_minimum_trials,
+        study_patience,
+    )
     if fixed_lr is not None and fixed_lr <= 0:
         raise ValueError("lr must be > 0")
+
+    minimum_trials = requested_minimum_trials
 
     # Keep smaller physical batches at the target effective batch size with
     # accumulation. Larger explicitly requested batches run directly.
@@ -345,7 +495,13 @@ if __name__ == "__main__":
         accumulate_grad_batches = 1
 
     hparam_search_space_slug = build_search_space_slug(fixed_activation, fixed_distance, fixed_lr)
-    full_search_space_slug = build_search_space_slug(None, None, None)
+    # Epoch count, patience, and objective semantics affect trial comparability.
+    # Include them in the lookup prefix so corrected trials are never appended
+    # to an older study that used different stopping or scoring behavior.
+    study_config_slug = (
+        f"{hparam_search_space_slug}_{epochs}epochs_{patience}patience_"
+        "best-score_global-reg_reachability-v1"
+    )
 
     print(f"Max hparam search batch size: {HPARAM_SEARCH_MAX_BATCH_SIZE}")
     print(f"Target effective batch size: {HPARAM_SEARCH_TARGET_EFFECTIVE_BATCH_SIZE}")
@@ -354,7 +510,9 @@ if __name__ == "__main__":
     print(f"Effective batch size: {batch_size * accumulate_grad_batches}")
     print(f"Search epochs per trial: {epochs}")
     print(f"Search patience: {patience}")
-    print(f"Optuna trials: {target_trials}")
+    print(f"Minimum Optuna trials: {minimum_trials}")
+    print(f"Maximum Optuna trials: {target_trials}")
+    print(f"Adaptive study patience: {study_patience}")
     print(f"Run suffix: {run_suffix}")
     print(f"Activation: {fixed_activation if fixed_activation is not None else 'search'}")
     print(f"Distance: {fixed_distance if fixed_distance is not None else 'search'}")
@@ -412,29 +570,15 @@ if __name__ == "__main__":
         interval_steps=1,
     )
 
-    # Reuse the latest matching hparam search study if one already exists.
-    # This allows continuing older studies even if the naming scheme changes.
+    # Reuse only a study with identical search and objective semantics.
     latest_study = find_latest_hparam_study(
         optuna_hparam_search_dir=optuna_hparam_search_dir,
         curr_model_name=curr_model_name,
         normalize_str=normalize_str,
         mrl_str=mrl_str,
         run_suffix=run_suffix,
-        hparam_search_space_slug=hparam_search_space_slug,
+        hparam_search_space_slug=study_config_slug,
     )
-
-    # Old full-search studies did not include an explicit search-space slug.
-    # Keep them resumable, but do not let a full search resume a fixed-search study.
-    if latest_study is None and hparam_search_space_slug == full_search_space_slug:
-        latest_study = find_latest_hparam_study(
-            optuna_hparam_search_dir=optuna_hparam_search_dir,
-            curr_model_name=curr_model_name,
-            normalize_str=normalize_str,
-            mrl_str=mrl_str,
-            run_suffix=run_suffix,
-            hparam_search_space_slug=None,
-            include_slugged_studies=False,
-        )
 
     if latest_study is not None:
         optuna_db_path, study_name = latest_study
@@ -452,7 +596,8 @@ if __name__ == "__main__":
         # and easier manual inspection of study files.
         study_name = (
             f"{curr_model_name}_{normalize_str}_{mrl_str}_{run_suffix}_"
-            f"{hparam_search_space_slug}_{target_trials}trials_{epochs}epochs_{patience}patience"
+            f"{study_config_slug}_max{target_trials}trials_min{minimum_trials}trials_"
+            f"{study_patience}study-patience"
         )
 
         optuna_db_path = optuna_hparam_search_dir / f"{study_name}.sqlite3"
@@ -475,39 +620,51 @@ if __name__ == "__main__":
 
     cleanup_zombie_trials(study, "hparam_search")
 
-    completed_trials = [
-        t for t in study.trials
-        if t.state in [optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED]
-    ]
+    objective_fn = partial(
+        objective,
+        f_model_path=model_path,
+        f_curr_model_name=curr_model_name,
+        f_datasets_by_distance=datasets_by_distance,
+        f_batch_size=batch_size,
+        f_accumulate_grad_batches=accumulate_grad_batches,
+        f_normalize=normalize,
+        f_use_matryoshka=use_matryoshka,
+        f_epochs=epochs,
+        f_patience=patience,
+        f_causal_graph=causal_graph,
+        f_fixed_activation=fixed_activation,
+        f_fixed_distance=fixed_distance,
+        f_fixed_lr=fixed_lr,
+        f_run_suffix=run_suffix,
+    )
 
-    trials_to_run = target_trials - len(completed_trials)
+    current_trial_count, _, stop_reason = run_dynamic_study(
+        study,
+        objective_fn,
+    )
+    complete_trial_count = sum(
+        _trial_state_name(trial) == "COMPLETE"
+        for trial in study.trials
+    )
+    pruned_trial_count = sum(
+        _trial_state_name(trial) == "PRUNED"
+        for trial in study.trials
+    )
+    study.set_user_attr("dynamic_budget_minimum", MINIMUM_TERMINAL_TRIALS)
+    study.set_user_attr("dynamic_budget_maximum", MAXIMUM_TERMINAL_TRIALS)
+    study.set_user_attr("dynamic_budget_patience", STUDY_PATIENCE)
+    study.set_user_attr("dynamic_stop_reason", stop_reason)
+    study.set_user_attr("complete_trial_count", complete_trial_count)
+    study.set_user_attr("pruned_trial_count", pruned_trial_count)
 
-    if trials_to_run > 0:
-        print(f"Running hparam search study for {curr_model_name} for {trials_to_run} trials ...")
-        study.optimize(
-            lambda l_trial: objective(
-                l_trial,
-                model_path,
-                curr_model_name,
-                datasets_by_distance,
-                batch_size,
-                accumulate_grad_batches,
-                normalize,
-                use_matryoshka,
-                epochs,
-                patience,
-                causal_graph,
-                fixed_activation,
-                fixed_distance,
-                fixed_lr,
-                run_suffix,
-            ),
-            n_trials=trials_to_run,
-            gc_after_trial=True
-        )
-        print(f"Finished hparam search study for {curr_model_name}.")
-    else:
-        print("Hparam search study is already complete.")
+    print(
+        f"Finished hparam search study for {curr_model_name} after "
+        f"{current_trial_count} terminal trials: {stop_reason}."
+    )
+    print(
+        f"Terminal trial states: COMPLETE={complete_trial_count}, "
+        f"PRUNED={pruned_trial_count}."
+    )
 
     print("=" * 80)
     print("BEST HPARAMS")

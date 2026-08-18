@@ -12,6 +12,7 @@ import json
 import math
 from pathlib import Path
 
+from core.config import DEFAULT_RUN_SUFFIX
 from core.constants import EVALUATION_DIR, REPORTS_DIR
 from core.utils import get_model_base_name, is_finetuned_model_name
 from reports.common import (
@@ -27,7 +28,6 @@ from reports.common import (
 REPORT_NAME = "p95_visited_nodes"
 DEFAULT_GRAPH = "causenet"
 DEFAULT_DATASET = "msmarco_train"
-DEFAULT_RUN_SUFFIX = "v3"
 DEFAULT_STRATEGY = "A*"
 DEFAULT_METRIC = "p95_visited_successful_only"
 DEFAULT_MODEL_FAMILY = "finetuned"

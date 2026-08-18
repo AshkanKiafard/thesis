@@ -110,6 +110,9 @@ class MatryoshkaAStarLoss(nn.Module):
         # than a bad successor.
         diff = (d_cp + d_pe) - (d_cn + d_ne)
 
+        return self.activation_func(diff).mean()
+
+    def compute_regularization(self, c_emb, e_emb, p_emb, n_emb):
         # If embeddings are not normalized explicitly, keep their norms roughly stable.
         embeddings_sum = (
                 (torch.linalg.vector_norm(c_emb, dim=-1) - 1) ** 2
@@ -120,7 +123,7 @@ class MatryoshkaAStarLoss(nn.Module):
 
         regularization = embeddings_sum.mean() if not self.normalize else 0.0
 
-        return self.activation_func(diff).mean() + regularization
+        return regularization
 
     def forward(self, sentence_features):
         # sentence_features contains:
@@ -147,7 +150,16 @@ class MatryoshkaAStarLoss(nn.Module):
 
             total_loss += self.compute_sub_loss(cf, ef, pf, nf)
 
-        return total_loss
+        # The dimensional ranking losses are summed, while the unchanged norm
+        # regularizer is applied once to the complete embeddings.
+        global_regularization = self.compute_regularization(
+            c_raw,
+            e_raw,
+            p_raw,
+            n_raw,
+        )
+
+        return total_loss + global_regularization
 
 
 class LitAStar(pl.LightningModule):
@@ -340,7 +352,14 @@ class LitAStar(pl.LightningModule):
             if (u, v) in self.result_cache:
                 visits = self.result_cache[(u, v)]
             else:
-                _, visits = traverse_graph(self.graph, u, v, self, ts.astar_traverse, None)
+                _, visits = traverse_graph(
+                    self.graph,
+                    u,
+                    v,
+                    self,
+                    ts.astar_traverse,
+                    {"reachability_only": True},
+                )
                 self.result_cache[(u, v)] = visits
 
             total_visits += visits

@@ -407,6 +407,23 @@ def cleanup_cuda_cache() -> None:
     torch.cuda.empty_cache()
 
 
+def get_evaluation_strategy_config(config, strategy_name, item=None):
+    strategy_config = dict(config) if config is not None else {}
+
+    if strategy_name in {"A*", "BFS"}:
+        strategy_config["reachability_only"] = True
+
+    if strategy_name == "RL" and item is not None:
+        cause = item["cause"]
+        effect = item["effect"]
+        strategy_config["question"] = item.get(
+            "question",
+            f"can {cause} cause {effect}?",
+        )
+
+    return strategy_config
+
+
 def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=None):
     """
     Run one untimed traversal before evaluation.
@@ -425,13 +442,11 @@ def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=N
         if cause not in graph.nodes or effect not in graph.nodes:
             continue
 
-        strategy_config = config
-        if strategy_name == "RL":
-            strategy_config = dict(config) if config is not None else {}
-            strategy_config["question"] = item.get(
-                "question",
-                f"can {cause} cause {effect}?"
-            )
+        strategy_config = get_evaluation_strategy_config(
+            config,
+            strategy_name,
+            item,
+        )
 
         traverse_graph(
             graph,
@@ -648,18 +663,16 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
         true_label = bool(item["answer"])
 
         for name, strategy in strategies.items():
-            strategy_config = config
-            if name == "RL":
-                strategy_config = dict(config) if config is not None else {}
-                strategy_config["question"] = item.get(
-                    "question",
-                    f"can {cause} cause {effect}?"
-                )
+            strategy_config = get_evaluation_strategy_config(
+                config,
+                name,
+                item,
+            )
 
             synchronize_embedding_device(embeder)
             start_time = time.perf_counter()
 
-            path, visited_nodes = traverse_graph(
+            search_result, visited_nodes = traverse_graph(
                 graph,
                 cause,
                 effect,
@@ -670,10 +683,16 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
 
             synchronize_embedding_device(embeder)
             elapsed = time.perf_counter() - start_time
-            pred_label = bool(path)
-
-            path_length = len(path) if path else 0
-            path_cost = compute_embedding_path_cost(path, embeder)
+            if isinstance(search_result, bool):
+                pred_label = search_result
+                path = []
+                path_length = 0
+                path_cost = None
+            else:
+                path = search_result
+                pred_label = bool(path)
+                path_length = len(path) if path else 0
+                path_cost = compute_embedding_path_cost(path, embeder)
 
             results[name]["y_true"].append(true_label)
             results[name]["y_pred"].append(pred_label)

@@ -114,6 +114,9 @@ def load_astar_candidates(evaluation_results_path):
                 ),
                 "avg_time_ms": get_avg_time_ms(metrics),
                 "num_examples": get_metric(metrics, "num_examples", 0),
+                "astar_max_visits": entry.get("used_config", {}).get(
+                    "astar_max_visits"
+                ),
             }
         )
 
@@ -295,6 +298,7 @@ def print_selection(selection_result, top_k=20):
     print(f"Precision:          {best['precision']:.6f}")
     print(f"Avg visited nodes:  {best['avg_nodes_visited']:.2f}")
     print(f"Avg time ms:        {best['avg_time_ms']:.2f}")
+    print(f"p95 visit budget:   {best['astar_max_visits']}")
     print(f"Num examples:       {best['num_examples']}")
 
     print("\nTEST EVALUATION PARAMETERS")
