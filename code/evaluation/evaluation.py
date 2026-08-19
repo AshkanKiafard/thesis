@@ -3,6 +3,7 @@ import csv
 import gc
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -56,7 +57,6 @@ from core.utils import (
     load_causal_graph,
     load_rl_graph,
     traverse_graph,
-    validate_fine_tuned_model_set,
 )
 from evaluation.select_best_model import select_best_astar_model, print_selection
 
@@ -579,6 +579,29 @@ def save_result(
                 f"'{result_entry['model']}'."
             )
 
+    if replace_existing is None:
+        completed_algorithms = {
+            algorithm
+            for entry in current_results
+            if entry.get("model") == result_entry.get("model")
+            and entry.get("dimension") == result_entry.get("dimension")
+            for algorithm in entry.get("evaluation", {})
+        }
+        pending_evaluation = {
+            algorithm: summary
+            for algorithm, summary in result_entry.get("evaluation", {}).items()
+            if algorithm not in completed_algorithms
+        }
+        if not pending_evaluation:
+            print(
+                "Skipping already saved evaluation result for "
+                f"'{result_entry['model']}' dim {result_entry.get('dimension')}"
+            )
+            return
+        if len(pending_evaluation) != len(result_entry.get("evaluation", {})):
+            result_entry = dict(result_entry)
+            result_entry["evaluation"] = pending_evaluation
+
     current_results.append(result_entry)
 
     with open(output_json_file, "w", encoding="utf-8") as file:
@@ -943,8 +966,9 @@ def parse_args():
         "--fine-tuned-only",
         action="store_true",
         help=(
-            "On validation splits, evaluate exactly one fine-tuned model per "
-            "configured base model and skip pretrained base models."
+            "On validation splits, evaluate every currently available "
+            "fine-tuned model for this run suffix and skip pretrained base "
+            "models."
         ),
     )
     parser.add_argument(
@@ -1121,17 +1145,24 @@ if __name__ == "__main__":
     else:
         fine_tuned_models = get_fine_tuned_models(run_suffix)
         if args.fine_tuned_only:
-            validate_fine_tuned_model_set(
-                fine_tuned_models,
-                BASE_MODELS,
-                run_suffix,
-            )
+            if not fine_tuned_models:
+                print(
+                    "No fine-tuned models are available for suffix "
+                    f"'{run_suffix}'. Nothing to evaluate."
+                )
+                sys.exit(0)
             model_queue = sort_model_queue(fine_tuned_models, run_suffix)
         else:
             model_queue = sort_model_queue(
                 list(BASE_MODELS) + fine_tuned_models,
                 run_suffix,
             )
+        if fine_tuned_models:
+            print(
+                f"Available fine-tuned models ({len(fine_tuned_models)}):"
+            )
+            for model_path in fine_tuned_models:
+                print(f"  {model_path}")
         print("Model queue:", model_queue)
 
     (
@@ -1267,6 +1298,7 @@ if __name__ == "__main__":
 
         for model_path in semantic_model_queue:
             model_name = get_model_name(model_path)
+            pending_dimension_count = 0
 
             print(f"\nEVALUATING: {model_path}")
 
@@ -1343,9 +1375,10 @@ if __name__ == "__main__":
                         EMBEDDING_INDEX_MIN_SUCCESSORS
                     )
                     pending_work.append((dim, pending_strategies, used_config))
+                    pending_dimension_count += 1
 
                 if not pending_work:
-                    print(f"No pending dimensions for {model_name}.")
+                    print(f"Already completed: {model_name}")
                     del main_embeder
                     gc.collect()
                     cleanup_cuda_cache()
@@ -1423,6 +1456,11 @@ if __name__ == "__main__":
                             else None
                         ),
                     )
+
+                print(
+                    f"Processed {pending_dimension_count} pending "
+                    f"dimension(s) for {model_name}."
+                )
 
                 del main_embeder
                 gc.collect()

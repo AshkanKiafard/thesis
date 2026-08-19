@@ -67,8 +67,6 @@ RESULTS_DIR = EVALUATION_DIR / EXPERIMENT_NAME
 PLOT_DIR = PLOTS_DIR / EXPERIMENT_NAME
 RESULTS_CSV_PATH = RESULTS_DIR / "budget_tradeoff_results.csv"
 RESULTS_JSON_PATH = RESULTS_DIR / "budget_tradeoff_results.json"
-PLOT_PDF_PATH = PLOT_DIR / "budget_tradeoff.pdf"
-PLOT_PNG_PATH = PLOT_DIR / "budget_tradeoff.png"
 
 CSV_FIELDS = (
     "model",

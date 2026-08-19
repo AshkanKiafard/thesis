@@ -415,6 +415,15 @@ def main():
             f"Found {len(fine_tuned_models)} fine-tuned models for suffix "
             f"'{args.run_suffix}'."
         )
+        if fine_tuned_models:
+            print("Available fine-tuned models:")
+            for model_path in fine_tuned_models:
+                print(f"  {model_path}")
+        else:
+            print(
+                "No fine-tuned models are available yet. Continuing with "
+                "the configured base-model caches only."
+            )
 
         model_queue = list(BASE_MODELS) + fine_tuned_models
 

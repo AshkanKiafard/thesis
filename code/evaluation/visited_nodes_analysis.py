@@ -2,6 +2,7 @@ import argparse
 import gc
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -44,7 +45,6 @@ from core.utils import (
     get_matryoshka_dims,
     load_causal_graph,
     load_rl_graph,
-    validate_fine_tuned_model_set,
 )
 
 # -------------------------------------------------------------------------
@@ -107,6 +107,20 @@ def save_result(result_entry, output_json_file):
     Append one finished result entry to the JSON file.
     """
     current_results = load_results_file(output_json_file)
+    strategy = result_entry.get("analysis", {}).get("strategy")
+    if already_done(
+        current_results,
+        result_entry["model"],
+        result_entry.get("dimension"),
+        strategy,
+    ):
+        print(
+            "Skipping already saved visited-node result for "
+            f"'{result_entry['model']}' dim {result_entry.get('dimension')} "
+            f"strategy {strategy}"
+        )
+        return
+
     current_results.append(result_entry)
 
     with open(output_json_file, "w", encoding="utf-8") as file:
@@ -371,8 +385,8 @@ def parse_args():
         "--fine-tuned-only",
         action="store_true",
         help=(
-            "Analyze exactly one fine-tuned model for each configured base "
-            "model and skip pretrained base models."
+            "Analyze every currently available fine-tuned model for this run "
+            "suffix and skip pretrained base models."
         ),
     )
     parser.add_argument(
@@ -408,6 +422,8 @@ if __name__ == "__main__":
     if args.ablation and args.fine_tuned_only:
         raise ValueError("--ablation cannot be combined with --fine-tuned-only")
 
+    fine_tuned_models = []
+
     if args.ablation:
         model_queue = get_ablation_fine_tuned_models(run_suffix)
         expected_model_names = set(get_ablation_model_names(run_suffix))
@@ -422,11 +438,12 @@ if __name__ == "__main__":
     else:
         fine_tuned_models = get_fine_tuned_models(run_suffix)
         if args.fine_tuned_only:
-            validate_fine_tuned_model_set(
-                fine_tuned_models,
-                BASE_MODELS,
-                run_suffix,
-            )
+            if not fine_tuned_models:
+                print(
+                    "No fine-tuned models are available for suffix "
+                    f"'{run_suffix}'. Nothing to analyze."
+                )
+                sys.exit(0)
             model_queue = fine_tuned_models
         else:
             model_queue = list(BASE_MODELS) + fine_tuned_models
@@ -447,6 +464,12 @@ if __name__ == "__main__":
     if embedding_cache_suffix:
         print(f"Embedding cache suffix: {embedding_cache_suffix}")
     print(f"Embedding node universe: {node_universe}")
+    if fine_tuned_models:
+        print(
+            f"Available fine-tuned models ({len(fine_tuned_models)}):"
+        )
+        for model_path in fine_tuned_models:
+            print(f"  {model_path}")
     print("Model queue:", model_queue)
 
     # RL still needs these parameters
@@ -593,6 +616,7 @@ if __name__ == "__main__":
 
     for model_path in model_queue:
         model_name = model_path.split("/")[-1]
+        pending_dimension_count = 0
 
         print(f"\nCOLLECTING EMBEDDING STRATEGIES: {model_path}")
 
@@ -650,6 +674,8 @@ if __name__ == "__main__":
                     print(f"Skipping {model_name} dim {dim}")
                     continue
 
+                pending_dimension_count += 1
+
                 main_embeder.set_matryoshka_dim(dim)
                 print(
                     "Loading graph embedding index at Matryoshka dim "
@@ -701,6 +727,14 @@ if __name__ == "__main__":
             del main_embeder
             gc.collect()
             torch.cuda.empty_cache()
+
+            if pending_dimension_count == 0:
+                print(f"Already completed: {model_name}")
+            else:
+                print(
+                    f"Processed {pending_dimension_count} pending "
+                    f"dimension(s) for {model_name}."
+                )
 
         except Exception as e:
             print(f"Error for {model_path}: {e}")

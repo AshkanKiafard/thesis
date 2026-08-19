@@ -37,8 +37,7 @@ from core.utils import (
 from evaluation.run_budget_tradeoff import (
     BUDGETS as TRADEOFF_BUDGETS,
     MODEL_NAMES as TRADEOFF_MODEL_NAMES,
-    PLOT_PDF_PATH as TRADEOFF_PDF_PATH,
-    PLOT_PNG_PATH as TRADEOFF_PNG_PATH,
+    PLOT_DIR as TRADEOFF_PLOT_DIR,
     RESULTS_CSV_PATH as TRADEOFF_RESULTS_PATH,
     validate_aggregated_results as validate_tradeoff_results,
 )
@@ -206,7 +205,7 @@ def parse_args():
         "--tradeoff",
         action="store_true",
         help=(
-            "Create the budget trade-off figure from "
+            "Create all budget trade-off figure variants from "
             "data/evaluation/budget_tradeoff/budget_tradeoff_results.csv."
         ),
     )
@@ -2944,17 +2943,17 @@ THESIS_SYSTEM_STYLES = {
     BFS_UNCAPPED_BASELINE_MODEL: {
         "color": "#111111",
         "linestyle": "--",
-        "linewidth": 1.6,
+        "linewidth": 2.1,
     },
     BFS_CAPPED_BASELINE_MODEL: {
         "color": "#666666",
         "linestyle": "-.",
-        "linewidth": 1.6,
+        "linewidth": 2.1,
     },
     RL_BASELINE_MODEL: {
         "color": "#9A9A9A",
         "linestyle": ":",
-        "linewidth": 1.9,
+        "linewidth": 2.4,
     },
 }
 
@@ -3178,9 +3177,9 @@ def plot_thesis_metric_panel(
             [float(row[metric_key]) for row in model_rows],
             markerfacecolor=style["color"],
             markeredgecolor=style["color"],
-            markeredgewidth=0.75,
-            markersize=6.0,
-            linewidth=1.8,
+            markeredgewidth=0.9,
+            markersize=8.0,
+            linewidth=2.3,
             zorder=3 + draw_index * 0.05,
             **style,
         )
@@ -3203,13 +3202,13 @@ def plot_thesis_metric_panel(
     ax.set_title(
         f"{panel_label}  {title}",
         loc="left",
-        fontsize=14,
+        fontsize=20,
         fontweight="semibold",
     )
-    ax.set_xlabel("Embedding dimension", fontsize=12)
+    ax.set_xlabel("Embedding dimension", fontsize=18)
     ax.set_xticks(range(len(dimensions)))
     ax.set_xticklabels([str(dimension) for dimension in dimensions], rotation=35)
-    ax.tick_params(axis="both", which="major", labelsize=11.5)
+    ax.tick_params(axis="both", which="major", labelsize=17)
     ax.grid(axis="y", which="major", color="#D2D2D2", linewidth=0.65)
     ax.grid(axis="y", which="minor", color="#E8E8E8", linewidth=0.45)
     ax.set_axisbelow(True)
@@ -3229,11 +3228,21 @@ def plot_thesis_metric_panel(
         ]
         ax.set_ylim(min(positive_values) / 1.3, max(positive_values) * 1.5)
 
+def get_thesis_legend_model_order():
+    astar_legend_order = sorted(
+        THESIS_FINETUNED_ASTAR_MODELS,
+        key=lambda model: THESIS_DISPLAY_LABELS[model]
+        .removeprefix("FT A*: ")
+        .casefold(),
+    )
+    return (*THESIS_BASELINE_MODELS, *astar_legend_order)
+
+
 def build_thesis_legend_handles(rows):
     present_models = {row["model"] for row in rows}
     handles = []
 
-    for model in THESIS_SYSTEM_ORDER:
+    for model in get_thesis_legend_model_order():
         if model not in present_models:
             continue
         style = dict(THESIS_SYSTEM_STYLES[model])
@@ -3241,10 +3250,10 @@ def build_thesis_legend_handles(rows):
             style.update(
                 {
                     "linestyle": "-",
-                    "linewidth": 1.6,
-                    "markersize": 5.4,
+                    "linewidth": 2.1,
+                    "markersize": 7.0,
                     "markeredgecolor": style["color"],
-                    "markeredgewidth": 0.75,
+                    "markeredgewidth": 0.9,
                 }
             )
         handles.append(
@@ -3252,6 +3261,18 @@ def build_thesis_legend_handles(rows):
         )
 
     return handles
+
+
+def pack_legend_handles_row_major(handles, ncols):
+    """Compensate for Matplotlib's column-major multi-row legend layout."""
+
+    nrows = math.ceil(len(handles) / ncols)
+    return [
+        handles[row * ncols + column]
+        for column in range(ncols)
+        for row in range(nrows)
+        if row * ncols + column < len(handles)
+    ]
 
 
 def save_thesis_figure(fig, stem):
@@ -3307,12 +3328,16 @@ def create_thesis_main_figure(rows):
         log_scale=True,
     )
 
+    legend_columns = 4
     fig.legend(
-        handles=build_thesis_legend_handles(rows),
+        handles=pack_legend_handles_row_major(
+            build_thesis_legend_handles(rows),
+            legend_columns,
+        ),
         loc="lower center",
-        ncol=4,
+        ncol=legend_columns,
         frameon=False,
-        fontsize=10,
+        fontsize=16,
         columnspacing=1.3,
         handlelength=2.5,
     )
@@ -3333,7 +3358,7 @@ def print_thesis_selection_report(rows, excluded_systems):
     print("\nIncluded systems (in legend order):")
     present_models = {row["model"] for row in rows}
 
-    for model in THESIS_SYSTEM_ORDER:
+    for model in get_thesis_legend_model_order():
         if model not in present_models:
             continue
         run_type = (
@@ -3385,7 +3410,19 @@ def plot_thesis_causenet_msmarco_valid():
 # -------------------------------------------------------------------------
 
 TRADEOFF_PNG_DPI = 400
-TRADEOFF_X_TICKS = (4, 5, 10, 20, 40, 70)
+TRADEOFF_METRICS = {
+    "visited_nodes": {
+        "column": "average_visited_nodes",
+        "axis_label": "Average Visited Nodes",
+        "log_ticks": (4, 5, 10, 20, 40, 70),
+    },
+    "runtime_ms": {
+        "column": "average_runtime_ms",
+        "axis_label": "Average Runtime (ms)",
+        "log_ticks": (0.8, 1, 2, 4, 8),
+    },
+}
+TRADEOFF_SCALES = ("linear", "log")
 TRADEOFF_SHORT_MODEL_NAMES = {
     "FT A*: MPNet": "MPNet",
     "FT A*: BGE": "BGE",
@@ -3393,7 +3430,18 @@ TRADEOFF_SHORT_MODEL_NAMES = {
     "FT A*: Qwen": "Qwen",
     "FT A*: Granite": "Granite",
 }
-
+TRADEOFF_BUDGET_MARKER_SIZES = {
+    5: 42,
+    10: 49,
+    20: 57,
+    30: 66,
+    40: 75,
+    50: 84,
+    75: 96,
+    100: 109,
+    150: 123,
+    200: 138,
+}
 
 def load_budget_tradeoff_rows():
     """Load and strictly validate the expected five-by-ten result matrix."""
@@ -3411,47 +3459,97 @@ def load_budget_tradeoff_rows():
 
 
 def get_tradeoff_style(model_name):
-    checkpoint_name = next(
-        checkpoint
-        for checkpoint, display_name in THESIS_DISPLAY_LABELS.items()
-        if display_name == model_name
-    )
-    return THESIS_SYSTEM_STYLES[checkpoint_name]
+    for _model_token, display_name, color, marker in THESIS_FINETUNED_MODEL_SPECS:
+        if display_name == model_name:
+            return {"color": color, "marker": marker}
+
+    raise KeyError(f"Unknown trade-off model name: {model_name}")
 
 
-def create_budget_tradeoff_figure(tradeoff_df):
-    """Plot clean trade-off curves above an aligned per-model budget key."""
+def configure_tradeoff_x_axis(ax, values, metric_config, x_scale):
+    """Apply one explicit x-axis configuration to a trade-off plot."""
+
+    minimum = float(values.min())
+    maximum = float(values.max())
+    if x_scale == "log":
+        if minimum <= 0:
+            raise ValueError(
+                f"{metric_config['axis_label']} must be positive for a log axis"
+            )
+        ax.set_xscale("log")
+        ax.set_xlim(minimum / 1.08, maximum * 1.08)
+        ticks = metric_config["log_ticks"]
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([f"{tick:g}" for tick in ticks])
+        return
+
+    if x_scale != "linear":
+        raise ValueError(f"Unsupported trade-off x-axis scale: {x_scale}")
+    ax.set_xscale("linear")
+    ax.set_xlim(0.0, maximum * 1.04)
+
+
+def create_budget_tradeoff_figure(
+    tradeoff_df,
+    x_metric="visited_nodes",
+    x_scale="log",
+):
+    """Plot trade-off curves with visit budget encoded by marker size."""
+
+    try:
+        metric_config = TRADEOFF_METRICS[x_metric]
+    except KeyError as exc:
+        choices = ", ".join(TRADEOFF_METRICS)
+        raise ValueError(
+            f"Unsupported trade-off x metric '{x_metric}'. Choices: {choices}"
+        ) from exc
+    x_column = metric_config["column"]
 
     apply_thesis_plot_style()
-    fig = plt.figure(figsize=(10.2, 7.6))
-    grid = fig.add_gridspec(
-        2,
-        1,
-        height_ratios=(4.4, 1.7),
-        hspace=0.08,
-    )
-    ax = fig.add_subplot(grid[0])
-    budget_ax = fig.add_subplot(grid[1], sharex=ax)
-    model_subsets = {}
+    fig, ax = plt.subplots(figsize=(10.2, 5.3))
+    model_legend_entries = []
 
     for line_index, model_name in enumerate(TRADEOFF_MODEL_NAMES):
         subset = tradeoff_df[tradeoff_df["model"] == model_name].sort_values(
             "budget"
         )
-        model_subsets[model_name] = subset
         style = get_tradeoff_style(model_name)
         ax.plot(
-            subset["average_visited_nodes"],
+            subset[x_column],
             subset["f1"],
-            label=model_name,
+            color=style["color"],
+            linewidth=2.3,
+            zorder=2 + line_index * 0.05,
+        )
+        ax.scatter(
+            subset[x_column],
+            subset["f1"],
             color=style["color"],
             marker=style["marker"],
-            markerfacecolor=style["color"],
-            markeredgecolor="white",
-            markeredgewidth=0.7,
-            markersize=6.2,
-            linewidth=1.8,
+            edgecolor="white",
+            linewidth=0.9,
+            s=[
+                TRADEOFF_BUDGET_MARKER_SIZES[int(budget)]
+                for budget in subset["budget"]
+            ],
             zorder=3 + line_index * 0.05,
+        )
+        model_legend_entries.append(
+            (
+                model_name,
+                Line2D(
+                    [0],
+                    [0],
+                    color=style["color"],
+                    marker=style["marker"],
+                    markerfacecolor=style["color"],
+                    markeredgecolor="white",
+                    markeredgewidth=0.9,
+                    markersize=8.0,
+                    linewidth=2.3,
+                    label=model_name,
+                ),
+            )
         )
 
     f1_values = tradeoff_df["f1"].astype(float)
@@ -3460,154 +3558,106 @@ def create_budget_tradeoff_figure(tradeoff_df):
     upper = min(1.0, float(f1_values.max()) + 0.14 * f1_range)
     ax.set_ylim(lower, upper)
     ax.yaxis.set_major_formatter(FormatStrFormatter("%.2f"))
-    visited_values = tradeoff_df["average_visited_nodes"].astype(float)
-    if (visited_values <= 0).any():
-        raise ValueError(
-            "Average visited nodes must be positive for the logarithmic axis"
-        )
-
-    ax.set_xscale("log")
-    ax.set_xlim(
-        float(visited_values.min()) / 1.08,
-        float(visited_values.max()) * 1.08,
+    x_values = tradeoff_df[x_column].astype(float)
+    configure_tradeoff_x_axis(ax, x_values, metric_config, x_scale)
+    ax.set_ylabel(r"F$_1$ Score", fontsize=17)
+    scale_suffix = " (log scale)" if x_scale == "log" else ""
+    ax.set_xlabel(
+        f"{metric_config['axis_label']}{scale_suffix}",
+        fontsize=17,
     )
-    ax.set_ylabel(r"F$_1$ Score", fontsize=12)
-    ax.text(
-        0.012,
-        0.982,
-        "(a) Efficiency–effectiveness trade-off",
-        transform=ax.transAxes,
-        ha="left",
-        va="top",
-        fontsize=10,
-        zorder=5,
-    )
+    ax.tick_params(axis="both", which="major", labelsize=15)
     ax.grid(axis="both", which="major", color="#D7D7D7", linewidth=0.65)
     ax.set_axisbelow(True)
-    ax.tick_params(
-        axis="x",
-        which="both",
-        bottom=False,
-        labelbottom=False,
+    sorted_legend_entries = sorted(
+        model_legend_entries,
+        key=lambda entry: TRADEOFF_SHORT_MODEL_NAMES[entry[0]].casefold(),
     )
-    ax.spines["bottom"].set_visible(False)
-    ax.legend(
+    fig.legend(
+        handles=[handle for _, handle in sorted_legend_entries],
         loc="lower center",
-        bbox_to_anchor=(0.5, 1.01),
+        bbox_to_anchor=(0.5, 0.875),
         ncol=len(TRADEOFF_MODEL_NAMES),
         frameon=True,
-        fontsize=8.2,
+        fontsize=14,
         handlelength=2.2,
         columnspacing=1.2,
         borderpad=0.5,
     )
-
-    lane_positions = list(reversed(range(len(TRADEOFF_MODEL_NAMES))))
-    for lane_position, model_name in zip(
-        lane_positions,
-        TRADEOFF_MODEL_NAMES,
-    ):
-        subset = model_subsets[model_name]
-        style = get_tradeoff_style(model_name)
-        x_values = subset["average_visited_nodes"].astype(float)
-        y_values = np.full(len(subset), lane_position, dtype=float)
-        budget_ax.plot(
-            x_values,
-            y_values,
-            color=style["color"],
-            linewidth=0.8,
-            alpha=0.30,
-            zorder=2,
+    budget_legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            color="none",
+            marker="o",
+            markerfacecolor="#777777",
+            markeredgecolor="#4D4D4D",
+            markeredgewidth=0.7,
+            markersize=math.sqrt(TRADEOFF_BUDGET_MARKER_SIZES[budget]),
+            label=str(budget),
         )
-        budget_ax.scatter(
-            x_values,
-            y_values,
-            color=style["color"],
-            marker=style["marker"],
-            edgecolor="white",
-            linewidth=0.5,
-            s=29,
-            zorder=3,
-        )
-        for row in subset.itertuples(index=False):
-            budget_ax.annotate(
-                str(int(row.budget)),
-                xy=(row.average_visited_nodes, lane_position),
-                xytext=(0, 7),
-                textcoords="offset points",
-                ha="center",
-                va="bottom",
-                fontsize=6.7,
-                color="#333333",
-                annotation_clip=True,
-                zorder=4,
-            )
-
-    budget_ax.set_xscale("log")
-    budget_ax.set_xticks(TRADEOFF_X_TICKS)
-    budget_ax.set_xticklabels([str(tick) for tick in TRADEOFF_X_TICKS])
-    budget_ax.set_xlabel("Average Visited Nodes (log scale)", fontsize=12)
-    budget_ax.set_ylim(-0.55, len(TRADEOFF_MODEL_NAMES) - 0.25)
-    budget_ax.set_yticks(lane_positions)
-    budget_ax.set_yticklabels(
-        [
-            TRADEOFF_SHORT_MODEL_NAMES[model_name]
-            for model_name in TRADEOFF_MODEL_NAMES
-        ],
-        fontsize=8,
-    )
-    budget_ax.tick_params(axis="y", length=0, pad=7)
-    budget_ax.grid(axis="x", which="major", color="#D7D7D7", linewidth=0.65)
-    budget_ax.grid(
-        axis="y",
-        which="major",
-        color="#ECECEC",
-        linewidth=0.45,
-    )
-    budget_ax.set_axisbelow(True)
-    budget_ax.spines["top"].set_visible(False)
-    budget_ax.spines["right"].set_visible(False)
-    budget_ax.spines["left"].set_visible(False)
-    budget_ax.set_title(
-        r"(b) Visit-budget mapping",
-        loc="left",
-        fontsize=10,
-        pad=8,
+        for budget in TRADEOFF_BUDGETS
+    ]
+    ax.legend(
+        handles=budget_legend_handles,
+        title=r"$A^*$ visit budget $\tau$ (marker size)",
+        loc="lower right",
+        bbox_to_anchor=(0.995, 0.015),
+        ncol=5,
+        frameon=True,
+        fontsize=9.5,
+        title_fontsize=10.5,
+        handlelength=0.9,
+        handletextpad=0.3,
+        columnspacing=0.8,
+        labelspacing=0.45,
+        borderpad=0.4,
     )
 
     fig.subplots_adjust(
         left=0.10,
         right=0.985,
-        bottom=0.095,
-        top=0.90,
+        bottom=0.14,
+        top=0.85,
     )
     return fig
 
 
 def plot_budget_tradeoff():
     tradeoff_df = load_budget_tradeoff_rows()
-    fig = create_budget_tradeoff_figure(tradeoff_df)
-    TRADEOFF_PDF_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TRADEOFF_PLOT_DIR.mkdir(parents=True, exist_ok=True)
+    output_paths = []
 
-    fig.savefig(
-        TRADEOFF_PDF_PATH,
-        bbox_inches="tight",
-        pad_inches=0.04,
-    )
-    fig.savefig(
-        TRADEOFF_PNG_PATH,
-        dpi=TRADEOFF_PNG_DPI,
-        bbox_inches="tight",
-        pad_inches=0.04,
-    )
-    plt.close(fig)
+    for x_metric in TRADEOFF_METRICS:
+        for x_scale in TRADEOFF_SCALES:
+            fig = create_budget_tradeoff_figure(
+                tradeoff_df,
+                x_metric=x_metric,
+                x_scale=x_scale,
+            )
+            stem = f"budget_tradeoff_{x_metric}_{x_scale}"
+            pdf_path = TRADEOFF_PLOT_DIR / f"{stem}.pdf"
+            png_path = TRADEOFF_PLOT_DIR / f"{stem}.png"
+            fig.savefig(
+                pdf_path,
+                bbox_inches="tight",
+                pad_inches=0.04,
+            )
+            fig.savefig(
+                png_path,
+                dpi=TRADEOFF_PNG_DPI,
+                bbox_inches="tight",
+                pad_inches=0.04,
+            )
+            plt.close(fig)
+            output_paths.extend((pdf_path, png_path))
 
     print(
-        "Created budget trade-off figures for "
+        "Created four budget trade-off variants for "
         f"{len(TRADEOFF_MODEL_NAMES)} models and {len(TRADEOFF_BUDGETS)} budgets:"
     )
-    print(f"  - {TRADEOFF_PDF_PATH}")
-    print(f"  - {TRADEOFF_PNG_PATH}")
+    for path in output_paths:
+        print(f"  - {path}")
 
 
 # -------------------------------------------------------------------------

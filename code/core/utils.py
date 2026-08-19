@@ -740,13 +740,13 @@ def get_fine_tuned_models(run_suffix: str):
 
     expected_suffix = f"_{run_suffix}_finetuned"
 
-    return [
+    return sorted(
         os.path.join(LIGHTNING_MODELS_DIR, name).replace("\\", "/")
         for name in os.listdir(LIGHTNING_MODELS_DIR)
         if os.path.isdir(os.path.join(LIGHTNING_MODELS_DIR, name))
         and name != "old"
         and name.endswith(expected_suffix)
-    ]
+    )
 
 
 def validate_fine_tuned_model_set(

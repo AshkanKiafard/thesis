@@ -37,7 +37,7 @@ def edge_passes_filter(
     min_causal_strength=DEFAULT_MIN_CAUSAL_STRENGTH,
     necessity_weight=DEFAULT_NECESSITY_WEIGHT,
 ):
-    if count < min_count:
+    if count <= min_count:
         return False
 
     causal_strength = compute_causal_strength(
@@ -189,7 +189,7 @@ def main():
     print(f"Nodes:  {stats['nodes_written']:,}")
     print(
         "Filter: "
-        f"count >= {stats['min_count']}, "
+        f"count > {stats['min_count']}, "
         "causal_strength = "
         f"necessity^{stats['necessity_weight']} * "
         f"sufficiency^{1.0 - stats['necessity_weight']:.2f}, "
