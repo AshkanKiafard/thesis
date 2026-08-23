@@ -4,7 +4,7 @@
 This appendix summarizes the two implementation-level procedures that are most relevant for reproducing the method, namely bounded embedding-guided $A^*$ search and the construction of search-aligned training quadruples. Low-level implementation details are omitted for brevity and documented in the accompanying source repository.\footnote{\url{https://git.webis.de/code-teaching/theses/thesis-kiafard.git}}
 
 \begin{algorithm}[H]
-\caption{Bounded embedding-guided $A^*$ search}
+\caption{Path-mode bounded embedding-guided $A^*$ search}
 \label{alg:bounded-astar}
 \begin{algorithmic}[1]
 \Require Directed graph $G=(V,E)$, source node $a$, target node $b$, embedding function $\phi$, distance function $d$, visit budget $\tau$
@@ -38,6 +38,8 @@ This appendix summarizes the two implementation-level procedures that are most r
 \State \Return $\emptyset$
 \end{algorithmic}
 \end{algorithm}
+
+Algorithm~\ref{alg:bounded-astar} shows path mode, which is used when an explicit causal path is required, including construction of the training quadruples and frontend interpretation. Binary evaluation instead enables the same implementation's reachability-only mode. In that mode, $a=b$ succeeds with zero visited nodes; otherwise the search returns success as soon as $b$ is discovered and inserted into the frontier. It allocates no parent structure and performs no path reconstruction. The visit-budget check is performed before inspecting the successors of the newly visited node, so early target discovery cannot bypass the configured budget. BFS uses the same mode parameter and analogous return-on-discovery behavior during evaluation.
 
 \begin{algorithm}[H]
 \caption{Construction of search-aligned training quadruples}

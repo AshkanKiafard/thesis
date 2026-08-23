@@ -108,31 +108,24 @@ d\bigl(\phi_m(n),\phi_m(e)\bigr)
 \right].
 \end{aligned}
 \]
-The dimension-specific regularization term is defined as
+The ranking loss at dimensionality $m$ is
 \[
-\mathcal{R}_m
-=
-\sum_{x\in\{c,e,p,n\}}
-\left(\lVert\phi_m(x)\rVert_2-1\right)^2.
+\mathcal{L}_{\mathrm{rank},m}=\sigma(\Delta_m).
 \]
-The corresponding dimension-specific loss is
-\[
-\mathcal{L}_m
-=
-\sigma(\Delta_m)+\mathcal{R}_m.
-\]
-The overall training loss sums the losses across all selected dimensionalities
+The overall training objective sums these dimension-specific ranking losses and applies the norm regularizer defined above exactly once to the native, untruncated embeddings:
 \[
 \mathcal{L}_{\mathrm{total}}
 =
-\sum_{m\in\mathcal{M}}\mathcal{L}_m.
+\sum_{m\in\mathcal{M}}\mathcal{L}_{\mathrm{rank},m}
++\mathcal{R}.
 \]
+Thus, the nested prefixes do not receive separate norm penalties. The ranking terms are summed rather than averaged over $|\mathcal{M}|$, and the v4 runs neither normalize each prefix nor otherwise self-normalize the summed loss. This preserves the original definition and weight of the regularizer while avoiding repeated, potentially competing unit-norm constraints on nested prefixes.
 Applying the objective at multiple prefix lengths encourages information relevant to causal graph traversal to be concentrated in the earlier embedding dimensions. This enables a single fine-tuned model to support different embedding dimensionalities without additional training, allowing the representation size to be selected according to the desired trade-off between computational efficiency and heuristic quality.
 
 \section{Validation Procedure}
 \label{sec:train_validation}
 
-Although the training objective optimizes local ranking decisions, validation measures whether the learned embedding space improves global graph traversal. At the beginning of each validation epoch, embeddings for all graph nodes are recomputed using the current state of the model being fine-tuned and stored in a temporary lookup cache. For each current-node and target-node pair $(p_i,p_k)$ in the validation data, an $A^*$ search is executed using these updated embeddings. The number of visited nodes required to reach the target is recorded as $v(p_i,p_k)$. The primary validation metric is the average number of visited nodes
+Although the training objective optimizes local ranking decisions, validation measures whether the learned embedding space improves global graph traversal. At the beginning of each validation epoch, embeddings for all graph nodes are recomputed using the current state of the model being fine-tuned and stored in a temporary lookup cache. For each current-node and target-node pair $(p_i,p_k)$ in the validation data, an $A^*$ search is executed using these updated embeddings. Since validation needs only the binary reachability outcome, it uses reachability-only mode: the search returns when the target is discovered, does not store parent links, and does not reconstruct a path. The number of visited nodes required to discover the target is recorded as $v(p_i,p_k)$. The primary validation metric is the average number of visited nodes
 \[
 \text{AvgVisited}
 =
@@ -146,7 +139,9 @@ where $Q$ denotes the set of evaluated node pairs. Lower values indicate that fe
 \label{sec:train_hyperparameters}
 
 Before final training, model-specific hyperparameter optimization is performed with Optuna~\cite{akiba:2019}. The search jointly optimizes the learning rate, activation function, and distance metric using the Tree-structured Parzen Estimator sampler~\cite{bergstra:2011}. The activation function is selected from ReLU and GELU, the distance metric from cosine and Euclidean distance, and the learning rate is sampled logarithmically from $[2.5 \times 10^{-5}, 3 \times 10^{-5}].$
-This interval was selected based on preliminary experiments indicating stable and competitive validation performance within this range. Each trial performs a short training run and is evaluated by the average number of nodes visited during validation $A^*$ searches. Early stopping terminates training when this metric no longer improves~\cite{prechelt:1998}, while Optuna's MedianPruner stops trials that underperform the median result of previously completed trials at the same training step~\cite{optuna:medianpruner}. The search uses 50 trials, at most 10 epochs per trial, a patience of 5 validation epochs, the AdamW optimizer~\cite{loshchilov:2019}, and a ReduceLROnPlateau scheduler~\cite{pytorch:reducelronplateau}. The effective batch size is fixed at 128. When a smaller physical batch size is used, gradients are accumulated over multiple batches before each parameter update using PyTorch Lightning's gradient-accumulation~\cite{ott:2018,lightning:gradientaccumulation}. The configuration with the lowest average number of visited nodes is selected for final training.
+This interval was selected based on preliminary experiments indicating stable and competitive validation performance within this range. Each trial performs a short training run and is evaluated by the average number of nodes visited during validation $A^*$ searches. Early stopping terminates training when this metric no longer improves~\cite{prechelt:1998}, while Optuna's MedianPruner stops trials that underperform the median result of previously completed trials at the same training step~\cite{optuna:medianpruner}. The search uses at most 10 epochs per trial, a patience of 5 validation epochs, the AdamW optimizer~\cite{loshchilov:2019}, and a ReduceLROnPlateau scheduler~\cite{pytorch:reducelronplateau}. Both the physical and effective batch size are fixed at 128 for every v4 model.
+
+The number of trials is controlled by a dynamic $30/5/50$ stopping rule. First, the study runs until it contains at least 30 budget-counting terminal trials. Only trials in the \textsc{Complete} or \textsc{Pruned} states consume this budget; failed, interrupted, cancelled, and still-running trials do not. After the first 30, Optuna launches one trial at a time. The study stops after five consecutive additional budget-counting trials without a new best visited-node objective, and this counter is reset to zero whenever a completed trial establishes a new best value. A pruned trial cannot establish a valid best value and therefore counts as a no-improvement trial in this extension phase. Independently of this patience rule, the study stops at a hard maximum of 50 budget-counting terminal trials. The completed configuration with the lowest average number of visited nodes is selected for final training.
 
 \section{Final Model Training}
 \label{sec:train_final_training}
