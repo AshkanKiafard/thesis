@@ -418,7 +418,7 @@ if __name__ == "__main__":
     if args.embedding_batch_size <= 0:
         raise ValueError("--embedding-batch-size must be greater than 0")
     if args.ablation and args.dim is None:
-        raise ValueError("--ablation requires --dim, e.g. --dim 32")
+        raise ValueError("--ablation requires --dim, e.g. --dim 64")
     if args.ablation and args.fine_tuned_only:
         raise ValueError("--ablation cannot be combined with --fine-tuned-only")
 

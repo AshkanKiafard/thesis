@@ -134,6 +134,12 @@ def get_model_name(model_path: str):
     return Path(model_path).name
 
 
+def get_validation_dimensions(full_dim: int, pretrained_native_only: bool = False):
+    if pretrained_native_only:
+        return [full_dim]
+    return get_matryoshka_dims(full_dim)
+
+
 def get_p95_analysis_file(
     dataset_name: str,
     run_suffix: str,
@@ -962,13 +968,22 @@ def parse_args():
             "without touching model rows."
         ),
     )
-    parser.add_argument(
+    model_scope_group = parser.add_mutually_exclusive_group()
+    model_scope_group.add_argument(
         "--fine-tuned-only",
         action="store_true",
         help=(
             "On validation splits, evaluate every currently available "
             "fine-tuned model for this run suffix and skip pretrained base "
             "models."
+        ),
+    )
+    model_scope_group.add_argument(
+        "--pretrained-native-only",
+        action="store_true",
+        help=(
+            "On validation splits, evaluate only pretrained base models and "
+            "only at each model's native embedding dimension."
         ),
     )
     parser.add_argument(
@@ -1005,10 +1020,10 @@ def parse_args():
         default=None,
         help=(
             "Only evaluate this Matryoshka dimension in --ablation mode, "
-            "e.g. 32."
+            "e.g. 64."
         ),
     )
-    parser.add_argument(
+    model_scope_group.add_argument(
         "--ablation",
         action="store_true",
         help=(
@@ -1034,11 +1049,9 @@ if __name__ == "__main__":
     if args.dim is not None and args.dim <= 0:
         raise ValueError("--dim must be greater than 0")
     if args.ablation and args.dim is None:
-        raise ValueError("--ablation requires --dim, e.g. --dim 32")
+        raise ValueError("--ablation requires --dim, e.g. --dim 64")
     if args.ablation and (args.best_model_path is not None or args.best_model_dim is not None):
         raise ValueError("--ablation cannot be combined with --best-model-path/--best-model-dim")
-    if args.ablation and args.fine_tuned_only:
-        raise ValueError("--ablation cannot be combined with --fine-tuned-only")
     if args.ablation:
         args.skip_dijkstra = True
         args.force_model_results = True
@@ -1144,7 +1157,9 @@ if __name__ == "__main__":
             )
     else:
         fine_tuned_models = get_fine_tuned_models(run_suffix)
-        if args.fine_tuned_only:
+        if args.pretrained_native_only:
+            model_queue = sort_model_queue(list(BASE_MODELS), run_suffix)
+        elif args.fine_tuned_only:
             if not fine_tuned_models:
                 print(
                     "No fine-tuned models are available for suffix "
@@ -1326,7 +1341,10 @@ if __name__ == "__main__":
                 elif current_split == "test":
                     dims = [selected_test_dimension]
                 else:
-                    dims = get_matryoshka_dims(full_dim)
+                    dims = get_validation_dimensions(
+                        full_dim,
+                        pretrained_native_only=args.pretrained_native_only,
+                    )
 
                 existing_results = load_results_file(output_json_file)
                 pending_work = []

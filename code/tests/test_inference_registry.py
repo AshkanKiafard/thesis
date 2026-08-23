@@ -184,22 +184,22 @@ class InferenceRegistryTests(unittest.TestCase):
         self.assertEqual(labels[2], "MPNet Base")
         self.assertEqual(labels[3], "BGE Base")
 
-    def test_limited_demo_mode_exposes_only_granite_ft_at_dimension_32(self):
+    def test_limited_demo_mode_exposes_only_granite_ft_at_dimension_64(self):
         granite = fake_model(
             id=(
                 "data/models/lightning/"
                 "granite-embedding-english-r2_relu_euclid_nonorm_"
-                "matryoshka_v3_finetuned"
+                "matryoshka_v4_finetuned"
             ),
             label="Granite FT ReLU+Euclidean",
             model_key="granite",
             model_dim=768,
-            dims=[768, 32, 16],
+            dims=[768, 64, 32, 16],
             distance="euclid",
             is_finetuned=True,
             cache_name=(
                 "granite-embedding-english-r2_relu_euclid_nonorm_"
-                "matryoshka_v3_finetuned"
+                "matryoshka_v4_finetuned"
             ),
             variant="finetuned",
             activation="relu",
@@ -215,13 +215,13 @@ class InferenceRegistryTests(unittest.TestCase):
 
         self.assertEqual(len(models), 1)
         self.assertEqual(models[0]["label"], "Granite FT ReLU+Euclidean")
-        self.assertEqual(models[0]["dims"], [32])
+        self.assertEqual(models[0]["dims"], [64])
         self.assertEqual(len(astar_methods), 1)
         self.assertEqual(
             [method["algorithm"] for method in methods],
             ["astar"],
         )
-        self.assertEqual(astar_methods[0]["config"]["dimensions"], [32])
+        self.assertEqual(astar_methods[0]["config"]["dimensions"], [64])
         self.assertEqual(
             get_demo_models((fake_model(), granite), load_all=True),
             (fake_model(), granite),
@@ -365,14 +365,14 @@ class InferenceRegistryTests(unittest.TestCase):
         # This test verifies the registry fallback, independently of any
         # generated v4 p95 artifact that may exist in a developer worktree.
         with patch("web_demo.server.read_p95_bfs_cap", return_value=None):
-            self.assertEqual(get_default_bfs_cap("causenet")["value"], 12_170)
+            self.assertEqual(get_default_bfs_cap("causenet")["value"], 1_316)
             self.assertEqual(
                 config_defaults(graph="causenet", algorithm="bfs")["bfs_cap"],
-                12_170,
+                1_316,
             )
             self.assertEqual(
                 config_defaults(graph="causenet_full", algorithm="bfs")["bfs_cap"],
-                12_170,
+                1_316,
             )
         self.assertEqual(BFSConfig.model_validate({"cap": -1}).cap, -1)
         self.assertEqual(BFSConfig.model_validate({"cap": 0}).cap, 0)

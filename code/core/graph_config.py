@@ -22,9 +22,9 @@ GRAPH_CONFIGS = {
         "path": CAUSENET_GRAPH_PATH,
         "nodes": 80_214,
         "edges": 197_376,
-        "bfs_p95_cap": 12_170,
+        "bfs_p95_cap": 1_316,
         "bfs_p95_cap_source": (
-            "causenet/msmarco_train/v3 p95 successful BFS visits"
+            "causenet/msmarco_train/v4 p95 successful BFS visits"
         ),
         "supported_algorithms": ("bfs", "rl", "astar"),
         "cache_suffix": None,
@@ -37,9 +37,9 @@ GRAPH_CONFIGS = {
         "path": CAUSENET_FULL_GRAPH_PATH,
         "nodes": 12_185_920,
         "edges": 11_606_975,
-        "bfs_p95_cap": 12_170,
+        "bfs_p95_cap": 1_316,
         "bfs_p95_cap_source": (
-            "causenet/msmarco_train/v3 p95 successful BFS visits "
+            "causenet/msmarco_train/v4 p95 successful BFS visits "
             "via DEFAULT_P95_CONFIG_SOURCE_GRAPH"
         ),
         "supported_algorithms": ("bfs", "rl", "astar"),
@@ -53,9 +53,9 @@ GRAPH_CONFIGS = {
         "path": CEG_GRAPH_PATH,
         "nodes": 77_264,
         "edges": 21_507_177,
-        "bfs_p95_cap": 12_170,
+        "bfs_p95_cap": 1_316,
         "bfs_p95_cap_source": (
-            "causenet/msmarco_train/v3 p95 successful BFS visits "
+            "causenet/msmarco_train/v4 p95 successful BFS visits "
             "via DEFAULT_P95_CONFIG_SOURCE_GRAPH"
         ),
         "supported_algorithms": ("bfs", "rl", "astar"),

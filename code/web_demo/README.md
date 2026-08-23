@@ -16,11 +16,11 @@ http://127.0.0.1:8000
 Choose the startup model scope in `app.py`:
 
 ```python
-load_all = False  # CauseNet Precision + Granite FT d=32 + A* only
+load_all = False  # CauseNet Precision + Granite FT d=64 + A* only
 load_all = True   # every graph, A* model/dimension, BFS, and RL
 ```
 
-The limited setting constrains Granite to `d=32` before its embedding index is
+The limited setting constrains Granite to `d=64` before its embedding index is
 allocated, exposes only CauseNet Precision, and skips BFS and RL. This is
 appropriate for the local 12 GB GPU. Change it to `True` on a server with
 sufficient GPU memory to expose and preload everything.
@@ -77,8 +77,8 @@ BFS cap behavior:
 The default BFS cap is resolved from the evaluation
 `visited_nodes_analysis.json` p95 value when available, then from the central
 graph registry fallback. In this checkout the central evaluation workflow uses
-`causenet/msmarco_train/v3` as the p95 source, so the exposed graphs currently
-resolve to cap `12,170`.
+`causenet/msmarco_train/v4` as the p95 source, so the exposed graphs currently
+resolve to cap `1,316`.
 
 Model labels and method identities are centralized in `core.model_registry`.
 Visible labels use the canonical short names:

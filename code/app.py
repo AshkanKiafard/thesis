@@ -2,7 +2,7 @@
 
 import os
 
-# False: CauseNet Precision with Granite FT at d=32 and A* only.
+# False: CauseNet Precision with Granite FT at d=64 and A* only.
 # True: every graph, A* model/dimension, BFS, and RL.
 load_all = False
 os.environ["WEB_DEMO_LOAD_ALL"] = str(load_all).lower()

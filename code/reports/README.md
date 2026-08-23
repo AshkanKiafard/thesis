@@ -18,7 +18,7 @@ Epochs use Lightning's zero-based convention. The reported epoch is the final
 strict improvement in val/astar_cost; it is not the stopping epoch.
 
 The p95 visited-node report reads
-data/evaluation/causenet/msmarco_train/v3/visited_nodes_analysis.json by
+data/evaluation/causenet/msmarco_train/v4/visited_nodes_analysis.json by
 default and renders the integer A* traversal caps used by evaluation, i.e.
 ceil(p95_visited_successful_only), in a compact thesis table.
 

@@ -25,7 +25,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "Run the main evaluation workflow: all models on MSMARCO validation "
-            "with CauseNet, then the fixed Granite d=32 main model on MSMARCO "
+            "with CauseNet, then the fixed Granite d=64 main model on MSMARCO "
             "test and SemEval test across the default graphs, then ablation."
         )
     )
@@ -108,15 +108,15 @@ def parse_args():
     parser.add_argument(
         "--best-model-dim",
         type=int,
-        default=32,
-        help="Matryoshka dimension for the fixed test model. Default: 32.",
+        default=64,
+        help="Matryoshka dimension for the fixed test model. Default: 64.",
     )
     parser.add_argument(
         "--select-best-from-validation",
         action="store_true",
         help=(
             "Select the test model from validation results instead of using "
-            "the fixed Granite finetuned d=32 model."
+            "the fixed Granite finetuned d=64 model."
         ),
     )
     parser.add_argument(
@@ -145,8 +145,8 @@ def parse_args():
     parser.add_argument(
         "--ablation-dim",
         type=int,
-        default=32,
-        help="Matryoshka dimension for the final ablation phase. Default: 32.",
+        default=64,
+        help="Matryoshka dimension for the final ablation phase. Default: 64.",
     )
     parser.add_argument(
         "--ablation-cap-source-dataset",

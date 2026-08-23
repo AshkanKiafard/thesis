@@ -212,8 +212,8 @@ def parse_args():
     parser.add_argument(
         "--dim",
         type=int,
-        default=32,
-        help="Matryoshka dimension to compare in --ablation mode (default: 32).",
+        default=64,
+        help="Matryoshka dimension to compare in --ablation mode (default: 64).",
     )
     args = parser.parse_args()
 
@@ -3406,7 +3406,7 @@ def plot_thesis_causenet_msmarco_valid():
 
 
 # -------------------------------------------------------------------------
-# Fixed budget trade-off figure: CauseNet / MS MARCO validation / v3
+# Fixed budget trade-off figure: CauseNet / MS MARCO validation / v4
 # -------------------------------------------------------------------------
 
 TRADEOFF_PNG_DPI = 400

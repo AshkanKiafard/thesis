@@ -28,7 +28,7 @@ DEFAULT_P95_CONFIG_SOURCE_DATASET = "msmarco_train"
 DEFAULT_P95_CONFIG_SOURCE_GRAPH = "causenet"
 
 DEFAULT_VALIDATION_GRAPH = "causenet"
-DEFAULT_TEST_GRAPHS = ("causenet", "ceg", "causenet_full")
+DEFAULT_TEST_GRAPHS = ("causenet", "ceg")
 DEFAULT_VALIDATION_DATASET = str(
     FILTERED_DATASETS_DIR / "msmarco_valid_filtered.json"
 )
@@ -57,52 +57,52 @@ VALIDATION_SELECTED_FINETUNED_MODELS = (
     {
         "model": "FT A*: MPNet",
         "checkpoint_name": (
-            "all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_v3_finetuned"
+            "all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_v4_finetuned"
         ),
-        "embedding_dimension": 128,
+        "embedding_dimension": 64,
         "activation_function": "ReLU",
         "distance_metric": "Cosine",
-        "existing_validation_budget": 34,
+        "existing_validation_budget": 14,
     },
     {
         "model": "FT A*: BGE",
         "checkpoint_name": (
-            "bge-large-en-v1.5_relu_euclid_nonorm_matryoshka_v3_finetuned"
+            "bge-large-en-v1.5_relu_cosine_nonorm_matryoshka_v4_finetuned"
         ),
-        "embedding_dimension": 1024,
+        "embedding_dimension": 8,
         "activation_function": "ReLU",
-        "distance_metric": "Euclidean",
-        "existing_validation_budget": 191,
+        "distance_metric": "Cosine",
+        "existing_validation_budget": 27,
     },
     {
         "model": "FT A*: mxbai",
         "checkpoint_name": (
-            "mxbai-embed-large-v1_relu_euclid_nonorm_matryoshka_v3_finetuned"
+            "mxbai-embed-large-v1_relu_cosine_nonorm_matryoshka_v4_finetuned"
         ),
-        "embedding_dimension": 768,
+        "embedding_dimension": 8,
         "activation_function": "ReLU",
-        "distance_metric": "Euclidean",
-        "existing_validation_budget": 154,
+        "distance_metric": "Cosine",
+        "existing_validation_budget": 20,
     },
     {
         "model": "FT A*: Qwen",
         "checkpoint_name": (
-            "Qwen3-Embedding-0.6B_relu_euclid_nonorm_matryoshka_v3_finetuned"
+            "Qwen3-Embedding-0.6B_relu_cosine_nonorm_matryoshka_v4_finetuned"
         ),
-        "embedding_dimension": 32,
+        "embedding_dimension": 768,
         "activation_function": "ReLU",
-        "distance_metric": "Euclidean",
-        "existing_validation_budget": 39,
+        "distance_metric": "Cosine",
+        "existing_validation_budget": 6,
     },
     {
         "model": "FT A*: Granite",
         "checkpoint_name": (
             "granite-embedding-english-r2_relu_euclid_nonorm_"
-            "matryoshka_v3_finetuned"
+            "matryoshka_v4_finetuned"
         ),
-        "embedding_dimension": 32,
+        "embedding_dimension": 64,
         "activation_function": "ReLU",
         "distance_metric": "Euclidean",
-        "existing_validation_budget": 27,
+        "existing_validation_budget": 23,
     },
 )
