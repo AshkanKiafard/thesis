@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -344,6 +345,159 @@ def save_st_embedding_cache(
     finally:
         if tmp_vectors.exists():
             os.remove(tmp_vectors)
+
+
+def create_matryoshka_dimension_caches(
+    cache_file,
+    dimensions,
+    node_universe=None,
+    chunk_size=100_000,
+):
+    """Create prefix-dimension mmaps by slicing one complete full cache.
+
+    The shared node-order JSONL already fixes row alignment, so lower-dimensional
+    Matryoshka caches need only copy the leading columns of the full vector
+    matrix.  This avoids reloading the model and reparsing a large graph once
+    per dimension.  Each new cache is written to a temporary ``.npy`` and
+    atomically promoted after its shape and dtype have been verified.
+    """
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be greater than 0")
+
+    node_universe = normalize_node_universe(node_universe)
+    cache_file = Path(cache_file)
+    status = get_embedding_cache_status(
+        cache_file,
+        node_universe=node_universe,
+    )
+    if not status["covered"]:
+        raise EmbeddingCacheValidationError(
+            "Cannot materialize Matryoshka dimensions from an incomplete "
+            f"full cache: {status['reason']}"
+        )
+
+    full_vectors = np.load(
+        status["vectors_path"],
+        allow_pickle=False,
+        mmap_mode="r",
+    )
+
+    try:
+        num_rows, full_dim = full_vectors.shape
+        requested_dims = sorted(set(dimensions), reverse=True)
+        invalid_dims = [
+            dim
+            for dim in requested_dims
+            if not isinstance(dim, int) or isinstance(dim, bool) or dim <= 0
+            or dim > full_dim
+        ]
+        if invalid_dims:
+            raise ValueError(
+                f"Invalid Matryoshka dimensions for full dim {full_dim}: "
+                f"{invalid_dims}"
+            )
+
+        created = []
+        reused = []
+
+        for dim in requested_dims:
+            if dim == full_dim:
+                reused.append(get_embedding_cache_vectors_path(cache_file))
+                continue
+
+            dimension_cache_file = get_dimension_embedding_cache_path(
+                cache_file,
+                dim,
+            )
+            dimension_paths = _embedding_cache_paths(
+                dimension_cache_file,
+                node_universe,
+            )
+            target_path = dimension_paths["vectors"]
+
+            if target_path.exists():
+                target_vectors = np.load(
+                    target_path,
+                    allow_pickle=False,
+                    mmap_mode="r",
+                )
+                try:
+                    if target_vectors.shape != (num_rows, dim):
+                        raise EmbeddingCacheValidationError(
+                            "Existing Matryoshka cache has the wrong shape: "
+                            f"{target_path} has {target_vectors.shape}, expected "
+                            f"({num_rows}, {dim})."
+                        )
+                    if target_vectors.dtype != np.dtype("float32"):
+                        raise EmbeddingCacheValidationError(
+                            "Existing Matryoshka cache has the wrong dtype: "
+                            f"{target_path} has {target_vectors.dtype}, expected "
+                            "float32."
+                        )
+                finally:
+                    _close_memmap(target_vectors)
+
+                print(
+                    f"Reusing complete Matryoshka cache for dim {dim}: "
+                    f"{target_path}",
+                    flush=True,
+                )
+                reused.append(target_path)
+                continue
+
+            temp_path = target_path.with_name(
+                f"{target_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+            )
+            try:
+                sliced_vectors = np.lib.format.open_memmap(
+                    temp_path,
+                    mode="w+",
+                    dtype="float32",
+                    shape=(num_rows, dim),
+                )
+                try:
+                    for start in range(0, num_rows, chunk_size):
+                        end = min(start + chunk_size, num_rows)
+                        sliced_vectors[start:end] = full_vectors[start:end, :dim]
+                    sliced_vectors.flush()
+                finally:
+                    _close_memmap(sliced_vectors)
+                    del sliced_vectors
+
+                verification = np.load(
+                    temp_path,
+                    allow_pickle=False,
+                    mmap_mode="r",
+                )
+                try:
+                    if verification.shape != (num_rows, dim):
+                        raise EmbeddingCacheValidationError(
+                            "New Matryoshka cache has the wrong shape before "
+                            f"promotion: {verification.shape} != "
+                            f"({num_rows}, {dim})."
+                        )
+                    if verification.dtype != np.dtype("float32"):
+                        raise EmbeddingCacheValidationError(
+                            "New Matryoshka cache has the wrong dtype before "
+                            f"promotion: {verification.dtype} != float32."
+                        )
+                finally:
+                    _close_memmap(verification)
+
+                os.replace(temp_path, target_path)
+                print(
+                    f"Created Matryoshka cache for dim {dim}: {target_path}",
+                    flush=True,
+                )
+                created.append(target_path)
+            finally:
+                if temp_path.exists():
+                    temp_path.unlink()
+
+        return {"created": created, "reused": reused}
+    finally:
+        _close_memmap(full_vectors)
 
 
 def _move_checkpoint_as_corrupt(paths):

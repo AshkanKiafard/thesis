@@ -362,15 +362,18 @@ class InferenceRegistryTests(unittest.TestCase):
         self.assertEqual(traverse.call_args.args[5]["astar_max_visits"], 27)
 
     def test_bfs_default_cap_and_validation(self):
-        self.assertEqual(get_default_bfs_cap("causenet")["value"], 12_170)
-        self.assertEqual(
-            config_defaults(graph="causenet", algorithm="bfs")["bfs_cap"],
-            12_170,
-        )
-        self.assertEqual(
-            config_defaults(graph="causenet_full", algorithm="bfs")["bfs_cap"],
-            12_170,
-        )
+        # This test verifies the registry fallback, independently of any
+        # generated v4 p95 artifact that may exist in a developer worktree.
+        with patch("web_demo.server.read_p95_bfs_cap", return_value=None):
+            self.assertEqual(get_default_bfs_cap("causenet")["value"], 12_170)
+            self.assertEqual(
+                config_defaults(graph="causenet", algorithm="bfs")["bfs_cap"],
+                12_170,
+            )
+            self.assertEqual(
+                config_defaults(graph="causenet_full", algorithm="bfs")["bfs_cap"],
+                12_170,
+            )
         self.assertEqual(BFSConfig.model_validate({"cap": -1}).cap, -1)
         self.assertEqual(BFSConfig.model_validate({"cap": 0}).cap, 0)
         self.assertEqual(BFSConfig.model_validate({"cap": 25}).cap, 25)

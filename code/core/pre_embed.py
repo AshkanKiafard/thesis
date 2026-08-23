@@ -19,6 +19,10 @@ from core.config import (
 )
 from core.constants import EMBEDDINGS_DIR, LIGHTNING_MODELS_DIR
 from core.embedding_preload import get_embedding_cache_path, load_embedding_cache
+from core.embeddings import (
+    create_matryoshka_dimension_caches,
+    get_embedding_cache_status,
+)
 from core.graph_config import graph_arg, get_graph_label, get_graph_path, graph_choices
 from core.utils import (
     MERGED_NODE_UNIVERSE,
@@ -26,6 +30,7 @@ from core.utils import (
     get_ablation_model_names,
     get_embedding_cache_suffix,
     get_fine_tuned_models,
+    get_matryoshka_dims,
     get_node_universe_for_graph,
     get_node_universe_path,
     is_valid_graph_node,
@@ -103,6 +108,14 @@ def parse_args():
             "Optional Matryoshka dimension to pre-embed for the selected "
             "single model. This writes the dim-specific cache instead of "
             "forcing a full-dimension cache."
+        ),
+    )
+    parser.add_argument(
+        "--all-dims",
+        action="store_true",
+        help=(
+            "After creating the full embedding mmap, atomically materialize "
+            "all configured Matryoshka prefix caches by slicing that mmap."
         ),
     )
     parser.add_argument(
@@ -340,6 +353,8 @@ def main():
         raise ValueError("--dim requires a single model path or --ablation")
     if args.dim is not None and args.no_index:
         raise ValueError("--dim-specific preembedding requires index mode")
+    if args.dim is not None and args.all_dims:
+        raise ValueError("--dim and --all-dims cannot be combined")
 
     embeddings_dir = EMBEDDINGS_DIR
     embeddings_dir.mkdir(parents=True, exist_ok=True)
@@ -348,6 +363,8 @@ def main():
     print(f"Embedding device: {args.embedding_device}")
     if args.dim is not None:
         print(f"Matryoshka dim: {args.dim}")
+    if args.all_dims:
+        print("Materialize all Matryoshka dimensions: True")
     print(f"Build runtime embedding index: {not args.no_index}")
 
     node_universe = get_node_universe_for_graph(args.graph)
@@ -432,17 +449,60 @@ def main():
         print(f"  {model_path}")
 
     for model_path in model_queue:
-        pre_embed_model(
-            model_path=model_path,
-            graph_nodes=graph_nodes,
-            embeddings_dir=embeddings_dir,
-            batch_size=args.batch_size,
-            embedding_device=args.embedding_device,
+        cache_file = get_embedding_cache_path(
+            embeddings_dir,
+            model_path,
             cache_suffix=cache_suffix,
-            node_universe=node_universe,
-            dim=args.dim,
-            build_index=not args.no_index,
         )
+        full_cache_status = None
+        if args.all_dims:
+            full_cache_status = get_embedding_cache_status(
+                cache_file,
+                node_universe=node_universe,
+            )
+
+        if full_cache_status is not None and full_cache_status["covered"]:
+            print(
+                "Reusing complete full embedding cache before Matryoshka "
+                f"materialization: {full_cache_status['vectors_path']}",
+                flush=True,
+            )
+        else:
+            pre_embed_model(
+                model_path=model_path,
+                graph_nodes=graph_nodes,
+                embeddings_dir=embeddings_dir,
+                batch_size=args.batch_size,
+                embedding_device=args.embedding_device,
+                cache_suffix=cache_suffix,
+                node_universe=node_universe,
+                dim=args.dim,
+                build_index=not args.no_index,
+            )
+
+        if args.all_dims:
+            if not full_cache_status["covered"]:
+                full_cache_status = get_embedding_cache_status(
+                    cache_file,
+                    node_universe=node_universe,
+                )
+            if not full_cache_status["covered"]:
+                raise FileNotFoundError(
+                    "Full embedding cache was not created completely: "
+                    f"{cache_file} ({full_cache_status['reason']})"
+                )
+            model_dim = int(full_cache_status["vectors_shape"][1])
+            result = create_matryoshka_dimension_caches(
+                cache_file,
+                get_matryoshka_dims(model_dim),
+                node_universe=node_universe,
+            )
+            print(
+                "Matryoshka cache materialization complete: "
+                f"{len(result['created'])} created, "
+                f"{len(result['reused'])} reused.",
+                flush=True,
+            )
 
     print("\nAll models processed.")
 

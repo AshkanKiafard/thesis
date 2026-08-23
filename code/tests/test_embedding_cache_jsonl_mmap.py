@@ -14,6 +14,7 @@ from core.utils import (
 from core.embeddings import (
     EmbeddingCacheValidationError,
     _close_memmap,
+    create_matryoshka_dimension_caches,
     get_embedding_cache_status,
     load_st_embedding_cache,
     load_st_embedding_cache_index,
@@ -31,6 +32,78 @@ def split_cache_paths(cache_file, node_universe=MERGED_NODE_UNIVERSE):
 
 
 class EmbeddingCacheJsonlMmapTests(unittest.TestCase):
+    def test_materialize_matryoshka_prefix_caches_from_full_mmap(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cache_file = Path(tmp_dir) / "toy_model_embeddings.npy"
+            node_order = ["alpha", "beta", "gamma"]
+            full_matrix = np.arange(18, dtype="float32").reshape(3, 6)
+            save_st_embedding_cache(
+                cache_file,
+                {
+                    text: full_matrix[index]
+                    for index, text in enumerate(node_order)
+                },
+                node_universe=MERGED_NODE_UNIVERSE,
+                node_order=node_order,
+            )
+
+            result = create_matryoshka_dimension_caches(
+                cache_file,
+                [6, 4, 2],
+                node_universe=MERGED_NODE_UNIVERSE,
+                chunk_size=2,
+            )
+            self.assertEqual(len(result["created"]), 2)
+            self.assertEqual(len(result["reused"]), 1)
+
+            for dim in (4, 2):
+                dim_cache = cache_file.with_name(
+                    f"toy_model_dim{dim}_embeddings.npy"
+                )
+                _, text_to_idx, vectors = load_st_embedding_cache_index(
+                    dim_cache,
+                    node_universe=MERGED_NODE_UNIVERSE,
+                    strict=True,
+                )
+                try:
+                    self.assertEqual(text_to_idx, {
+                        "alpha": 0,
+                        "beta": 1,
+                        "gamma": 2,
+                    })
+                    np.testing.assert_array_equal(
+                        vectors,
+                        full_matrix[:, :dim],
+                    )
+                finally:
+                    _close_memmap(vectors)
+
+            second_result = create_matryoshka_dimension_caches(
+                cache_file,
+                [6, 4, 2],
+                node_universe=MERGED_NODE_UNIVERSE,
+                chunk_size=2,
+            )
+            self.assertEqual(second_result["created"], [])
+            self.assertEqual(len(second_result["reused"]), 3)
+
+    def test_materialize_matryoshka_prefix_caches_rejects_invalid_dimension(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            cache_file = Path(tmp_dir) / "toy_model_embeddings.npy"
+            save_st_embedding_cache(
+                cache_file,
+                {"alpha": np.ones(4, dtype="float32")},
+                node_universe=MERGED_NODE_UNIVERSE,
+                node_order=["alpha"],
+            )
+
+            with self.assertRaisesRegex(ValueError, "Invalid Matryoshka"):
+                create_matryoshka_dimension_caches(
+                    cache_file,
+                    [5],
+                    node_universe=MERGED_NODE_UNIVERSE,
+                )
+
     def test_save_and_load_shared_universal_jsonl_mmap_cache(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             cache_file = Path(tmp_dir) / "toy_model_embeddings.npy"
