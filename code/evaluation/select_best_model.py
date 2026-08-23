@@ -1,13 +1,14 @@
 import argparse
 import json
+import math
 from pathlib import Path
 
 from core.config import DEFAULT_RUN_SUFFIX
 from core.constants import EVALUATION_DIR
 
-
-DEFAULT_MIN_F1 = 0.8
 DEFAULT_VARIANT_FILTER = "finetuned"
+SELECTION_RULE = "pareto_knee_f1_log_nodes"
+KNEE_SCORE_EPSILON = 1e-12
 
 
 def get_metric(metrics, key, default=0.0):
@@ -126,13 +127,155 @@ def load_astar_candidates(evaluation_results_path):
     return candidates
 
 
-def candidate_sort_key(candidate):
+def runtime_tiebreak_key(candidate):
     return (
         candidate["avg_time_ms"],
-        candidate["avg_nodes_visited"],
-        -candidate["f1_score"],
-        candidate["family"],
+        candidate["astar_max_visits"]
+        if candidate["astar_max_visits"] is not None
+        else float("inf"),
         candidate["dimension"],
+        -candidate["f1_score"],
+        candidate["avg_nodes_visited"],
+        candidate["family"],
+        normalize_path(candidate["model_path"]),
+    )
+
+
+def dominates(left, right):
+    """Return whether left is at least as effective and no more expensive."""
+    no_worse = (
+        left["f1_score"] >= right["f1_score"]
+        and left["avg_nodes_visited"] <= right["avg_nodes_visited"]
+    )
+    strictly_better = (
+        left["f1_score"] > right["f1_score"]
+        or left["avg_nodes_visited"] < right["avg_nodes_visited"]
+    )
+    return no_worse and strictly_better
+
+
+def build_pareto_front(candidates):
+    """Build the F1/visited-node frontier without imposing an F1 cliff."""
+    frontier = [
+        candidate
+        for candidate in candidates
+        if not any(
+            dominates(other, candidate)
+            for other in candidates
+            if other is not candidate
+        )
+    ]
+    return sorted(
+        frontier,
+        key=lambda candidate: (
+            candidate["avg_nodes_visited"],
+            candidate["f1_score"],
+            runtime_tiebreak_key(candidate),
+        ),
+    )
+
+
+def rank_pareto_knee(candidates):
+    """Rank the Pareto frontier by its F1/log-visited-nodes knee.
+
+    When the frontier has no positive interior knee, prefer its most effective
+    endpoint instead of mistaking the cheapest low-F1 endpoint for a knee.
+    """
+    frontier = build_pareto_front(candidates)
+    if not frontier:
+        raise ValueError("No candidates available for Pareto-knee selection.")
+
+    for candidate in frontier:
+        nodes = candidate["avg_nodes_visited"]
+        f1_score = candidate["f1_score"]
+        if not math.isfinite(nodes) or nodes <= 0:
+            raise ValueError(
+                "Pareto-knee selection requires positive finite average "
+                f"visited nodes, got {nodes!r} for {candidate['model']}."
+            )
+        if not math.isfinite(f1_score) or not 0 <= f1_score <= 1:
+            raise ValueError(
+                "Pareto-knee selection requires finite F1 in [0, 1], "
+                f"got {f1_score!r} for {candidate['model']}."
+            )
+
+    if len(frontier) == 1:
+        selected = dict(frontier[0])
+        selected.update(
+            knee_score=0.0,
+            normalized_f1=1.0,
+            normalized_log_nodes=0.0,
+        )
+        return [selected]
+
+    log_nodes = [
+        math.log(candidate["avg_nodes_visited"])
+        for candidate in frontier
+    ]
+    f1_scores = [candidate["f1_score"] for candidate in frontier]
+    log_nodes_span = max(log_nodes) - min(log_nodes)
+    f1_span = max(f1_scores) - min(f1_scores)
+
+    if log_nodes_span == 0 or f1_span == 0:
+        selected = dict(
+            max(
+                frontier,
+                key=lambda candidate: (
+                    candidate["f1_score"],
+                    -candidate["avg_nodes_visited"],
+                ),
+            )
+        )
+        selected.update(
+            knee_score=0.0,
+            normalized_f1=1.0,
+            normalized_log_nodes=0.0,
+        )
+        return [selected]
+
+    ranked = []
+    for candidate, candidate_log_nodes in zip(frontier, log_nodes):
+        normalized_f1 = (
+            candidate["f1_score"] - min(f1_scores)
+        ) / f1_span
+        normalized_log_nodes = (
+            candidate_log_nodes - min(log_nodes)
+        ) / log_nodes_span
+        annotated = dict(candidate)
+        annotated.update(
+            knee_score=(normalized_f1 - normalized_log_nodes)
+            / math.sqrt(2.0),
+            normalized_f1=normalized_f1,
+            normalized_log_nodes=normalized_log_nodes,
+        )
+        ranked.append(annotated)
+
+    max_knee_score = max(candidate["knee_score"] for candidate in ranked)
+    if len(ranked) == 2 or max_knee_score <= KNEE_SCORE_EPSILON:
+        return sorted(
+            ranked,
+            key=lambda candidate: (
+                -candidate["f1_score"],
+                runtime_tiebreak_key(candidate),
+            ),
+        )
+
+    tied_knees = [
+        candidate
+        for candidate in ranked
+        if max_knee_score - candidate["knee_score"] <= KNEE_SCORE_EPSILON
+    ]
+    remaining = [
+        candidate
+        for candidate in ranked
+        if max_knee_score - candidate["knee_score"] > KNEE_SCORE_EPSILON
+    ]
+    return sorted(tied_knees, key=runtime_tiebreak_key) + sorted(
+        remaining,
+        key=lambda candidate: (
+            -candidate["knee_score"],
+            runtime_tiebreak_key(candidate),
+        ),
     )
 
 
@@ -152,14 +295,7 @@ def filter_by_variant(candidates, variant_filter):
     ]
 
 
-def same_candidate(left, right):
-    return (
-        normalize_path(left["model_path"]) == normalize_path(right["model_path"])
-        and left["dimension"] == right["dimension"]
-    )
-
-
-def build_family_summaries(pool_candidates, viable_candidates, selected, min_f1):
+def build_family_summaries(pool_candidates, selected):
     summaries = []
     families = sorted({candidate["family"] for candidate in pool_candidates})
 
@@ -169,12 +305,6 @@ def build_family_summaries(pool_candidates, viable_candidates, selected, min_f1)
             for candidate in pool_candidates
             if candidate["family"] == family
         ]
-        family_viable = [
-            candidate
-            for candidate in viable_candidates
-            if candidate["family"] == family
-        ]
-
         best_effectiveness = max(
             family_candidates,
             key=lambda candidate: (
@@ -183,20 +313,19 @@ def build_family_summaries(pool_candidates, viable_candidates, selected, min_f1)
                 -candidate["avg_time_ms"],
             ),
         )
-        fastest_candidate = min(family_candidates, key=candidate_sort_key)
-        fastest_viable = (
-            min(family_viable, key=candidate_sort_key)
-            if family_viable else None
+        fastest_candidate = min(
+            family_candidates,
+            key=runtime_tiebreak_key,
         )
+        family_ranked = rank_pareto_knee(family_candidates)
+        family_knee = family_ranked[0]
+        is_selected_family = family == selected["family"]
+        tradeoff_candidate = selected if is_selected_family else family_knee
 
-        if fastest_viable is None:
-            decision = f"rejected: best F1 is below {min_f1:.2f}"
-        elif same_candidate(fastest_viable, selected):
-            decision = "selected: effective enough and fastest viable"
-        elif fastest_viable["f1_score"] > selected["f1_score"]:
-            decision = "more effective, but slower"
+        if is_selected_family:
+            decision = "selected: global Pareto knee"
         else:
-            decision = "effective enough, but slower"
+            decision = "family Pareto knee; not selected globally"
 
         summaries.append(
             {
@@ -204,7 +333,9 @@ def build_family_summaries(pool_candidates, viable_candidates, selected, min_f1)
                 "num_candidates": len(family_candidates),
                 "best_effectiveness": best_effectiveness,
                 "fastest_candidate": fastest_candidate,
-                "fastest_viable": fastest_viable,
+                "family_knee": family_knee,
+                "tradeoff_candidate": tradeoff_candidate,
+                "pareto_candidates": family_ranked,
                 "decision": decision,
             }
         )
@@ -214,7 +345,6 @@ def build_family_summaries(pool_candidates, viable_candidates, selected, min_f1)
 
 def select_best_astar_model(
     evaluation_results_path,
-    min_f1=DEFAULT_MIN_F1,
     variant_filter=DEFAULT_VARIANT_FILTER,
 ):
     """
@@ -222,9 +352,9 @@ def select_best_astar_model(
 
     Rule:
     1. Restrict the candidate pool to the requested model variant.
-    2. Keep only candidates with acceptable effectiveness (F1 >= min_f1).
-    3. Select the fastest viable candidate, using visited nodes and F1 as
-       tie-breakers.
+    2. Remove candidates dominated in validation F1 and average visited nodes.
+    3. Select the knee of the normalized F1/log-visited-nodes Pareto frontier.
+    4. Use measured runtime, p95 cap, and dimension only as tie-breakers.
     """
     candidates = load_astar_candidates(evaluation_results_path)
     pool_candidates = filter_by_variant(candidates, variant_filter)
@@ -234,37 +364,22 @@ def select_best_astar_model(
             f"No A* candidates matched variant filter {variant_filter!r}."
         )
 
-    viable_candidates = [
-        candidate
-        for candidate in pool_candidates
-        if candidate["f1_score"] >= min_f1
-    ]
-
-    if not viable_candidates:
-        raise ValueError(
-            f"No A* candidates in variant filter {variant_filter!r} reached "
-            f"F1 >= {min_f1:.3f}."
-        )
-
-    ranked = sorted(viable_candidates, key=candidate_sort_key)
+    ranked = rank_pareto_knee(pool_candidates)
     selected = ranked[0]
     family_summaries = build_family_summaries(
         pool_candidates,
-        viable_candidates,
         selected,
-        min_f1,
     )
 
     return {
         "best": selected,
         "candidates": candidates,
         "pool_candidates": pool_candidates,
-        "viable_candidates": viable_candidates,
+        "pareto_candidates": ranked,
         "ranked": ranked,
         "family_summaries": family_summaries,
-        "min_f1": min_f1,
         "variant_filter": variant_filter,
-        "selection_rule": "effectiveness_gate_then_fastest",
+        "selection_rule": SELECTION_RULE,
     }
 
 
@@ -272,18 +387,19 @@ def print_selection(selection_result, top_k=20):
     best = selection_result["best"]
     candidates = selection_result["candidates"]
     pool_candidates = selection_result["pool_candidates"]
-    viable_candidates = selection_result["viable_candidates"]
     ranked = selection_result["ranked"]
 
     print("\nMODEL SELECTION")
     print("=" * 60)
     print(f"Total A* candidates: {len(candidates)}")
-    print("Selection rule: effectiveness gate, then fastest viable candidate")
+    print("Selection rule: F1/log-visited-nodes Pareto knee")
     print(f"Variant filter:      {selection_result['variant_filter']}")
     print(f"Candidates in pool:  {len(pool_candidates)}")
-    print(f"Effectiveness gate:  F1 >= {selection_result['min_f1']:.3f}")
-    print(f"Viable candidates:   {len(viable_candidates)}")
-    print("Tie-breakers:        avg time, visited nodes, F1, accuracy")
+    print(f"Pareto candidates:   {len(ranked)}")
+    print("Primary objectives:  maximize F1, minimize average visited nodes")
+    print("Knee axes:           normalized F1 and log(average visited nodes)")
+    print("No-knee fallback:    most effective frontier endpoint")
+    print("Tie-breakers:        runtime, p95 cap, dimension, F1, nodes")
 
     print("\nSELECTED A* MODEL")
     print("=" * 60)
@@ -299,6 +415,7 @@ def print_selection(selection_result, top_k=20):
     print(f"Avg visited nodes:  {best['avg_nodes_visited']:.2f}")
     print(f"Avg time ms:        {best['avg_time_ms']:.2f}")
     print(f"p95 visit budget:   {best['astar_max_visits']}")
+    print(f"Pareto knee score:  {best['knee_score']:.6f}")
     print(f"Num examples:       {best['num_examples']}")
 
     print("\nTEST EVALUATION PARAMETERS")
@@ -312,16 +429,8 @@ def print_selection(selection_result, top_k=20):
     for summary in selection_result["family_summaries"]:
         best_effectiveness = summary["best_effectiveness"]
         fastest_candidate = summary["fastest_candidate"]
-        fastest_viable = summary["fastest_viable"]
-
-        viable_text = "none"
-        if fastest_viable is not None:
-            viable_text = (
-                f"dim={fastest_viable['dimension']}, "
-                f"f1={fastest_viable['f1_score']:.6f}, "
-                f"time={fastest_viable['avg_time_ms']:.2f} ms, "
-                f"nodes={fastest_viable['avg_nodes_visited']:.2f}"
-            )
+        family_knee = summary["family_knee"]
+        tradeoff_candidate = summary["tradeoff_candidate"]
 
         print(
             f"{summary['family']}: "
@@ -331,11 +440,15 @@ def print_selection(selection_result, top_k=20):
             f"fastest=dim {fastest_candidate['dimension']} "
             f"({fastest_candidate['f1_score']:.6f}, "
             f"{fastest_candidate['avg_time_ms']:.2f} ms); "
-            f"fastest_viable={viable_text}; "
+            f"family_knee=dim {family_knee['dimension']} "
+            f"(f1={family_knee['f1_score']:.6f}, "
+            f"nodes={family_knee['avg_nodes_visited']:.2f}, "
+            f"time={family_knee['avg_time_ms']:.2f} ms); "
+            f"tradeoff_config=dim {tradeoff_candidate['dimension']}; "
             f"{summary['decision']}"
         )
 
-    print(f"\nRANKED VIABLE A* CANDIDATES")
+    print("\nRANKED PARETO A* CANDIDATES")
     print("=" * 60)
 
     for i, candidate in enumerate(ranked[:top_k], start=1):
@@ -347,6 +460,7 @@ def print_selection(selection_result, top_k=20):
             f"f1={candidate['f1_score']:.6f} | "
             f"time={candidate['avg_time_ms']:.2f} ms | "
             f"nodes={candidate['avg_nodes_visited']:.2f} | "
+            f"knee={candidate['knee_score']:.6f} | "
             f"accuracy={candidate['accuracy']:.6f}"
         )
 
@@ -377,12 +491,6 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--min-f1",
-        type=float,
-        default=DEFAULT_MIN_F1,
-        help="Minimum validation F1 required before efficiency is considered.",
-    )
-    parser.add_argument(
         "--top-k",
         type=int,
         default=20,
@@ -396,7 +504,6 @@ if __name__ == "__main__":
     args = parse_args()
     selection = select_best_astar_model(
         args.evaluation_results_path,
-        min_f1=args.min_f1,
         variant_filter=args.variant_filter,
     )
     print_selection(selection, top_k=args.top_k)

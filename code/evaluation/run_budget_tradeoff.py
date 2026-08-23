@@ -178,6 +178,7 @@ def configure_model_configs(model_configs):
 
 def build_v4_model_configs(selection_result):
     """Build the established per-family trade-off configs from validation."""
+    selected = selection_result["best"]
     summaries = {
         summary["family"]: summary
         for summary in selection_result["family_summaries"]
@@ -191,7 +192,11 @@ def build_v4_model_configs(selection_result):
             )
 
         summary = summaries[family]
-        candidate = summary["fastest_viable"] or summary["fastest_candidate"]
+        candidate = (
+            selected
+            if selected["family"] == family
+            else summary["tradeoff_candidate"]
+        )
         checkpoint_name = Path(candidate["model_path"]).name
         expected_suffix = f"_{RUN_SUFFIX}_finetuned"
         if not checkpoint_name.endswith(expected_suffix):
@@ -234,7 +239,6 @@ def build_v4_model_configs(selection_result):
 def configure_from_v4_validation():
     selection_result = select_best_astar_model(
         VALIDATION_RESULTS_PATH,
-        min_f1=0.8,
         variant_filter="finetuned",
     )
     configure_model_configs(build_v4_model_configs(selection_result))

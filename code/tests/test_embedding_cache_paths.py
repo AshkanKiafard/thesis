@@ -65,22 +65,32 @@ class EmbeddingCachePathTest(unittest.TestCase):
             ("Granite", "granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v4_finetuned", 32, 19),
         )
         family_summaries = []
+        selected = None
         for family, checkpoint, dimension, budget in family_inputs:
             candidate = {
                 "model_path": f"data/models/lightning/{checkpoint}",
+                "family": family,
                 "dimension": dimension,
                 "astar_max_visits": budget,
             }
+            if family == "BGE":
+                selected = {
+                    **candidate,
+                    "dimension": 512,
+                    "astar_max_visits": 53,
+                }
             family_summaries.append(
                 {
                     "family": family,
-                    "fastest_viable": None if family == "BGE" else candidate,
-                    "fastest_candidate": candidate,
+                    "tradeoff_candidate": candidate,
                 }
             )
 
         configs = build_v4_model_configs(
-            {"family_summaries": family_summaries}
+            {
+                "best": selected,
+                "family_summaries": family_summaries,
+            }
         )
 
         self.assertEqual(len(configs), 5)
@@ -89,8 +99,9 @@ class EmbeddingCachePathTest(unittest.TestCase):
         )
         self.assertEqual(
             [config.existing_validation_budget for config in configs],
-            [31, 47, 59, 23, 19],
+            [31, 53, 59, 23, 19],
         )
+        self.assertEqual(configs[1].embedding_dimension, 512)
         self.assertEqual(configs[1].activation_function, "GELU")
         self.assertEqual(configs[1].distance_metric, "Euclidean")
 

@@ -3,7 +3,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from core.constants import EVALUATION_DIR, LIGHTNING_MODELS_DIR
 from core.config import (
     DEFAULT_ABLATION_CAP_SOURCE_DATASET,
     DEFAULT_ABLATION_CAP_SOURCE_GRAPH,
@@ -16,6 +15,7 @@ from core.config import (
     DEFAULT_VALIDATION_DATASET,
     DEFAULT_VALIDATION_GRAPH,
 )
+from core.constants import EVALUATION_DIR, LIGHTNING_MODELS_DIR
 from core.graph_config import graph_arg, graph_choices
 from core.utils import get_ablation_reference_model_name
 from evaluation.select_best_model import print_selection, select_best_astar_model
@@ -98,15 +98,6 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--min-f1",
-        type=float,
-        default=0.8,
-        help=(
-            "Minimum validation F1 for best-model selection when "
-            "--select-best-from-validation is set."
-        ),
-    )
-    parser.add_argument(
         "--best-model-path",
         default=None,
         help=(
@@ -179,8 +170,6 @@ def parse_args():
 
     if args.embedding_batch_size <= 0:
         parser.error("--embedding-batch-size must be greater than 0")
-    if args.min_f1 < 0 or args.min_f1 > 1:
-        parser.error("--min-f1 must be between 0 and 1")
     if args.best_model_dim <= 0:
         parser.error("--best-model-dim must be greater than 0")
     if args.ablation_dim <= 0:
@@ -266,7 +255,6 @@ def select_best_model(args):
 
     selection = select_best_astar_model(
         results_path,
-        min_f1=args.min_f1,
         variant_filter=args.variant_filter,
     )
     print_selection(selection)
