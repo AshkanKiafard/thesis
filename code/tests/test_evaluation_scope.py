@@ -13,6 +13,7 @@ from evaluation.evaluation import (
     get_validation_dimensions,
     parse_args as parse_evaluation_args,
 )
+from evaluation.f1_significance_test import DEFAULT_REFERENCE_DIMENSION
 from evaluation.visited_nodes_analysis import (
     get_embedding_strategy_items,
     parse_args as parse_analysis_args,
@@ -37,6 +38,7 @@ def fine_tuned_path(base_model, *, activation="relu"):
 class FineTunedScopeTests(unittest.TestCase):
     def test_v4_current_generation_defaults(self):
         self.assertEqual(DEFAULT_RUN_SUFFIX, "v4")
+        self.assertEqual(DEFAULT_REFERENCE_DIMENSION, 64)
         self.assertEqual(DEFAULT_TEST_GRAPHS, ("causenet", "ceg"))
         self.assertEqual(
             [

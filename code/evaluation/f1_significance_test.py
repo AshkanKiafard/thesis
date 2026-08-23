@@ -21,7 +21,7 @@ DEFAULT_REFERENCE_CONTAINS = [
     "granite-embedding-english-r2",
     "finetuned",
 ]
-DEFAULT_REFERENCE_DIMENSION = 32
+DEFAULT_REFERENCE_DIMENSION = 64
 DEFAULT_REFERENCE_ALGORITHM = "A*"
 DEFAULT_COMPARISONS = [
     "model=BFS_Uncapped_Baseline,algorithm=BFS",
