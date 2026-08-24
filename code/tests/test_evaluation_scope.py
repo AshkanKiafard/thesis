@@ -39,7 +39,10 @@ class FineTunedScopeTests(unittest.TestCase):
     def test_v4_current_generation_defaults(self):
         self.assertEqual(DEFAULT_RUN_SUFFIX, "v4")
         self.assertEqual(DEFAULT_REFERENCE_DIMENSION, 64)
-        self.assertEqual(DEFAULT_TEST_GRAPHS, ("causenet", "ceg"))
+        self.assertEqual(
+            DEFAULT_TEST_GRAPHS,
+            ("causenet", "causenet_full", "ceg"),
+        )
         self.assertEqual(
             [
                 (
