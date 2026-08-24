@@ -7,6 +7,7 @@ from core.config import DEFAULT_RUN_SUFFIX
 from core.constants import EVALUATION_DIR
 
 DEFAULT_VARIANT_FILTER = "finetuned"
+DEFAULT_BUDGET_MODE_FILTER = "capped"
 SELECTION_RULE = "pareto_knee_f1_log_nodes"
 KNEE_SCORE_EPSILON = 1e-12
 
@@ -117,6 +118,11 @@ def load_astar_candidates(evaluation_results_path):
                 "num_examples": get_metric(metrics, "num_examples", 0),
                 "astar_max_visits": entry.get("used_config", {}).get(
                     "astar_max_visits"
+                ),
+                "budget_mode": (
+                    "uncapped"
+                    if entry.get("used_config", {}).get("astar_max_visits") == -1
+                    else "capped"
                 ),
             }
         )
@@ -295,6 +301,21 @@ def filter_by_variant(candidates, variant_filter):
     ]
 
 
+def filter_by_budget_mode(candidates, budget_mode_filter):
+    if budget_mode_filter is None:
+        return candidates
+
+    budget_mode_filter = budget_mode_filter.strip().lower()
+    if budget_mode_filter in {"", "all", "*"}:
+        return candidates
+
+    return [
+        candidate
+        for candidate in candidates
+        if candidate["budget_mode"] == budget_mode_filter
+    ]
+
+
 def build_family_summaries(pool_candidates, selected):
     summaries = []
     families = sorted({candidate["family"] for candidate in pool_candidates})
@@ -346,6 +367,7 @@ def build_family_summaries(pool_candidates, selected):
 def select_best_astar_model(
     evaluation_results_path,
     variant_filter=DEFAULT_VARIANT_FILTER,
+    budget_mode_filter=DEFAULT_BUDGET_MODE_FILTER,
 ):
     """
     Select the A* model/dimension using an effectiveness-efficiency tradeoff.
@@ -358,6 +380,10 @@ def select_best_astar_model(
     """
     candidates = load_astar_candidates(evaluation_results_path)
     pool_candidates = filter_by_variant(candidates, variant_filter)
+    pool_candidates = filter_by_budget_mode(
+        pool_candidates,
+        budget_mode_filter,
+    )
 
     if not pool_candidates:
         raise ValueError(
@@ -379,6 +405,7 @@ def select_best_astar_model(
         "ranked": ranked,
         "family_summaries": family_summaries,
         "variant_filter": variant_filter,
+        "budget_mode_filter": budget_mode_filter,
         "selection_rule": SELECTION_RULE,
     }
 
@@ -394,6 +421,7 @@ def print_selection(selection_result, top_k=20):
     print(f"Total A* candidates: {len(candidates)}")
     print("Selection rule: F1/log-visited-nodes Pareto knee")
     print(f"Variant filter:      {selection_result['variant_filter']}")
+    print(f"Budget mode filter:  {selection_result['budget_mode_filter']}")
     print(f"Candidates in pool:  {len(pool_candidates)}")
     print(f"Pareto candidates:   {len(ranked)}")
     print("Primary objectives:  maximize F1, minimize average visited nodes")
@@ -496,6 +524,15 @@ def parse_args():
         default=20,
         help="Number of ranked candidates to print.",
     )
+    parser.add_argument(
+        "--budget-mode",
+        choices=("capped", "uncapped", "all"),
+        default=DEFAULT_BUDGET_MODE_FILTER,
+        help=(
+            "A* budget variant considered during model selection. Defaults "
+            "to capped so uncapped validation runs cannot affect selection."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -505,5 +542,6 @@ if __name__ == "__main__":
     selection = select_best_astar_model(
         args.evaluation_results_path,
         variant_filter=args.variant_filter,
+        budget_mode_filter=args.budget_mode,
     )
     print_selection(selection, top_k=args.top_k)

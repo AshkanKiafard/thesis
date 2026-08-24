@@ -585,6 +585,23 @@ def strip_runtime_config(config):
     }
 
 
+def has_matching_evaluation_variant(entry, result_entry, algorithm):
+    """Match one model/dimension/algorithm at the same traversal budget.
+
+    Capped and uncapped A* results intentionally share the A* algorithm label
+    and output files. The configured visit limit is therefore part of the
+    result identity: ``-1`` denotes uncapped, while non-negative values denote
+    the existing capped variants.
+    """
+    return (
+        entry.get("model") == result_entry.get("model")
+        and entry.get("dimension") == result_entry.get("dimension")
+        and algorithm in entry.get("evaluation", {})
+        and get_used_max_visits(entry.get("used_config", {}), algorithm)
+        == get_used_max_visits(result_entry.get("used_config", {}), algorithm)
+    )
+
+
 def load_results_file(output_json_file):
     if os.path.exists(output_json_file):
         with open(output_json_file, "r", encoding="utf-8") as file:
@@ -619,9 +636,12 @@ def save_result(
         completed_algorithms = {
             algorithm
             for entry in current_results
-            if entry.get("model") == result_entry.get("model")
-            and entry.get("dimension") == result_entry.get("dimension")
             for algorithm in entry.get("evaluation", {})
+            if has_matching_evaluation_variant(
+                entry,
+                result_entry,
+                algorithm,
+            )
         }
         pending_evaluation = {
             algorithm: summary
@@ -742,9 +762,7 @@ def save_fastest_equivalent_result(
     matching_indices = [
         index
         for index, entry in enumerate(current_results)
-        if entry.get("model") == result_entry.get("model")
-        and entry.get("dimension") == result_entry.get("dimension")
-        and algorithm in entry.get("evaluation", {})
+        if has_matching_evaluation_variant(entry, result_entry, algorithm)
     ]
 
     if not matching_indices:
@@ -1207,6 +1225,15 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--astar-uncapped",
+        action="store_true",
+        help=(
+            "Evaluate embedding-guided A* without a visited-node cap. The "
+            "result is stored alongside the capped A* result with "
+            "astar_max_visits=-1."
+        ),
+    )
+    parser.add_argument(
         "--dim",
         type=int,
         default=None,
@@ -1244,6 +1271,8 @@ if __name__ == "__main__":
         raise ValueError("--ablation requires --dim, e.g. --dim 64")
     if args.ablation and (args.best_model_path is not None or args.best_model_dim is not None):
         raise ValueError("--ablation cannot be combined with --best-model-path/--best-model-dim")
+    if args.ablation and args.astar_uncapped:
+        raise ValueError("--ablation cannot be combined with --astar-uncapped")
     if args.ablation:
         args.skip_dijkstra = True
         args.force_model_results = True
@@ -1253,6 +1282,7 @@ if __name__ == "__main__":
     print(f"Graph: {graph_label} ({graph_name})")
     print(f"Graph path: {graph_path}")
     print(f"Embedding device: {args.embedding_device}")
+    print(f"A* budget mode: {'uncapped' if args.astar_uncapped else 'capped'}")
     if args.dim is not None:
         print(f"Restricted Matryoshka dim: {args.dim}")
     embedding_cache_suffix = get_embedding_cache_suffix(graph_name)
@@ -1542,6 +1572,25 @@ if __name__ == "__main__":
                 pending_work = []
 
                 for dim in dims:
+                    astar_max_visits = (
+                        -1
+                        if args.astar_uncapped
+                        else get_p95_cap(
+                            p95_configs,
+                            model_name,
+                            dim,
+                            "A*",
+                        )
+                    )
+                    expected_max_visits = {"A*": astar_max_visits}
+                    if not args.skip_dijkstra:
+                        expected_max_visits["Dijkstra"] = get_p95_cap(
+                            p95_configs,
+                            model_name,
+                            dim,
+                            "Dijkstra",
+                        )
+
                     if (
                         args.force_model_results
                         or args.keep_fastest_equivalent_model_result
@@ -1554,18 +1603,18 @@ if __name__ == "__main__":
                             if entry.get("model") == model_name
                             and entry.get("dimension") == dim
                             for algorithm in entry.get("evaluation", {}).keys()
+                            if algorithm in expected_max_visits
+                            and get_used_max_visits(
+                                entry.get("used_config", {}),
+                                algorithm,
+                            ) == expected_max_visits[algorithm]
                         }
 
                     pending_strategies = {}
                     used_config = {}
 
                     if "A*" not in completed_algorithms:
-                        used_config["astar_max_visits"] = get_p95_cap(
-                            p95_configs,
-                            model_name,
-                            dim,
-                            "A*",
-                        )
+                        used_config["astar_max_visits"] = astar_max_visits
                         pending_strategies["A*"] = ts.astar_traverse
 
                     if (
@@ -1669,9 +1718,16 @@ if __name__ == "__main__":
                             output_csv_file,
                             replace_existing=(
                                 (
-                                    lambda entry, model_name=model_name, dim=dim: (
-                                        entry.get("model") == model_name
-                                        and entry.get("dimension") == dim
+                                    lambda entry, result_entry=result_entry: any(
+                                        has_matching_evaluation_variant(
+                                            entry,
+                                            result_entry,
+                                            algorithm,
+                                        )
+                                        for algorithm in result_entry.get(
+                                            "evaluation",
+                                            {},
+                                        )
                                     )
                                 )
                                 if args.force_model_results

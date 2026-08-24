@@ -13,7 +13,14 @@ from evaluation.visited_nodes_analysis import save_result as save_analysis_resul
 
 class IncrementalFineTunedResultTests(unittest.TestCase):
     @staticmethod
-    def make_astar_entry(runtime, *, prediction=True, visits=3, timestamp="old"):
+    def make_astar_entry(
+        runtime,
+        *,
+        prediction=True,
+        visits=3,
+        timestamp="old",
+        max_visits=23,
+    ):
         return {
             "model": "granite_v4_finetuned",
             "model_path": "data/models/lightning/granite_v4_finetuned",
@@ -26,7 +33,7 @@ class IncrementalFineTunedResultTests(unittest.TestCase):
             "ablation_shared_max_visits": False,
             "ablation_cap_reference_model": None,
             "embedding_device": "cuda",
-            "used_config": {"astar_max_visits": 23},
+            "used_config": {"astar_max_visits": max_visits},
             "timestamp": timestamp,
             "evaluation": {
                 "A*": {
@@ -198,3 +205,37 @@ class IncrementalFineTunedResultTests(unittest.TestCase):
 
             self.assertEqual(output_json_file.read_bytes(), json_before)
             self.assertEqual(output_csv_file.read_bytes(), csv_before)
+
+    def test_capped_and_uncapped_astar_results_coexist_and_retain_separately(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_json_file = Path(temporary_directory) / "evaluation_results.json"
+            output_csv_file = Path(temporary_directory) / "evaluation_results.csv"
+
+            capped = self.make_astar_entry(3.0, max_visits=23)
+            uncapped = self.make_astar_entry(9.0, max_visits=-1)
+            save_evaluation_result(capped, output_json_file, output_csv_file)
+            save_fastest_equivalent_result(
+                uncapped,
+                output_json_file,
+                output_csv_file,
+            )
+            save_fastest_equivalent_result(
+                self.make_astar_entry(5.0, max_visits=-1, timestamp="new"),
+                output_json_file,
+                output_csv_file,
+            )
+
+            saved = json.loads(output_json_file.read_text(encoding="utf-8"))
+            self.assertEqual(len(saved), 2)
+            by_cap = {
+                entry["used_config"]["astar_max_visits"]: entry
+                for entry in saved
+            }
+            self.assertEqual(
+                by_cap[23]["evaluation"]["A*"]["metrics"]["avg_time_ms"],
+                3.0,
+            )
+            self.assertEqual(
+                by_cap[-1]["evaluation"]["A*"]["metrics"]["avg_time_ms"],
+                5.0,
+            )

@@ -1,8 +1,12 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from evaluation.select_best_model import (
     build_pareto_front,
     rank_pareto_knee,
+    select_best_astar_model,
 )
 
 
@@ -25,6 +29,43 @@ def candidate(name, f1, nodes, runtime, dimension):
 
 
 class ParetoKneeSelectionTest(unittest.TestCase):
+    def test_default_selection_excludes_uncapped_candidates(self):
+        def entry(name, cap, f1, nodes):
+            return {
+                "model": name,
+                "model_path": f"data/models/lightning/{name}",
+                "dimension": 64,
+                "used_config": {"astar_max_visits": cap},
+                "evaluation": {
+                    "A*": {
+                        "metrics": {
+                            "f1_score": f1,
+                            "accuracy": f1,
+                            "recall": f1,
+                            "precision": f1,
+                            "avg_nodes_visited": nodes,
+                            "avg_time_ms": 1.0,
+                            "num_examples": 10,
+                        }
+                    }
+                },
+            }
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            results_path = Path(temporary_directory) / "evaluation_results.json"
+            results_path.write_text(
+                json.dumps([
+                    entry("capped_finetuned", 23, 0.80, 5.0),
+                    entry("uncapped_finetuned", -1, 0.99, 1.0),
+                ]),
+                encoding="utf-8",
+            )
+
+            selection = select_best_astar_model(results_path)
+
+        self.assertEqual(selection["best"]["model"], "capped_finetuned")
+        self.assertEqual(selection["budget_mode_filter"], "capped")
+
     def test_discards_dominated_candidates_and_selects_tradeoff_knee(self):
         efficient = candidate("efficient", 0.70, 1.0, 1.0, 2)
         knee = candidate("knee", 0.85, 4.0, 2.0, 4)

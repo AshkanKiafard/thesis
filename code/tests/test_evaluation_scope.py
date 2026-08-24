@@ -189,6 +189,7 @@ class FineTunedScopeTests(unittest.TestCase):
             default_args = parse_evaluation_args()
         self.assertFalse(default_args.fine_tuned_only)
         self.assertFalse(default_args.pretrained_native_only)
+        self.assertFalse(default_args.astar_uncapped)
 
         with patch.object(
             sys,
@@ -219,6 +220,20 @@ class FineTunedScopeTests(unittest.TestCase):
             pretrained_args = parse_evaluation_args()
         self.assertFalse(pretrained_args.fine_tuned_only)
         self.assertTrue(pretrained_args.pretrained_native_only)
+
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "evaluation",
+                "dataset.json",
+                "--run-suffix",
+                "v4",
+                "--astar-uncapped",
+            ],
+        ):
+            uncapped_args = parse_evaluation_args()
+        self.assertTrue(uncapped_args.astar_uncapped)
 
     def test_validation_model_scope_flags_are_mutually_exclusive(self):
         incompatible_flags = (
