@@ -4,7 +4,8 @@ from unittest.mock import patch
 import networkx as nx
 
 from core.utils import traverse_graph
-from evaluation.evaluation import run_evaluation_loop
+from core.embeddings import STEmbedder
+from evaluation.evaluation import run_evaluation_loop, run_warmup_traversal
 from traverse_strategies.astar import astar_traverse
 from traverse_strategies.bfs import bfs_traverse
 
@@ -257,6 +258,77 @@ class ReachabilityTraversalTests(unittest.TestCase):
         self.assertEqual(summary["metrics"]["num_costed_paths"], 0)
         self.assertEqual(summary["per_example"][0]["path_length"], 0)
         self.assertIsNone(summary["per_example"][0]["path_cost"])
+
+    def test_embedding_guided_warmup_covers_every_in_graph_example(self):
+        graph = nx.DiGraph([("s", "a"), ("a", "t")])
+        data = [
+            {"cause": "s", "effect": "a", "answer": True},
+            {"cause": "s", "effect": "t", "answer": True},
+            {"cause": "missing", "effect": "t", "answer": False},
+        ]
+        calls = []
+
+        def strategy(_graph, start, end, _embedder, config):
+            calls.append((start, end, config["reachability_only"]))
+            return True, 1
+
+        run_warmup_traversal(
+            data,
+            graph,
+            self.embedder,
+            strategy,
+            "A*",
+        )
+
+        self.assertEqual(calls, [("s", "a", True), ("s", "t", True)])
+
+    def test_baseline_warmup_retains_single_example_behavior(self):
+        graph = nx.DiGraph([("s", "a"), ("a", "t")])
+        data = [
+            {"cause": "s", "effect": "a", "answer": True},
+            {"cause": "s", "effect": "t", "answer": True},
+        ]
+        calls = []
+
+        def strategy(_graph, start, end, _embedder, config):
+            calls.append((start, end, config["reachability_only"]))
+            return True, 1
+
+        run_warmup_traversal(data, graph, None, strategy, "BFS")
+
+        self.assertEqual(calls, [("s", "a", True)])
+
+    def test_astar_timing_skips_only_the_redundant_post_search_sync(self):
+        graph = nx.DiGraph([("s", "t")])
+        cuda_embedder = object.__new__(STEmbedder)
+        cuda_embedder.device = "cuda"
+
+        def strategy(_graph, _start, _end, _embedder, _config):
+            return True, 1
+
+        with patch(
+            "evaluation.evaluation.torch.cuda.synchronize"
+        ) as synchronize:
+            run_evaluation_loop(
+                [{"cause": "s", "effect": "t", "answer": True}],
+                graph,
+                cuda_embedder,
+                {"A*": strategy},
+                "astar-sync-test",
+            )
+            self.assertEqual(synchronize.call_count, 1)
+
+        with patch(
+            "evaluation.evaluation.torch.cuda.synchronize"
+        ) as synchronize:
+            run_evaluation_loop(
+                [{"cause": "s", "effect": "t", "answer": True}],
+                graph,
+                cuda_embedder,
+                {"BFS": strategy},
+                "bfs-sync-test",
+            )
+            self.assertEqual(synchronize.call_count, 2)
 
 
 if __name__ == "__main__":

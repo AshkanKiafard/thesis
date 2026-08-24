@@ -548,7 +548,13 @@ def traverse_graph(
     # The function just validates inputs and delegates to the strategy.
 
     # If either node is not in the graph, no path can exist.
-    if start_node not in graph.nodes or end_node not in graph.nodes:
+    nodes_prevalidated = bool(
+        config and config.get("_nodes_prevalidated", False)
+    )
+    if (
+        not nodes_prevalidated
+        and (start_node not in graph.nodes or end_node not in graph.nodes)
+    ):
         reachability_only = bool(
             config and config.get("reachability_only", False)
         )

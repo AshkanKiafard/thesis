@@ -406,6 +406,18 @@ def synchronize_embedding_device(embeder) -> None:
     torch.cuda.synchronize()
 
 
+def synchronize_after_traversal(embeder, strategy_name) -> None:
+    # Indexed A* converts every distance batch to a host Python list before it
+    # can update the heap.  That device-to-host transfer synchronizes all CUDA
+    # work launched by the traversal; direct-target and empty-successor exits
+    # launch no CUDA work.  A second synchronize after A* is therefore idle API
+    # overhead.  Other strategies keep the conservative synchronization.
+    if strategy_name == "A*" and isinstance(embeder, STEmbedder):
+        return
+
+    synchronize_embedding_device(embeder)
+
+
 def cleanup_cuda_cache() -> None:
     if not torch.cuda.is_available():
         return
@@ -416,6 +428,7 @@ def cleanup_cuda_cache() -> None:
 
 def get_evaluation_strategy_config(config, strategy_name, item=None):
     strategy_config = dict(config) if config is not None else {}
+    strategy_config["_nodes_prevalidated"] = True
 
     if strategy_name in {"A*", "BFS"}:
         strategy_config["reachability_only"] = True
@@ -433,15 +446,25 @@ def get_evaluation_strategy_config(config, strategy_name, item=None):
 
 def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=None):
     """
-    Run one untimed traversal before evaluation.
+    Run untimed traversal warmups before evaluation.
 
     This removes startup artifacts from timing:
     - CUDA/model lazy initialization
     - first embedding/cache access
     - first graph traversal overhead
 
-    The result is ignored and not stored.
+    Embedding-guided strategies receive one complete untimed pass.  A single
+    arbitrary example is not sufficient because reachability mode can discover
+    a direct target before executing any embedding lookup or distance kernel.
+    Traversal state is query-local and graph/embedding tables are read-only, so
+    the warmup cannot affect predictions, paths, or visited-node counts.
+
+    CPU/RL baselines retain the previous single-example warmup behavior.
+    Warmup results are ignored and never stored.
     """
+    full_warmup_pass = strategy_name in {"A*", "Dijkstra"}
+    completed = 0
+
     for item in data:
         cause = item["cause"]
         effect = item["effect"]
@@ -464,8 +487,15 @@ def run_warmup_traversal(data, graph, embeder, strategy, strategy_name, config=N
             strategy_config,
         )
         synchronize_embedding_device(embeder)
+        completed += 1
 
-        break
+        if not full_warmup_pass:
+            break
+
+    print(
+        f"Completed {completed} untimed {strategy_name} warmup "
+        f"traversal(s)."
+    )
 
 
 def save_all_results_csv(all_results, output_csv_file):
@@ -618,6 +648,158 @@ def save_result(
     print(f"Saved results for '{result_entry['model']}'")
 
 
+def _without_keys(mapping, excluded_keys):
+    return {
+        key: value
+        for key, value in mapping.items()
+        if key not in excluded_keys
+    }
+
+
+def _assert_equivalent_evaluation_result(existing_entry, candidate_entry, algorithm):
+    identity_keys = (
+        "model",
+        "model_path",
+        "dimension",
+        "split",
+        "run_suffix",
+        "ablation",
+        "config_source_dataset",
+        "config_source_graph",
+        "ablation_shared_max_visits",
+        "ablation_cap_reference_model",
+        "embedding_device",
+        "used_config",
+    )
+    existing_identity = {
+        key: existing_entry.get(key)
+        for key in identity_keys
+    }
+    candidate_identity = {
+        key: candidate_entry.get(key)
+        for key in identity_keys
+    }
+    if candidate_identity != existing_identity:
+        raise ValueError(
+            f"Cannot retain the fastest {algorithm} result because run metadata "
+            "changed. Existing and candidate configurations are not equivalent."
+        )
+
+    existing_result = existing_entry["evaluation"][algorithm]
+    candidate_result = candidate_entry["evaluation"][algorithm]
+    existing_metrics = _without_keys(
+        existing_result["metrics"],
+        {"avg_time_ms"},
+    )
+    candidate_metrics = _without_keys(
+        candidate_result["metrics"],
+        {"avg_time_ms"},
+    )
+    if candidate_metrics != existing_metrics:
+        raise ValueError(
+            f"Cannot retain the fastest {algorithm} result because substantive "
+            "aggregate metrics changed. Existing output was left untouched."
+        )
+
+    runtime_example_keys = {"time_sec", "time_ms"}
+    existing_examples = [
+        _without_keys(example, runtime_example_keys)
+        for example in existing_result.get("per_example", [])
+    ]
+    candidate_examples = [
+        _without_keys(example, runtime_example_keys)
+        for example in candidate_result.get("per_example", [])
+    ]
+    if candidate_examples != existing_examples:
+        raise ValueError(
+            f"Cannot retain the fastest {algorithm} result because per-example "
+            "predictions, paths, or visited-node counts changed. Existing output "
+            "was left untouched."
+        )
+
+
+def save_fastest_equivalent_result(
+    result_entry,
+    output_json_file,
+    output_csv_file,
+    algorithm="A*",
+):
+    """Persist a rerun only when it is equivalent and strictly faster.
+
+    Existing baseline rows and any other algorithms sharing the selected model
+    entry remain in their original positions. Runtime is the only field allowed
+    to differ; a substantive mismatch raises before either output file is
+    written.
+    """
+    candidate_algorithms = set(result_entry.get("evaluation", {}))
+    if candidate_algorithms != {algorithm}:
+        raise ValueError(
+            "Fastest-equivalent retention requires exactly one candidate "
+            f"algorithm ({algorithm}); got {sorted(candidate_algorithms)}."
+        )
+
+    current_results = load_results_file(output_json_file)
+    matching_indices = [
+        index
+        for index, entry in enumerate(current_results)
+        if entry.get("model") == result_entry.get("model")
+        and entry.get("dimension") == result_entry.get("dimension")
+        and algorithm in entry.get("evaluation", {})
+    ]
+
+    if not matching_indices:
+        save_result(result_entry, output_json_file, output_csv_file)
+        return True
+
+    if len(matching_indices) != 1:
+        raise ValueError(
+            f"Expected exactly one existing {algorithm} result for "
+            f"'{result_entry.get('model')}' dim {result_entry.get('dimension')}, "
+            f"found {len(matching_indices)}. Existing output was left untouched."
+        )
+
+    matching_index = matching_indices[0]
+    existing_entry = current_results[matching_index]
+    _assert_equivalent_evaluation_result(
+        existing_entry,
+        result_entry,
+        algorithm,
+    )
+
+    existing_runtime = float(
+        existing_entry["evaluation"][algorithm]["metrics"]["avg_time_ms"]
+    )
+    candidate_runtime = float(
+        result_entry["evaluation"][algorithm]["metrics"]["avg_time_ms"]
+    )
+
+    if candidate_runtime >= existing_runtime:
+        print(
+            f"Retaining existing {algorithm} result for "
+            f"'{result_entry['model']}' dim {result_entry.get('dimension')}: "
+            f"{existing_runtime:.6f} ms <= {candidate_runtime:.6f} ms."
+        )
+        return False
+
+    replacement_entry = dict(existing_entry)
+    replacement_evaluation = dict(existing_entry["evaluation"])
+    replacement_evaluation[algorithm] = result_entry["evaluation"][algorithm]
+    replacement_entry["evaluation"] = replacement_evaluation
+    replacement_entry["timestamp"] = result_entry.get("timestamp")
+    current_results[matching_index] = replacement_entry
+
+    with open(output_json_file, "w", encoding="utf-8") as file:
+        json.dump(current_results, file, indent=4)
+
+    save_all_results_csv(current_results, output_csv_file)
+    print(
+        f"Replaced {algorithm} result for '{result_entry['model']}' dim "
+        f"{result_entry.get('dimension')}: {candidate_runtime:.6f} ms < "
+        f"{existing_runtime:.6f} ms."
+    )
+    return True
+
+
 def calculate_metrics(y_true, y_pred, nodes_visited, path_lengths, times, path_costs):
     y_true = np.array(y_true, dtype=bool)
     y_pred = np.array(y_pred, dtype=bool)
@@ -711,7 +893,7 @@ def run_evaluation_loop(data, graph, embeder, strategies, description, config=No
                 strategy_config,
             )
 
-            synchronize_embedding_device(embeder)
+            synchronize_after_traversal(embeder, name)
             elapsed = time.perf_counter() - start_time
             if isinstance(search_result, bool):
                 pred_label = search_result
@@ -986,12 +1168,22 @@ def parse_args():
             "only at each model's native embedding dimension."
         ),
     )
-    parser.add_argument(
+    model_result_mode = parser.add_mutually_exclusive_group()
+    model_result_mode.add_argument(
         "--force-model-results",
         action="store_true",
         help=(
             "Rerun A*/Dijkstra model evaluations even if entries already exist. "
             "Existing entries for the same model and dimension are replaced."
+        ),
+    )
+    model_result_mode.add_argument(
+        "--keep-fastest-equivalent-model-result",
+        action="store_true",
+        help=(
+            "Rerun exactly one embedding-guided algorithm and persist it only "
+            "when all non-timing outputs are identical and its average runtime "
+            "is strictly lower. Existing baseline rows are never changed."
         ),
     )
     parser.add_argument(
@@ -1350,7 +1542,10 @@ if __name__ == "__main__":
                 pending_work = []
 
                 for dim in dims:
-                    if args.force_model_results:
+                    if (
+                        args.force_model_results
+                        or args.keep_fastest_equivalent_model_result
+                    ):
                         completed_algorithms = set()
                     else:
                         completed_algorithms = {
@@ -1444,8 +1639,7 @@ if __name__ == "__main__":
                         config=used_config,
                     )
 
-                    save_result(
-                        {
+                    result_entry = {
                             "model": model_name,
                             "model_path": model_path,
                             "dimension": dim,
@@ -1460,20 +1654,30 @@ if __name__ == "__main__":
                             "used_config": strip_runtime_config(used_config),
                             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                             "evaluation": main_summary,
-                        },
-                        output_json_file,
-                        output_csv_file,
-                        replace_existing=(
-                            (
-                                lambda entry, model_name=model_name, dim=dim: (
-                                    entry.get("model") == model_name
-                                    and entry.get("dimension") == dim
+                        }
+
+                    if args.keep_fastest_equivalent_model_result:
+                        save_fastest_equivalent_result(
+                            result_entry,
+                            output_json_file,
+                            output_csv_file,
+                        )
+                    else:
+                        save_result(
+                            result_entry,
+                            output_json_file,
+                            output_csv_file,
+                            replace_existing=(
+                                (
+                                    lambda entry, model_name=model_name, dim=dim: (
+                                        entry.get("model") == model_name
+                                        and entry.get("dimension") == dim
+                                    )
                                 )
-                            )
-                            if args.force_model_results
-                            else None
-                        ),
-                    )
+                                if args.force_model_results
+                                else None
+                            ),
+                        )
 
                 print(
                     f"Processed {pending_dimension_count} pending "

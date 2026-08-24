@@ -10,7 +10,10 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from sentence_transformers import SentenceTransformer
 
-from core.config import DEFAULT_EMBEDDING_BATCH_SIZE
+from core.config import (
+    DEFAULT_EMBEDDING_BATCH_SIZE,
+    EMBEDDING_INDEX_MIN_SUCCESSORS,
+)
 from core.constants import DistanceMetric, EMBEDDINGS_DIR
 from core.utils import (
     get_dimension_embedding_cache_path,
@@ -693,6 +696,11 @@ class STEmbedder:
         node_universe: str = None,
     ):
         self.device = _resolve_device(device)
+        self.torch_device = (
+            torch.device("cuda", torch.cuda.current_device())
+            if self.device == "cuda"
+            else torch.device(self.device)
+        )
         if node_universe is None:
             node_universe = get_node_universe_for_cache_suffix(cache_suffix)
         self.node_universe = normalize_node_universe(node_universe)
@@ -746,7 +754,19 @@ class STEmbedder:
 
     def _as_tensor(self, embedding) -> torch.Tensor:
         if isinstance(embedding, torch.Tensor):
-            return embedding.to(device=self.device, dtype=torch.float32).flatten()
+            target_device = getattr(self, "torch_device", None)
+            if target_device is None:
+                target_device = torch.device(self.device)
+            if (
+                embedding.device == target_device
+                and embedding.dtype == torch.float32
+            ):
+                return embedding if embedding.dim() == 1 else embedding.flatten()
+
+            return embedding.to(
+                device=target_device,
+                dtype=torch.float32,
+            ).flatten()
 
         return torch.as_tensor(
             embedding,
@@ -1480,6 +1500,28 @@ class STEmbedder:
         if self.embedding_table is None:
             raise ValueError("Embedding index has not been prepared.")
 
+        if not isinstance(indices, (list, tuple)):
+            indices = list(indices)
+        weight = self.embedding_table.weight
+
+        if not indices:
+            return self._trim_matrix_to_active_dim(weight[:0])
+
+        # A CUDA LongTensor allocation plus index_select is relatively costly
+        # for the tiny successor sets common in capped A*.  Direct row views
+        # and torch.stack contain the exact same float32 values in the exact
+        # same order; only the gather mechanism changes.  Keep index_select
+        # for larger batches, where the single batched gather is faster.
+        if len(indices) == 1:
+            return self._trim_matrix_to_active_dim(
+                weight[indices[0]:indices[0] + 1]
+            )
+
+        if len(indices) < EMBEDDING_INDEX_MIN_SUCCESSORS:
+            return self._trim_matrix_to_active_dim(
+                torch.stack([weight[index] for index in indices])
+            )
+
         index_tensor = torch.as_tensor(
             indices,
             device=self.device,
@@ -1488,7 +1530,7 @@ class STEmbedder:
 
         with torch.no_grad():
             return self._trim_matrix_to_active_dim(
-                self.embedding_table.weight.index_select(0, index_tensor)
+                weight.index_select(0, index_tensor)
             )
 
     def embed_many(self, texts) -> torch.Tensor:
@@ -1551,11 +1593,23 @@ class STEmbedder:
             if embeddings.numel() == 0:
                 return None
 
-            matrix = embeddings.to(device=self.device, dtype=torch.float32)
+            target_device = getattr(self, "torch_device", None)
+            if target_device is None:
+                target_device = torch.device(self.device)
+            if (
+                embeddings.device == target_device
+                and embeddings.dtype == torch.float32
+            ):
+                matrix = embeddings
+            else:
+                matrix = embeddings.to(
+                    device=target_device,
+                    dtype=torch.float32,
+                )
 
             if matrix.dim() == 1:
                 matrix = matrix.unsqueeze(0)
-            else:
+            elif matrix.dim() != 2:
                 matrix = matrix.reshape(matrix.shape[0], -1)
         else:
             embeddings = list(embeddings)

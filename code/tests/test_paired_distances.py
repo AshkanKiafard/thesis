@@ -5,6 +5,7 @@ import torch
 
 from core.constants import DistanceMetric
 from core.embeddings import STEmbedder
+from core.indexed_graph import IndexedGraph
 from traverse_strategies.astar import _get_distances_pair, astar_traverse
 
 
@@ -147,6 +148,116 @@ class STEmbedderPairedDistanceTests(unittest.TestCase):
         actual = embedder.get_distances_pair(source1, source2, matrix)
 
         self.assertEqual(actual, expected)
+
+
+class STEmbedderIndexedGatherTests(unittest.TestCase):
+    def make_embedder(self, rows=32, dim=8, device="cpu"):
+        embedder = object.__new__(STEmbedder)
+        embedder.device = device
+        embedder.distance_metric = DistanceMetric.EUCLIDEAN
+        embedder.matryoshka_dim = None
+        matrix = torch.arange(
+            rows * dim,
+            dtype=torch.float32,
+            device=device,
+        ).reshape(rows, dim)
+        embedder.embedding_table = torch.nn.Embedding.from_pretrained(
+            matrix,
+            freeze=True,
+        )
+        embedder.embedding_table_dim = dim
+        return embedder
+
+    def assert_gather_is_exact(self, indices, device="cpu"):
+        embedder = self.make_embedder(device=device)
+        expected_indices = torch.as_tensor(
+            indices,
+            device=device,
+            dtype=torch.long,
+        )
+        expected = embedder.embedding_table.weight.index_select(
+            0,
+            expected_indices,
+        )
+        actual = embedder.embed_indices(indices)
+
+        self.assertTrue(torch.equal(actual, expected))
+        self.assertEqual(actual.shape, expected.shape)
+        self.assertEqual(actual.dtype, expected.dtype)
+        self.assertEqual(actual.device, expected.device)
+
+    def test_empty_single_small_and_batched_gathers_are_exact(self):
+        for indices in ([], [7], [7, 2, 7, 15], list(range(16))):
+            with self.subTest(indices=indices):
+                self.assert_gather_is_exact(indices)
+
+    @unittest.skipUnless(torch.cuda.is_available(), "CUDA is not available")
+    def test_cuda_small_gathers_are_bitwise_exact(self):
+        for indices in ([7], [7, 2], [7, 2, 7, 15], list(range(15))):
+            with self.subTest(indices=indices):
+                self.assert_gather_is_exact(indices, device="cuda")
+
+    def test_adaptive_gather_preserves_indexed_astar_path_and_reachability(self):
+        nodes = ["start", "alpha", "beta", "merge", "goal"]
+        node_to_idx = {node: index for index, node in enumerate(nodes)}
+        adjacency = (
+            (1, 2),
+            (3,),
+            (3,),
+            (4,),
+            (),
+        )
+        indexed_graph = IndexedGraph(
+            node_to_idx=node_to_idx,
+            idx_to_node=nodes,
+            adjacency=adjacency,
+        )
+        graph = networkx_graph = nx.DiGraph()
+        networkx_graph.add_nodes_from(nodes)
+        for source_index, successors in enumerate(adjacency):
+            for successor_index in successors:
+                networkx_graph.add_edge(
+                    nodes[source_index],
+                    nodes[successor_index],
+                )
+
+        embedder = self.make_embedder(rows=len(nodes), dim=4)
+        adaptive_results = []
+        for reachability_only in (False, True):
+            adaptive_results.append(
+                astar_traverse(
+                    graph,
+                    "start",
+                    "goal",
+                    embedder,
+                    {
+                        "_indexed_graph": indexed_graph,
+                        "reachability_only": reachability_only,
+                    },
+                )
+            )
+
+        def legacy_index_select(indices):
+            index_tensor = torch.as_tensor(indices, dtype=torch.long)
+            return embedder.embedding_table.weight.index_select(0, index_tensor)
+
+        embedder.embed_indices = legacy_index_select
+        legacy_results = []
+        for reachability_only in (False, True):
+            legacy_results.append(
+                astar_traverse(
+                    graph,
+                    "start",
+                    "goal",
+                    embedder,
+                    {
+                        "_indexed_graph": indexed_graph,
+                        "reachability_only": reachability_only,
+                    },
+                )
+            )
+
+        self.assertEqual(adaptive_results, legacy_results)
 
 
 class LegacyDistanceEmbedder:
