@@ -1,22 +1,62 @@
 \chapter{Algorithmic Details}
 \label{app:algorithmic-details}
 
-This appendix summarizes the two implementation-level procedures that are most relevant for reproducing the method, namely bounded embedding-guided $A^*$ search and the construction of search-aligned training quadruples. Low-level implementation details are omitted for brevity and documented in the accompanying source repository.\footnote{\url{https://git.webis.de/code-teaching/theses/thesis-kiafard.git}}
+This appendix provides implementation-level details of the two variants of embedding-guided $A^*$ search and the construction of search-aligned supervision. Algorithm~\ref{alg:bounded-astar-reachability} is the reachability-only variant used for binary evaluation. Because only a binary answer is required, it does not retain path information and returns as soon as the target is encountered among the successors of an expanded node. Algorithm~\ref{alg:bounded-astar-path} retains path information and is used when the discovered path itself is required, including supervision construction and interactive visualization. Algorithm~\ref{alg:training-dataset} uses this path-returning variant without a visit budget to construct $\mathcal{D}_s^d$ for the training and validation splits. Further details and source code are provided in the accompanying repository.\footnote{\url{https://git.webis.de/code-teaching/theses/thesis-kiafard.git}}
 
 \begin{algorithm}[H]
-\caption{Path-mode bounded embedding-guided $A^*$ search}
-\label{alg:bounded-astar}
+\caption{Bounded embedding-guided $A^*$ reachability search}
+\label{alg:bounded-astar-reachability}
 \begin{algorithmic}[1]
 \Require Directed graph $G=(V,E)$, source node $a$, target node $b$, embedding function $\phi$, distance function $d$, visit budget $\tau$
-\Ensure A path from $a$ to $b$ if found, otherwise $\emptyset$
+\Ensure \textsc{True} if a path from $a$ to $b$ is found, otherwise \textsc{False}
+\If{$a=b$}
+    \State \Return \textsc{True}
+\EndIf
 \State $open \gets$ priority queue containing $(0,0,a)$
 \State $best\_g[a] \gets 0$
-\State $parent[a] \gets \textsc{None}$
 \State $closed \gets \emptyset$
 \While{$open$ is not empty}
     \State $(f,g,u) \gets$ entry with smallest priority from $open$
     \If{$u=b$}
-        \State \Return reconstructed path from $a$ to $b$
+        \State \Return \textsc{True}
+    \EndIf
+    \If{$u \in closed$}
+        \State \textbf{continue}
+    \EndIf
+    \State $closed \gets closed \cup \{u\}$
+    \If{$\tau \neq -1$ \textbf{and} $|closed| > \tau$}
+        \State \Return \textsc{False}
+    \EndIf
+    \If{$b \in N^{+}(u)$}
+        \State \Return \textsc{True}
+    \EndIf
+    \ForAll{$v \in N^{+}(u)$ with $v \notin closed$}
+        \State $g' \gets g + d(\phi(u),\phi(v))$
+        \If{$v \notin best\_g$ \textbf{or} $g' < best\_g[v]$}
+            \State $best\_g[v] \gets g'$
+            \State $h' \gets d(\phi(v),\phi(b))$
+            \State insert $(g'+h',g',v)$ into $open$
+        \EndIf
+    \EndFor
+\EndWhile
+\State \Return \textsc{False}
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{Bounded embedding-guided $A^*$ path search}
+\label{alg:bounded-astar-path}
+\begin{algorithmic}[1]
+\Require Directed graph $G=(V,E)$, source node $a$, target node $b$, embedding function $\phi$, distance function $d$, visit budget $\tau$
+\Ensure A path from $a$ to $b$ if found, otherwise $\emptyset$
+\State $path\_links \gets [(a,\textsc{None})]$
+\State $open \gets$ priority queue containing $(0,0,a,0)$
+\State $best\_g[a] \gets 0$
+\State $closed \gets \emptyset$
+\While{$open$ is not empty}
+    \State $(f,g,u,i) \gets$ entry with smallest priority from $open$
+    \If{$u=b$}
+        \State \Return path reconstructed from $path\_links$ at index $i$
     \EndIf
     \If{$u \in closed$}
         \State \textbf{continue}
@@ -29,9 +69,10 @@ This appendix summarizes the two implementation-level procedures that are most r
         \State $g' \gets g + d(\phi(u),\phi(v))$
         \If{$v \notin best\_g$ \textbf{or} $g' < best\_g[v]$}
             \State $best\_g[v] \gets g'$
-            \State $parent[v] \gets u$
+            \State append $(v,i)$ to $path\_links$
+            \State $j \gets |path\_links|-1$
             \State $h' \gets d(\phi(v),\phi(b))$
-            \State insert $(g'+h',g',v)$ into $open$
+            \State insert $(g'+h',g',v,j)$ into $open$
         \EndIf
     \EndFor
 \EndWhile
@@ -39,21 +80,25 @@ This appendix summarizes the two implementation-level procedures that are most r
 \end{algorithmic}
 \end{algorithm}
 
-Algorithm~\ref{alg:bounded-astar} shows path mode, which is used when an explicit causal path is required, including construction of the training quadruples and frontend interpretation. Binary evaluation instead enables the same implementation's reachability-only mode. In that mode, $a=b$ succeeds with zero visited nodes; otherwise the search returns success as soon as $b$ is discovered and inserted into the frontier. It allocates no parent structure and performs no path reconstruction. The visit-budget check is performed before inspecting the successors of the newly visited node, so early target discovery cannot bypass the configured budget. BFS uses the same mode parameter and analogous return-on-discovery behavior during evaluation.
-
 \begin{algorithm}[H]
-\caption{Construction of search-aligned training quadruples}
+\caption{Construction of search-aligned supervision}
 \label{alg:training-dataset}
 \begin{algorithmic}[1]
-\Require Causal training pairs $Q$, causal graph $G=(V,E)$, base embedding model $M$, distance function $d$
-\Ensure Training set $D$ of quadruples $(c,e,p,n)$
-\State Define the embedding function $\phi(v) \gets M(v)$
-\State Precompute embeddings $\mathbf{z}_v \gets \phi(v)$ for all $v \in V$
-\State $D \gets \emptyset$
-\ForAll{$(A,B) \in Q$}
+\Require Causal pairs $Q_s$ for split $s\in\{\mathrm{train},\mathrm{val}\}$, causal graph $G=(V,E)$, base embedding model $M$, distance function $d\in\{\mathrm{Cos},\mathrm{Euc}\}$
+\Ensure Supervision dataset $\mathcal{D}_s^d$ of quadruples $(c,e,p,n)$
+\State Precompute $\mathbf{z}_v \gets M(v)$ for all $v\in V$
+\State Define $\phi(v) \gets \mathbf{z}_v$
+\State $\mathcal{D}_s^d \gets \emptyset$
+\State $cache \gets \emptyset$
+\ForAll{$(A,B) \in Q_s$}
     \State Let $a,b\in V$ be the graph nodes corresponding to $A,B$
-    \State $P \gets$ path returned by $A^*$ on $G$ from $a$ to $b$ using $\phi$, $d$, and $\tau=-1$
-    \If{$P=\emptyset$ or $|P| < 2$}
+    \If{$(a,b) \in cache$}
+        \State $P \gets cache[(a,b)]$
+    \Else
+        \State $P \gets$ path from unbounded $A^*$ on $G$ from $a$ to $b$ using $\phi$ and $d$
+        \State $cache[(a,b)] \gets P$
+    \EndIf
+    \If{$|P| < 2$}
         \State \textbf{continue}
     \EndIf
     \For{$i \gets 0$ to $|P|-2$}
@@ -61,42 +106,10 @@ Algorithm~\ref{alg:bounded-astar} shows path mode, which is used when an explici
         \State $p \gets P_{i+1}$
         \State $e \gets b$
         \ForAll{$n \in N^+(c) \setminus \{p\}$}
-            \State $D \gets D \cup \{(c,e,p,n)\}$
+            \State $\mathcal{D}_s^d \gets \mathcal{D}_s^d \cup \{(c,e,p,n)\}$
         \EndFor
     \EndFor
 \EndFor
-\State \Return $D$
+\State \Return $\mathcal{D}_s^d$
 \end{algorithmic}
 \end{algorithm}
-
-\clearpage
-
-\chapter{Additional Evaluation Details}
-\label{app:evaluation-details}
-
-This appendix provides supplementary evaluation details supporting the results in Chapter~\ref{chap:results}. It reports the selected training hyperparameters, the search budgets used for bounded graph traversal, and the detailed F\textsubscript{1} significance tests for the final comparison.
-
-\section{Training Hyperparameters}
-\label{app:training-hyperparameters}
-
-Table~\ref{tab:training-hyperparameters} reports the final training configuration for each fine-tuned embedding model. The reported hyperparameters were selected during hyperparameter tuning and used for the final training run. The epoch denotes the zero-indexed last validation improvement before early stopping with a patience of 10. Consequently, a reported epoch of $n$ indicates that training stopped after epoch $n+10$, while the checkpoint from epoch $n$ was retained as the final model.
-
-\input{tables/training_hyperparameters}
-
-\clearpage
-
-\section{Expansion Thresholds}
-\label{app:expansion-thresholds}
-
-Table~\ref{tab:p95-visited-nodes} lists the resulting visit budgets $\tau$ for the pretrained models at their full embedding dimensions and for the fine-tuned models across all evaluated Matryoshka dimensions. Each budget is computed independently as the $p_{95}$ of visited nodes from successful $A^*$ searches on the MS MARCO training split with CauseNet Precision.
-
-\input{tables/p95_visited_nodes}
-
-\clearpage
-
-\section{\texorpdfstring{F\textsubscript{1}}{F1} Significance Tests}
-\label{app:f1-significance-tests}
-
-Tables~\ref{tab:f1-significance-causenet-precision}--\ref{tab:f1-significance-ceg} report paired stratified bootstrap tests for F\textsubscript{1} differences between the selected $A^*$ configuration and the baselines. Positive $\Delta$ values indicate higher F\textsubscript{1} for $A^*$, while negative values favor the baseline. $\Delta$ is reported in percentage points. The 95\% confidence intervals are unadjusted, and $p_{\mathrm{Bonf.}}$ denotes the Bonferroni-adjusted bootstrap p-value.
-
-\input{tables/f1_significance_tests}

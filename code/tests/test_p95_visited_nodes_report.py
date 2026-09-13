@@ -17,7 +17,7 @@ class P95VisitedNodesReportTests(unittest.TestCase):
             {
                 "model": (
                     "all-mpnet-base-v2_relu_cosine_nonorm_"
-                    "matryoshka_v3_finetuned"
+                    "matryoshka_unit_finetuned"
                 ),
                 "dimension": 2,
                 "analysis": {
@@ -30,7 +30,7 @@ class P95VisitedNodesReportTests(unittest.TestCase):
             {
                 "model": (
                     "all-mpnet-base-v2_relu_cosine_nonorm_"
-                    "matryoshka_v3_finetuned"
+                    "matryoshka_unit_finetuned"
                 ),
                 "dimension": 4,
                 "analysis": {

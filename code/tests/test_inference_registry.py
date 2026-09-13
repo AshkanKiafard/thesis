@@ -98,21 +98,21 @@ class InferenceRegistryTests(unittest.TestCase):
     def test_finetuned_ablation_and_conditional_dimension_labels(self):
         self.assertEqual(
             format_model_display_label(
-                "data/models/lightning/all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_v3_finetuned",
+                "data/models/lightning/all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_unit_finetuned",
                 is_finetuned=True,
             ),
             "MPNet FT ReLU+Cosine",
         )
         self.assertEqual(
             format_model_display_label(
-                "granite-embedding-english-r2_gelu_euclid_nonorm_matryoshka_v3_ablation_finetuned",
+                "granite-embedding-english-r2_gelu_euclid_nonorm_matryoshka_unit_ablation_finetuned",
                 is_finetuned=True,
             ),
             "Granite AB GELU+Euclidean",
         )
         self.assertEqual(
             format_model_display_label(
-                "granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v3_finetuned",
+                "granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_unit_finetuned",
                 is_finetuned=True,
                 dimension=32,
                 include_dimension=True,
@@ -121,7 +121,7 @@ class InferenceRegistryTests(unittest.TestCase):
         )
         self.assertEqual(
             format_model_display_label(
-                "Qwen3-Embedding-0.6B_gelu_cosine_nonorm_matryoshka_v3_finetuned",
+                "Qwen3-Embedding-0.6B_gelu_cosine_nonorm_matryoshka_unit_finetuned",
                 is_finetuned=True,
                 dimension=64,
                 include_dimension=True,
@@ -134,11 +134,11 @@ class InferenceRegistryTests(unittest.TestCase):
             (
                 fake_model(dims=[32, 64]),
                 fake_model(
-                    id="data/models/lightning/all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_v3_finetuned",
+                    id="data/models/lightning/all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_unit_finetuned",
                     is_finetuned=True,
                     variant="finetuned",
                     activation="relu",
-                    cache_name="all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_v3_finetuned",
+                    cache_name="all-mpnet-base-v2_relu_cosine_nonorm_matryoshka_unit_finetuned",
                 ),
             )
         )

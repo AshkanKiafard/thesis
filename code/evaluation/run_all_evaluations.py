@@ -239,6 +239,12 @@ def default_best_model_path(args):
     )
 
 
+def localize_model_path(model_path):
+    """Map an evaluation-record model path to this checkout's model directory."""
+
+    return str(LIGHTNING_MODELS_DIR / Path(model_path).name)
+
+
 def select_best_model(args):
     results_path = validation_results_path(args)
 
@@ -256,6 +262,9 @@ def select_best_model(args):
     selection = select_best_astar_model(
         results_path,
         variant_filter=args.variant_filter,
+    )
+    selection["best"]["model_path"] = localize_model_path(
+        selection["best"]["model_path"]
     )
     print_selection(selection)
 

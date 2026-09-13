@@ -2,7 +2,7 @@
 \centering
 \small
 \setlength{\tabcolsep}{6pt}
-\caption{Number of causal questions in MS MARCO and SemEval before and after graph-node coverage filtering. ``Total'' counts all causal samples in each local split. The graph columns count samples where both the potential cause and effect are covered by the corresponding graph.}
+\caption{Number of causal questions in MS MARCO and SemEval. ``Total'' reports all causal samples in each split, while the graph columns report the samples retained after graph-node coverage filtering, where both the potential cause and effect are covered by the corresponding graph.}
 \label{tab:dataset-statistics}
 \begin{tabular}{@{}p{2.75cm}rrrrrrrr@{}}
 \toprule
@@ -21,7 +21,7 @@
 & \textbf{Pos.} & \textbf{Neg.} \\
 \midrule
 \multicolumn{9}{@{}l}{MS MARCO \citep{nguyen:2016,bluebaum:2024}} \\
-Train      & $1{,}837$ & $0$  & $1{,}213$ & $0$  & $1{,}618$ & $0$  & $389$ & $0$ \\
+Train      & $1837$ & $0$  & $1213$ & $0$  & $1618$ & $0$  & $389$ & $0$ \\
 Validation & $194$     & $47$ & $137$     & $22$ & $176$     & $35$ & $44$  & $8$ \\
 Test       & $223$     & $40$ & $143$     & $20$ & $189$     & $31$ & $41$  & $7$ \\
 \addlinespace[2pt]

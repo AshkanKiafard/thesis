@@ -1,3 +1,16 @@
-/data/
+/data/*
+!/data/.gitkeep
+!/data/cache/
+/data/cache/*
+!/data/cache/.gitkeep
+!/data/cache/web_demo_graphs/
+/data/cache/web_demo_graphs/*
+!/data/cache/web_demo_graphs/.gitkeep
+!/data/cache/web_demo_graph_previews/
+/data/cache/web_demo_graph_previews/*
+!/data/cache/web_demo_graph_previews/.gitkeep
+!/data/cache/web_demo_logs/
+/data/cache/web_demo_logs/*
+!/data/cache/web_demo_logs/.gitkeep
 /README_FOR_CODEX.md
 /ruff.toml

@@ -1,26 +1,56 @@
-\begin{table}[t]
+\begin{table}[H]
 \centering
 \small
-\caption{Validation results on MS MARCO with CauseNet Precision at the full embedding dimension. Pretrained and fine-tuned embedding models are compared with the BFS and RL baselines in terms of F\textsubscript{1}, visited nodes, and runtime. Bold marks the best value in each metric column.}
+\setlength{\tabcolsep}{5pt}
+\caption{Validation results on MS MARCO with CauseNet Precision at each model's full embedding dimension. Pretrained (PT) and fine-tuned (FT) $A^*$ are compared with BFS and RL under capped and uncapped search. Capped runs use their $p_{95}$ budget $\tau$. F\textsubscript{1} is reported in percent, N denotes average visited nodes, and T denotes runtime in milliseconds per query. The best value in each metric and search regime is bold, including ties.}
 \label{tab:validation-full-dim}
-\begin{tabular}{@{}p{5.9cm}rrrr@{}}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llrrrrrrr@{}}
 \toprule
-\textbf{Model} & $\boldsymbol{\tau}$ & \textbf{F\textsubscript{1}} & \textbf{Visited nodes} & \textbf{Time [ms]} \\
+& & & \multicolumn{3}{c}{\textbf{Capped}} & \multicolumn{3}{c}{\textbf{Uncapped}} \\
+\cmidrule(lr){4-6}\cmidrule(lr){7-9}
+\textbf{Model} & \textbf{Variant} & $\boldsymbol{\tau}$
+& \textbf{F\textsubscript{1}} & \textbf{N} & \textbf{T}
+& \textbf{F\textsubscript{1}} & \textbf{N} & \textbf{T} \\
 \midrule
-BFS (uncapped) & -- & \textbf{90.6} & $3{,}762.7$ & 4.5 \\
-BFS (capped) & $12{,}170$ & 86.6 & $2{,}882.8$ & 4.1 \\
-RL & -- & 58.3 & 37.5 & 69.1 \\
+\multicolumn{2}{@{}l}{BFS}
+& 1,316 & 86.6 & 184.8 & 0.7
+& \textbf{90.6} & 1,659.8 & \textbf{2.2} \\
+\multicolumn{2}{@{}l}{RL}
+& -- & -- & -- & --
+& 58.3 & \textbf{37.5} & 73.4 \\
 \midrule
-BGE & 379 & 86.6 & 68.6 & 10.9 \\
-BGE tuned & 191 & 79.2 & 66.0 & 8.3 \\
-Granite & 825 & 86.2 & 142.0 & 16.1 \\
-Granite tuned & 67 & 84.0 & 18.4 & \textbf{3.6} \\
-MPNet & 503 & 86.6 & 85.1 & 11.9 \\
-MPNet tuned & $\mathbf{56}$ & 85.4 & \textbf{13.0} & 4.0 \\
-mxbai & 376 & 86.6 & 66.1 & 9.8 \\
-mxbai tuned & 156 & 84.8 & 39.0 & 6.1 \\
-Qwen & 594 & 87.1 & 105.4 & 13.9 \\
-Qwen tuned & 91 & 84.1 & 21.7 & 4.6 \\
+BGE & PT
+& 379 & 86.6 & 68.6 & 9.1
+& \textbf{90.6} & 1,342.4 & 41.5 \\
+& FT
+& 10 & 79.8 & 5.2 & 1.0
+& \textbf{90.6} & 1,096.4 & 33.3 \\
+Granite & PT
+& 825 & 86.2 & 142.0 & 13.2
+& \textbf{90.6} & 1,448.4 & 43.0 \\
+& FT
+& 32 & 82.3 & 11.0 & 1.9
+& \textbf{90.6} & 1,252.8 & 29.8 \\
+MPNet & PT
+& 503 & 86.6 & 85.1 & 9.9
+& \textbf{90.6} & 1,394.9 & 42.1 \\
+& FT
+& 22 & 82.4 & 7.5 & 1.7
+& \textbf{90.6} & 1,101.4 & 34.2 \\
+mxbai & PT
+& 376 & 86.6 & 66.1 & 8.0
+& \textbf{90.6} & 1,323.7 & 38.1 \\
+& FT
+& 9 & 74.6 & 5.2 & 0.9
+& \textbf{90.6} & 1,259.3 & 40.1 \\
+Qwen & PT
+& 594 & \textbf{87.1} & 105.4 & 11.5
+& \textbf{90.6} & 1,407.8 & 44.0 \\
+& FT
+& \textbf{5} & 78.4 & \textbf{3.5} & \textbf{0.6}
+& \textbf{90.6} & 1,140.1 & 38.1 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}

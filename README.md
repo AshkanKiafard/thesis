@@ -6,7 +6,7 @@ A Python/PyTorch project for binary causal question answering. Given a question 
 
 > Instead of learning a traversal policy, this project learns the heuristic used by A*.
 
-On the 12.2-million-node CauseNet Full graph, the selected A* configuration averages **7.5 visited nodes and 11.3 ms per MS MARCO query**. Uncapped BFS averages 30,099.3 visited nodes and 59.5 ms, with F1 scores of 82.9 and 89.9 respectively.
+On the 12.2-million-node CauseNet Full graph, the selected A* configuration averages **7.5 visited nodes and 7.2 ms per MS MARCO query**. Uncapped BFS averages 30,099.3 visited nodes and 59.5 ms, with F1 scores of 82.9 and 89.9 respectively.
 
 ## Problem
 
@@ -90,7 +90,7 @@ The same objective is applied to nested Matryoshka prefixes. This makes the firs
 | Search distance | Euclidean |
 | A* visit budget | `τ = 23` |
 | Selection data | MS MARCO validation with CauseNet Precision |
-| Validation result | 83.5 F1 · 9.1 visited nodes · 1.7 ms/query |
+| Validation result | 83.5 F1 · 9.1 visited nodes · 1.5 ms/query |
 | Selection rule | F1–log-visited-nodes Pareto knee after removing dominated candidates |
 
 ## Example: “Does sleep deprivation cause cancer?”
@@ -109,20 +109,20 @@ The final system was evaluated on graph-covered MS MARCO and SemEval questions a
 
 | Graph | Method | F1 | Avg. visited nodes | Time/query |
 |---|---|---:|---:|---:|
-| CauseNet Precision | Selected A* | 86.7 | **6.5** | 1.3 ms |
+| CauseNet Precision | Selected A* | 86.7 | **6.5** | 1.1 ms |
 |  | BFS, uncapped | **90.6** | 1,157.3 | 1.4 ms |
 |  | BFS, capped | 90.2 | 134.9 | **0.5 ms** |
 |  | RL baseline | 70.3 | 32.0 | 67.7 ms |
-| CauseNet Full | Selected A* | 82.9 | **7.5** | 11.3 ms |
+| CauseNet Full | Selected A* | 82.9 | **7.5** | 7.2 ms |
 |  | BFS, uncapped | **89.9** | 30,099.3 | 59.5 ms |
 |  | BFS, capped | 87.2 | 135.1 | **9.4 ms** |
 |  | RL baseline | 69.9 | 44.6 | 658.1 ms |
-| CEG Filtered | Selected A* | **92.0** | **2.3** | **4.8 ms** |
+| CEG Filtered | Selected A* | **92.0** | **2.3** | **0.8 ms** |
 |  | BFS, uncapped | 90.9 | 492.1 | 44.3 ms |
 |  | BFS, capped | **92.0** | 30.2 | 5.8 ms |
 |  | RL baseline | 84.6 | 24.3 | 5,129.0 ms |
 
-The clearest efficiency gain appears on CauseNet Full. Relative to uncapped BFS, A* visits about 4,011× fewer nodes and runs 5.3× faster on MS MARCO; on SemEval it visits about 11,308× fewer nodes and runs 16.0× faster. The corresponding F1 differences are -7.1 and +9.5 points. Compared with capped BFS, A* visits 18.0× to 31.7× fewer nodes; its F1 is 4.3 points lower on MS MARCO and 0.6 points lower on SemEval.
+The clearest efficiency gain appears on CauseNet Full. Relative to uncapped BFS, A* visits about 4,011× fewer nodes and runs 8.2× faster on MS MARCO; on SemEval it visits about 11,308× fewer nodes and runs 18.9× faster. The corresponding F1 differences are -7.1 and +9.5 points. Compared with capped BFS, A* visits 18.0× to 31.7× fewer nodes; its F1 is 4.3 points lower on MS MARCO and 0.6 points lower on SemEval.
 
 On CEG Filtered / MS MARCO, A* ties capped BFS for the highest F1 and visits about 213× fewer nodes than uncapped BFS. That F1 difference is not statistically significant after correction. Across all six graph/dataset test settings, A* has higher F1 and lower runtime than the evaluated LSTM-based RL baseline.
 
@@ -130,9 +130,9 @@ Runtime was measured on Webis SLURM jobs with eight CPU cores, 64 GB RAM, and on
 
 ### Why 64 dimensions?
 
-The validation sweep compares F1, the p95 search budget, visited nodes, and runtime across Matryoshka dimensions. Granite at 64 dimensions reached 83.5 F1 with 9.1 visited nodes and 1.7 ms per query. Smaller prefixes can reduce search effort further, while larger prefixes can gain effectiveness, but the normalized Pareto-knee criterion selects 64 dimensions as the empirical point of diminishing returns between these objectives.
+The validation sweep compares F1, the p95 search budget, visited nodes, and runtime across Matryoshka dimensions. Granite at 64 dimensions reached 83.5 F1 with 9.1 visited nodes and 1.5 ms per query. Smaller prefixes can reduce search effort further, while larger prefixes can gain effectiveness, but the normalized Pareto-knee criterion selects 64 dimensions as the empirical point of diminishing returns between these objectives.
 
-![Validation performance across Matryoshka embedding dimensions](code/docs/readme/matryoshka-validation.png)
+![Validation performance across Matryoshka embedding dimensions](assets/readme/matryoshka-validation.png)
 
 *Validation on MS MARCO with CauseNet Precision. Cost-related axes use logarithmic scales. Figure adapted from the thesis.*
 
@@ -151,9 +151,9 @@ Exact final-test values are in [`thesis/tables/test_res.tex`](thesis/tables/test
 
 The FastAPI demo uses 3d-force-graph to display the discovered path and its surrounding graph neighborhood. It also reports the path length, visited nodes, and runtime for the selected search configuration.
 
-Hosted demo (planned): [pathfinding.demo.causenet.org](https://pathfinding.demo.causenet.org/)
+Hosted demo: [causalpathfinding.web.webis.de](https://causalpathfinding.web.webis.de/)
 
-![Interactive causal path visualization](code/docs/readme/causal-path-demo.png)
+![Interactive causal path visualization](assets/readme/causal-path-demo.png)
 
 ### Run locally
 
@@ -164,7 +164,7 @@ cd code
 python app.py
 ```
 
-Open `http://127.0.0.1:9000`. The demo requires the CauseNet Precision graph, selected model checkpoint, and matching embedding cache under `code/data/`. In [`code/app.py`](code/app.py), `load_all = False` keeps startup to the selected A* configuration; setting it to `True` preloads all supported graphs, A* variants, BFS, and RL and requires substantially more memory.
+Open `http://127.0.0.1:9000`. The demo requires the CauseNet Precision graph, selected exported model directory, and matching embedding cache under `code/data/`. In [`code/app.py`](code/app.py), `load_all = False` keeps startup to the selected A* configuration; setting it to `True` preloads all supported graphs, A* variants, BFS, and RL and requires substantially more memory.
 
 The frontend loads 3d-force-graph and supporting UI libraries from CDNs, so the browser also needs internet access when the demo page starts.
 
@@ -172,6 +172,7 @@ The frontend loads 3d-force-graph and supporting UI libraries from CDNs, so the 
 
 ```text
 .
+├── assets/readme/         # Images embedded by this README
 ├── code/
 │   ├── core/                 # Graph/model registries, embedding caches, indexed inference
 │   ├── traverse_strategies/  # A*, BFS, Dijkstra, and RL traversal
@@ -180,6 +181,20 @@ The frontend loads 3d-force-graph and supporting UI libraries from CDNs, so the 
 │   ├── preprocessing/        # Dataset normalization and CEG filtering
 │   ├── web_demo/             # FastAPI API and 3d-force-graph frontend
 │   ├── tests/                # Cache, graph, registry, and reporting tests
+│   ├── data/                 # Local/Zenodo artifacts; ignored by Git except placeholders
+│   │   ├── cache/            # Generated web-demo/report caches; contents are not released
+│   │   ├── checkpoints/      # Raw Lightning checkpoints; optional and not released
+│   │   ├── datasets/         # Raw and normalized evaluation datasets
+│   │   ├── docker/           # Runtime/deployment data workspace
+│   │   ├── docs/             # SHA-256 checksum allowlist for the release archive
+│   │   ├── embeddings/       # Node indices and memory-mapped embedding matrices
+│   │   ├── evaluation/       # JSON/CSV results and p95 analyses
+│   │   ├── graphs/           # Provider-downloaded graph files; not in the Zenodo archive
+│   │   ├── lightning_logs/   # Generated training logs; not released
+│   │   ├── models/           # Exported v4 models and RL checkpoint
+│   │   ├── optuna_studies/   # Final v4 hyperparameter-search SQLite studies
+│   │   ├── plots/            # Generated evaluation figures
+│   │   └── reports/          # Generated tables and summaries
 │   ├── app.py                # Local demo launcher
 │   └── requirements.txt
 └── thesis/
@@ -205,17 +220,86 @@ A CUDA-capable GPU is recommended for training, embedding precomputation, and th
 
 ## Data, graphs, and research artifacts
 
-> **TODO: Add updated Zenodo archive / DOI**
+<!-- TODO: Add final Zenodo DOI/link -->
 
-Model checkpoints, normalized datasets, embedding caches, and evaluation outputs are too large for Git. Once downloaded or generated, they are expected under:
+Download the current v4 reproducibility archive from [Google Drive](https://drive.google.com/file/d/108g4Sz_kOrKyDriroRmI8R6oqoDdgNzl/view). After downloading the ZIP file, extract it and merge the archive's top-level folders directly into `code/data/`. For example, the archive's `datasets/` directory must become `code/data/datasets/`; do not leave the files inside an additional ZIP-named or `data/` directory.
+
+The final v4 Zenodo archive has not been published yet. The prepared local artifact is rooted at `code/data/`; its large contents are intentionally ignored by Git. Upload the following folders/files, preserving these paths inside one archive:
+
+| Archive path | Contents and purpose |
+|---|---|
+| `datasets/` | Raw MS MARCO/SemEval inputs and the normalized files under `filtered/` used by evaluation |
+| `embeddings/` | Shared and CauseNet Full node-index JSONL files, retained base-model caches, v4 fine-tuned caches, and `glove.6B/glove.6B.300d.txt` for RL |
+| `models/lightning/` | Five primary v4 SentenceTransformer exports and three Granite v4 ablation exports |
+| `models/rl/msmarco_no_inverse_state_dict.pt` | Released RL baseline checkpoint |
+| `evaluation/` | Final v4 JSON/CSV results, p95 visited-node analysis, significance tests, and budget-tradeoff results |
+| `plots/` | Regenerated v4, ablation, tradeoff, and thesis plots |
+| `reports/` | Machine-readable and LaTeX dataset, graph, hyperparameter, and p95 reports |
+| `optuna_studies/hparam_search/` | The five final v4 Optuna SQLite studies used by `finetune_best` |
+| `docs/v4-sha256sums.txt` | SHA-256 checksums and the authoritative file-level upload allowlist |
+
+This explicitly includes the complete final `plots/` tree and the five studies under `optuna_studies/hparam_search/`. The authoritative file-level upload allowlist is `code/data/docs/v4-sha256sums.txt`: every payload file except the checksum file itself appears there.
+
+Do **not** zip the current `code/data/` directory verbatim. It also contains provider-downloaded graphs, generated web-demo caches, logs, and other local-only workspace directories. Build a clean archive containing the paths in the table above, include `docs/v4-sha256sums.txt`, and exclude:
 
 ```text
-code/data/datasets/filtered/
-code/data/embeddings/
-code/data/evaluation/
-code/data/models/lightning/
-code/data/models/rl/
+cache/
+checkpoints/
+docker/
+graphs/
+lightning_logs/
+embeddings/glove.6B/glove.6B.50d.txt
+embeddings/glove.6B/glove.6B.100d.txt
+embeddings/glove.6B/glove.6B.200d.txt
 ```
+
+`code/data/docs/setup.md` has already been removed and must not be included because it contained machine-specific/personal setup information. With those exclusions, creating one Zip64 archive whose root directly contains `datasets/`, `embeddings/`, `evaluation/`, `models/`, `optuna_studies/`, `plots/`, `reports/`, and `docs/` is the recommended Zenodo upload format. Do not put those folders inside an additional outer `data/` directory.
+
+Normal reproduction does not require retraining or recomputing embeddings. Extract the future archive so that its contents merge directly into `code/data/`. The released result JSON/CSV files are sufficient to inspect the measurements and regenerate plots. Re-running evaluation additionally requires the relevant graph files, model export, node index, embedding matrix, and—for RL—the checkpoint and 300-dimensional GloVe file.
+
+### Verify the downloaded archive
+
+`code/data/docs/v4-sha256sums.txt` uses the standard GNU `sha256sum` format. It lists every release payload file except itself. After extracting the archive, verify all files from `code/data/`:
+
+```bash
+sha256sum --check docs/v4-sha256sums.txt
+```
+
+This command is available directly on Linux and through WSL or Git Bash on Windows. Every line should report `OK`.
+
+The required dataset files are:
+
+```text
+code/data/datasets/msmarco_train.json
+code/data/datasets/msmarco_valid.json
+code/data/datasets/msmarco_test.json
+code/data/datasets/sem_test.csv
+code/data/datasets/filtered/msmarco_train_filtered.json
+code/data/datasets/filtered/msmarco_valid_filtered.json
+code/data/datasets/filtered/msmarco_test_filtered.json
+code/data/datasets/filtered/sem_test_filtered.json
+```
+
+The final selected model and its directly required caches are:
+
+```text
+code/data/models/lightning/granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v4_finetuned/
+code/data/embeddings/merged_causenet_ceg_nodes.jsonl
+code/data/embeddings/causenet_full_nodes.jsonl
+code/data/embeddings/granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v4_finetuned_dim64_embeddings_vectors.npy
+code/data/embeddings/granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v4_finetuned_causenet_full_dim64_embeddings_vectors.npy
+code/data/evaluation/causenet/msmarco_train/v4/visited_nodes_analysis.json
+```
+
+All final test result files follow this layout:
+
+```text
+code/data/evaluation/<causenet|causenet_full|ceg>/<msmarco_test|sem_test>/v4/evaluation_results.{json,csv}
+```
+
+The validation/model-selection source is `code/data/evaluation/causenet/msmarco_valid/v4/evaluation_results.json`. All test graphs reuse the per-model/dimension p95 caps from `code/data/evaluation/causenet/msmarco_train/v4/visited_nodes_analysis.json`; this file gives Granite-64 `τ=23` and capped BFS `τ=1316`.
+
+### Download the graphs
 
 The original graph files are downloaded separately:
 
@@ -225,59 +309,106 @@ The original graph files are downloaded separately:
 | CauseNet Full | [CauseNet downloads](https://causenet.org/) | `code/data/graphs/causenet-full.jsonl` |
 | Cause Effect Graph (CEG) | [CausalBank / CEG](https://github.com/eecrazy/CausalBank) | `code/data/graphs/Lexical_Cause_Effect_Graph.txt` |
 
-CauseNet downloads are distributed as `.jsonl.bz2`; decompress them and keep the filenames shown above. To create the filtered CEG used in the experiments, run from `code/`:
+CauseNet downloads are distributed as `.jsonl.bz2`; decompress them and keep the filenames shown above. Download both CauseNet Precision and CauseNet Full to rerun all reported graph settings. Use the CausalBank **Cause Effect Graph**, not the sentence corpus. Place the raw `Lexical_Cause_Effect_Graph.txt` as shown, then create the filtered CEG from `code/`:
 
 ```powershell
 python -m preprocessing.filter_ceg_graph
 ```
 
-This writes `data/graphs/Lexical_Cause_Effect_Graph.filtered.txt`. The binary causal dataset splits originate from the [RL baseline repository](https://github.com/ds-jrg/causal-qa-rl); normalized files are expected at the paths above.
+This writes `data/graphs/Lexical_Cause_Effect_Graph.filtered.txt`. The code’s current graph identifiers are `causenet`, `causenet_full`, and `ceg`; `causalbank` remains only as a legacy alias. The binary causal dataset splits originate from the [RL baseline repository](https://github.com/ds-jrg/causal-qa-rl).
 
 ## Reproduce the experiments
 
 All commands in this section run from `code/` after the required graphs and research artifacts are in place.
 
+### Inspect released results and regenerate plots
+
+Machine-readable final results are already included in the artifact. Regenerate the standard, ablation, thesis, and budget-tradeoff figures without loading a graph or model:
+
+```powershell
+python -m evaluation.evaluation_viz --all --run-suffix v4
+python -m evaluation.evaluation_viz --all --ablation --run-suffix v4 --dim 64
+python -m evaluation.evaluation_viz --thesis --run-suffix v4
+python -m evaluation.evaluation_viz --tradeoff
+```
+
+These commands write under `data/plots/`, preserving the graph/dataset/v4 hierarchy where applicable.
+
+### Check the complete evaluation plan
+
 Print the evaluation commands without running them:
 
 ```powershell
-python -m evaluation.run_all_evaluations --run-suffix v4 --select-best-from-validation --dry-run
+python -m evaluation.run_all_evaluations --run-suffix v4 --select-best-from-validation --skip-dijkstra --skip-ablation --dry-run
 ```
 
-Evaluate all fine-tuned candidates on validation, apply the Pareto-knee selection rule, and use the winner for the test runs:
+The dry run reads the released validation results and should select the local Granite v4 export at dimension 64. It also prints the six final test commands for the two datasets across `causenet`, `causenet_full`, and `ceg`.
+
+### Rerun only the frozen final configuration
+
+This skips validation/model selection, uses the fixed Granite-64 default, and reruns A*, capped/uncapped BFS, and RL on all six test settings:
+
+```powershell
+python -m evaluation.run_all_evaluations --run-suffix v4 --skip-validation --skip-dijkstra --skip-ablation
+```
+
+The final model needs the shared Granite-64 cache for CauseNet Precision and CEG, plus the graph-specific Granite-64 cache for CauseNet Full. The RL rows additionally need the released RL checkpoint and GloVe 300d.
+
+### Rerun validation selection and final tests
+
+The full primary v4 package contains all five exported fine-tuned models, their shared-universe Matryoshka caches, and the matching base-model caches used for the pretrained comparison rows. Rerun validation, apply the recorded Pareto-knee rule, and use the selected winner on the test settings:
 
 ```powershell
 python -m evaluation.run_all_evaluations --run-suffix v4 --select-best-from-validation --skip-dijkstra --skip-ablation
 ```
 
-The full workflow is expensive and reruns existing rows by default. Add `--no-force` to reuse completed results. Omit `--skip-dijkstra` and `--skip-ablation` to include those experiment phases.
+Evaluation is expensive and the orchestration command refreshes existing baseline and model rows by default. Add `--no-force` to retain completed rows. Remove `--skip-dijkstra` to include Dijkstra. Remove `--skip-ablation` to rerun the four Granite activation/distance configurations at `d=64`; the package includes the required ablation exports and shared/full-graph caches.
 
-Generate plots from stored evaluation results:
+To regenerate the training-split visit budgets before evaluation:
 
 ```powershell
-python -m evaluation.evaluation_viz --all --run-suffix v4
+python -m evaluation.visited_nodes_analysis data/datasets/filtered/msmarco_train_filtered.json --run-suffix v4 --graph causenet --embedding-device cuda
+```
+
+The released p95 file is the source of truth for the thesis results; regenerating it rebuilds that analysis from the available v4 models and caches.
+
+### Optional: normalize datasets
+
+The artifact already contains normalized files. When starting from the raw splits, run:
+
+```powershell
+python -m preprocessing.normalize_datasets msmarco_train
+python -m preprocessing.normalize_datasets msmarco_valid
+python -m preprocessing.normalize_datasets msmarco_test
+python -m preprocessing.normalize_datasets sem_test
 ```
 
 <details>
-<summary><strong>Optional: train candidate models from scratch</strong></summary>
+<summary><strong>Optional: reproduce the full v4 training pipeline</strong></summary>
 
-The commands below show hyperparameter search and final training for Granite. To reproduce cross-model selection from scratch, run the same stages for every embedding backbone defined in the project configuration, then precompute their evaluated Matryoshka dimensions.
+The released exports make retraining unnecessary. For an exact from-scratch pipeline, run hyperparameter search and final training for each of the five backbones in `code/core/config.py`, precompute their shared caches, regenerate p95 budgets, run validation/model selection, then run the frozen test evaluation. Training data derived from A* paths are generated and cached under `data/datasets/` automatically when absent.
+
+Granite’s final v4 study used a 50-trial maximum, 30-trial minimum, study patience 5, per-trial early-stopping patience 3, 10 epochs per trial, no embedding normalization, and Matryoshka training. The released Optuna study selected ReLU, Euclidean distance, and learning rate `2.7088928792005436e-05`; final training used up to 50 epochs with patience 10 and effective batch size 128.
 
 ```powershell
-python -m finetune.hparam_search --model ibm-granite/granite-embedding-english-r2 --run-suffix v4 --trials 50 --epochs 10 --patience 5
+python -m finetune.hparam_search --model ibm-granite/granite-embedding-english-r2 --run-suffix v4 --trials 50 --min-trials 30 --study-patience 5 --epochs 10 --patience 3
 python -m finetune.finetune_best --model ibm-granite/granite-embedding-english-r2 --run-suffix v4 --epochs 50 --patience 10
 ```
 
-Precompute the selected 64-dimensional cache for the shared CauseNet Precision / CEG node universe:
+`finetune_best` uses the latest matching v4 Optuna SQLite study. To rebuild every primary shared cache and all configured Matryoshka prefixes after training:
+
+```powershell
+python -m core.pre_embed --run-suffix v4 --all-dims --embedding-device cuda
+```
+
+For only the selected shared and CauseNet Full caches:
 
 ```powershell
 python -m core.pre_embed --model data/models/lightning/granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v4_finetuned --dim 64 --run-suffix v4
-```
-
-CauseNet Full has a separate node universe and cache:
-
-```powershell
 python -m core.pre_embed --model data/models/lightning/granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v4_finetuned --dim 64 --run-suffix v4 --graph causenet_full
 ```
+
+Do not pre-embed `ceg` separately: CauseNet Precision and filtered CEG share `merged_causenet_ceg_nodes.jsonl`. CauseNet Full uses `causenet_full_nodes.jsonl` and a `_causenet_full_...` cache name.
 
 </details>
 

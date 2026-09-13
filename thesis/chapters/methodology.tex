@@ -6,14 +6,14 @@ This chapter presents the proposed methodology for binary causal question answer
 \section{Problem Setting}
 \label{sec:method_formulation}
 
-Following the graph-based formulation introduced in Section~\ref{sec:foundations_graphs}, this thesis treats binary causal question answering as directed reachability. Given two concepts $A$ and $B$ with corresponding graph nodes $a,b\in V$, the task is to determine whether a directed path from $a$ to $b$ can be found. A discovered path yields a positive answer, while failure to find one yields a negative answer under the applied search procedure.
+Following the graph-based formulation introduced in Section~\ref{sec:foundations_graphs}, this thesis treats binary causal question answering as directed pathfinding. Given two concepts $A$ and $B$ with corresponding graph nodes $a,b\in V$, the task is to find a directed path from $a$ to $b$. If found, the system answers that a causal relationship exists. Otherwise, it answers that none exists.
 
 \section{Embedding-Guided \texorpdfstring{$A^*$}{A*} Search}
 \label{sec:method_search}
 
-To search efficiently for a directed causal path from $a$ to $b$, this work employs an embedding-guided $A^*$ algorithm. In spatial path-finding applications, $A^*$ heuristics often rely on geometric distances, whereas causal knowledge graphs provide no spatial coordinates from which such estimates can be derived. Therefore, each graph node is mapped to a corresponding point in a $d$-dimensional embedding space according to
+To search efficiently for a directed causal path from $a$ to $b$, this work employs an embedding-guided $A^*$ algorithm. In spatial pathfinding applications, $A^*$ heuristics often rely on geometric distances, whereas causal knowledge graphs provide no spatial coordinates from which such estimates can be derived. Therefore, each graph node is mapped to a corresponding point in a $D$-dimensional embedding space according to
 \[
-\phi \colon V \rightarrow \mathbb{R}^{d},
+\phi \colon V \rightarrow \mathbb{R}^{D},
 \]
 where $\phi(v)$ denotes the vector representation of node $v$. The traversal cost of an edge $(u,v)$ is defined as the distance between the embeddings of $u$ and $v$,
 \[
@@ -31,17 +31,17 @@ and the priority of each node is determined by
 \[
 f(n)=g(n)+h(n).
 \]
-Let $\tau$ denote the maximum visited-node budget, with $\tau=-1$ indicating that no limit is applied. Nodes are expanded in ascending order of $f(n)$ until $b$ is reached, the priority queue is exhausted, or $\tau$ is exceeded. The implementation retains the lowest known path cost for each node and does not reopen nodes after expansion. This reduces traversal overhead but does not retain the optimality guarantee of classical $A^*$ when the heuristic is not consistent. Algorithm~\ref{alg:bounded-astar} presents the proposed bounded embedding-guided $A^*$ search.
+Let $\tau$ denote the maximum visited-node budget, with $\tau=-1$ indicating that no limit is applied. Nodes are expanded in ascending order of $f(n)$ until $b$ is reached, the priority queue is exhausted, or $\tau+1$ nodes have been visited. The implementation retains the lowest known path cost for each node and does not reopen nodes after expansion. This reduces traversal overhead but forfeits the optimality guarantee of classical $A^*$ when the heuristic is inconsistent. Algorithms~\ref{alg:bounded-astar-reachability} and~\ref{alg:bounded-astar-path} present the reachability-only and path-returning variants, respectively. The former is used for efficient evaluation, while the latter is used when the discovered path is needed.
 
 \section{Fine-Tuning the Embedding Space}
 \label{sec:method_finetuning}
 
-The evaluated pretrained embedding models are designed primarily for semantic similarity, retrieval, or ranking rather than causal graph traversal~\cite{allmpnet:modelcard,bge:modelcard,granite:modelcard,mxbai:modelcard,qwen3:modelcard}. Their original embedding spaces therefore do not necessarily reflect which neighboring nodes are most relevant for reaching a causal target. To improve the search heuristic, the embedding space is fine-tuned using successful causal search paths. At each step, the successor on the discovered path is contrasted with alternative outgoing neighbors, encouraging the model to assign more favorable embedding-space distances to transitions that lead toward the target. The resulting representations are therefore better aligned with the requirements of embedding-guided $A^*$ search. Chapter~\ref{chap:train} details this procedure.
+The evaluated pretrained embedding models are designed primarily for semantic similarity, retrieval, or ranking rather than causal graph traversal~\cite{allmpnet:modelcard,bge:modelcard,granite:modelcard,mxbai:modelcard,qwen3:modelcard}. Their original embedding spaces therefore do not necessarily reflect which neighboring nodes are most relevant for reaching a causal target. To improve search guidance, the embedding space is fine-tuned using successful causal search paths. Because the same embedding distance defines both the edge cost and the heuristic, fine-tuning adapts both components of the $A^*$ evaluation function. At each step, the successor on the discovered path is contrasted with alternative outgoing neighbors, encouraging the model to assign more favorable embedding-space distances to transitions that lead toward the target. The resulting representations are therefore better aligned with the requirements of embedding-guided $A^*$ search. Chapter~\ref{chap:train} details this procedure.
 
 \section{Implementation Overview}
 \label{sec:method_framework}
 
-The implementation covers graph search, hyperparameter optimization, model training, evaluation, and interactive visualization. Dataset processing relies on Hugging Face Datasets~\cite{lhoest:2021}, while Optuna~\cite{akiba:2019} is used to optimize the hyperparameters before training. The Sentence Transformer models~\cite{reimers:2019} are subsequently trained with PyTorch~\cite{paszke:2019} and PyTorch Lightning~\cite{falcon:2019}, while NumPy~\cite{harris:2020} is used for embedding storage and access. The demonstration shown in Figure~\ref{fig:frontend-demo} is implemented using FastAPI~\cite{ramirez:fastapi} and 3d-force-graph~\cite{asturiano:3dforcegraph}. It allows users to select a graph, embedding model, and Matryoshka dimension, execute embedding-guided $A^*$ search, and visualize the resulting causal path.\footnote{The demonstration is deployed at \url{https://pathfinding.demo.causenet.org}.}
+The proposed methodology is implemented as a pipeline that integrates graph search, hyperparameter optimization, model training, evaluation, and interactive visualization. Dataset processing relies on Hugging Face Datasets~\cite{lhoest:2021}, while Optuna~\cite{akiba:2019} is used for hyperparameter optimization before training. The sentence transformer models~\cite{reimers:2019} are trained with PyTorch~\cite{paszke:2019} and PyTorch Lightning~\cite{falcon:2019}, while NumPy~\cite{harris:2020} is used for embedding storage and access. The demonstration shown in Figure~\ref{fig:frontend-demo} is implemented as an interactive web application using FastAPI~\cite{ramirez:fastapi} and 3d-force-graph~\cite{asturiano:3dforcegraph}. It allows users to select a graph, embedding model, and Matryoshka dimension, execute embedding-guided $A^*$ search, and visualize the resulting causal path.\footnote{The demonstration is deployed at \url{https://causalpathfinding.web.webis.de/}.}
 
 \begin{figure}[t]
     \centering

@@ -21,17 +21,17 @@
 % ------
 \ThesisSetTitle{Learning Heuristics for Efficient Causal Question Answering Using A* Search}
 \ThesisSetKeywords{Causal Question Answering, Causal Knowledge Graphs, A* Search, Heuristic Graph Search, Sentence Embeddings, Matryoshka Embeddings, Graph Traversal}
-\ThesisSetLocation{Kassel} 
+\ThesisSetLocation{Kassel}
 
 \ThesisSetAuthor{Ashkan Kiafard}
 \ThesisSetStudentNumber{35825953}
 \ThesisSetDateOfBirth{23}{06}{2002}
 \ThesisSetPlaceOfBirth{Iran}
 
-% Supervisors should usually be Professors from the candidate's university. A second supervisor is not always needed. 
+% Supervisors should usually be Professors from the candidate's university. A second supervisor is not always needed.
 \ThesisSetSupervisors{Prof.\ Dr.\ Martin Potthast,Prof.\ Dr.\ Oliver Hohlfeld}
 
-\ThesisSetSubmissionDate{31}{7}{2026}
+\ThesisSetSubmissionDate{9}{9}{2026}
 
 %
 % Suggested Packages
@@ -73,13 +73,14 @@
 \usepackage{float}
 \usepackage{array}
 \usepackage{algorithm}
+\usepackage[bottom]{footmisc}
 \usepackage{algpseudocode}
 \usepackage{siunitx}
 \sisetup{
     group-separator = {,},
     group-minimum-digits = 4
 }
-  
+
 % Create links in the pdf document
 % Hyperref has some incompatibilities with other packages
 % Some other packages must be loaded before, some after hyperref
@@ -90,9 +91,11 @@
 \begin{document}
 \begin{frontmatter}
 
+
 \begin{abstract}
-Identifying causal relationships is important across domains such as healthcare, economics, public policy, and environmental science. A fundamental task is determining whether a causal relation exists between two concepts, expressed as the binary question ``Does \(A\) cause \(B\)?''. While large language models can answer such questions directly, their responses may hallucinate relations and often lack an explicit reasoning path. Causal knowledge graphs provide a structured and interpretable alternative, allowing binary causal question answering to be formulated as directed graph traversal. However, exhaustive methods such as Breadth-First Search (BFS) become expensive on large causal graphs. This thesis proposes an embedding-guided \(A^*\) method for efficient causal path discovery. Embedding distances are used as edge costs and heuristic estimates toward the target concept. Because pretrained embeddings are not optimized for causal reachability, the embedding space is fine-tuned using successful search trajectories. Matryoshka Representation Learning further enables compact embeddings that reduce computational cost while preserving effectiveness. The final configuration uses fine-tuned Granite Embedding R2 with a 32-dimensional Matryoshka prefix, ReLU activation, Euclidean distance, and a search budget of \(\tau=27\). Experiments on binary causal question answering datasets derived from MS MARCO and SemEval across CauseNet Precision, CauseNet Full, and CEG Filtered show substantial efficiency gains. On the larger CauseNet Full and CEG Filtered graphs, the selected \(A^*\) configuration is at least \(9.8\times\) faster than capped BFS and \(32.1\times\) faster than uncapped BFS, while reducing visited nodes by more than \(400\times\) and \(1{,}100\times\), respectively. Compared with the LSTM-based reinforcement learning baseline of \citeauthor{bluebaum:2024}, it achieves higher F\textsubscript{1} and lower runtime in all final test settings, with at least a \(39.7\times\) speedup. Overall, the results show that learning an embedding-based heuristic provides an efficient alternative to learning a traversal policy while keeping causal graph search explicit and interpretable.
+Many information needs are causal, asking why events occur, what consequences they have, or whether one event leads to another. Such questions arise across domains including healthcare, economics, public policy, and environmental science. A fundamental task is answering the binary question \mbox{``Does $A$ cause $B$?''} While large language models can answer such questions directly, their responses may hallucinate causal relationships and often lack an explicit causal path. Causal graphs instead encode causal knowledge explicitly by representing concepts or events as nodes and causal relationships as directed edges. This allows binary causal question answering to be formulated as directed pathfinding, where an answer can be supported by an explicit path from $A$ to $B$. Exhaustive pathfinding methods such as Breadth-First Search (BFS) become expensive on large causal graphs. This thesis proposes an embedding-guided $A^*$ method for efficient causal path discovery. Embedding distances are used as edge costs and heuristic estimates toward the target concept. Off-the-shelf sentence embeddings already provide useful search guidance, while fine-tuning further reduces search effort. Matryoshka Representation Learning enables compact embeddings and allows the trade-off between search efficiency and effectiveness to be controlled through embedding dimensionality. Experiments on binary causal question answering datasets derived from \mbox{MS MARCO} and SemEval across CauseNet Precision, \mbox{CauseNet Full}, and CEG Filtered show efficiency gains. On the larger \mbox{CauseNet Full} and \mbox{CEG Filtered} graphs, the selected $A^*$ configuration is at least $1.3\times$ as fast as capped BFS and $8.2\times$ as fast as uncapped BFS, while reducing the number of visited nodes by factors of at least $5.9$ and $107$, respectively. Compared with the reinforcement learning approach of \citeauthor{bluebaum:2024}, it achieves higher F\textsubscript{1} in all final test settings while being at least $56\times$ as fast. Overall, the results show that learning an embedding-based heuristic provides an efficient alternative to exhaustive and neural graph traversal.
 \end{abstract}
+
 
 
 \tableofcontents
@@ -110,7 +113,7 @@ Identifying causal relationships is important across domains such as healthcare,
 % optional: list of symbols/notation (e.g., using the nomencl package) but usually not needed
 \end{frontmatter}
 
-\include{chapters/introduction} 
+\include{chapters/introduction}
 
 \include{chapters/foundations}
 
@@ -128,6 +131,11 @@ Identifying causal relationships is important across domains such as healthcare,
 
 \bibliographystyle{unsrtnat}
 \bibliography{literature}
+
+\clearpage
+\section*{Use of AI Tools}
+
+OpenAI ChatGPT was used for language editing, formulation suggestions, consistency checks, and assistance with software development. All generated suggestions were reviewed, while responsibility for the scientific content, results, and cited sources remained entirely with the author.
 
 \appendix
 \include{chapters/appendix}

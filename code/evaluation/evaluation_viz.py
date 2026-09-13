@@ -3061,6 +3061,11 @@ def load_thesis_selected_rows():
             continue
 
         if model in THESIS_FINETUNED_ASTAR_MODELS:
+            if used_config.get("astar_max_visits") == -1:
+                excluded_systems[
+                    f"{model} (uncapped)"
+                ] = "uncapped A* is excluded from the dimensionality figure"
+                continue
             result = evaluations.get("A*")
             if result is None:
                 raise ValueError(f"Whitelisted model {model} has no A* evaluation")

@@ -1,17 +1,32 @@
-\begin{table}[H]
-\centering
-\small
-\caption{Selected final-training hyperparameters and zero-indexed final improving epoch for each fine-tuned embedding model.}
-\label{tab:training-hyperparameters}
-\begin{tabular}{@{}p{6cm}llr r@{}}
-\toprule
-\textbf{Model} & \textbf{Activation} & \textbf{Distance} & \textbf{lr [$10^{-5}$]} & \textbf{Epoch} \\
-\midrule
-MPNet & ReLU & Cosine & $2.933$ & $1$ \\
-BGE & ReLU & Euclidean & $2.815$ & $0$ \\
-mxbai & ReLU & Euclidean & $2.944$ & $0$ \\
-Granite & ReLU & Euclidean & $2.717$ & $10$ \\
-Qwen & ReLU & Euclidean & $2.904$ & $0$ \\
-\bottomrule
-\end{tabular}
+\begin{table}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}c@{\hspace{7.25em}}c@{}}
+    \textbf{(a) Selected hyperparameters} & \textbf{(b) Selected epoch} \\[2pt]
+    \begin{tabular}[t]{@{}lllr@{}}
+      \toprule
+      \textbf{Model} & \textbf{Activation} & \textbf{Metric} & \textbf{lr [$10^{-5}$]} \\
+      \midrule
+      MPNet & ReLU & Cosine & $2.673$ \\
+      BGE & ReLU & Cosine & $2.924$ \\
+      mxbai & ReLU & Cosine & $2.935$ \\
+      Granite & ReLU & Euclidean & $2.709$ \\
+      Qwen & ReLU & Cosine & $2.887$ \\
+      \bottomrule
+    \end{tabular}
+    &
+    \begin{tabular}[t]{@{}lr@{}}
+      \toprule
+      \textbf{Model} & \textbf{Epoch} \\
+      \midrule
+      MPNet & 0 \\
+      BGE & 0 \\
+      mxbai & 3 \\
+      Granite & 10 \\
+      Qwen & 10 \\
+      \bottomrule
+    \end{tabular}
+  \end{tabular}
+  \caption{Final training settings. Panel (a) reports the selected activation function, distance metric, and learning rate. Panel (b) reports the zero-indexed epoch of the last improvement in validation $A^*$ cost. Its checkpoint is retained for evaluation.}
+  \label{tab:training-hyperparameters}
 \end{table}
