@@ -105,7 +105,7 @@ The answer is **Yes** because the graph contains a directed path from the source
 
 ## Results
 
-The final system was evaluated on graph-covered MS MARCO and SemEval questions across CauseNet Precision, CauseNet Full, and CEG Filtered. The table reports the **MS MARCO test** results.
+The final system was evaluated on graph-covered MS MARCO and SemEval questions across CauseNet Precision, CauseNet Full, and CEG Filtered. The table reports the **MS MARCO test** results. Bold values mark the best result for each graph and metric; tied best values are both bold.
 
 | Graph | Method | F1 | Avg. visited nodes | Time/query |
 |---|---|---:|---:|---:|
@@ -113,9 +113,9 @@ The final system was evaluated on graph-covered MS MARCO and SemEval questions a
 |  | BFS, uncapped | **90.6** | 1,157.3 | 1.4 ms |
 |  | BFS, capped | 90.2 | 134.9 | **0.5 ms** |
 |  | RL baseline | 70.3 | 32.0 | 67.7 ms |
-| CauseNet Full | Selected A* | 82.9 | **7.5** | 7.2 ms |
+| CauseNet Full | Selected A* | 82.9 | **7.5** | **7.2 ms** |
 |  | BFS, uncapped | **89.9** | 30,099.3 | 59.5 ms |
-|  | BFS, capped | 87.2 | 135.1 | **9.4 ms** |
+|  | BFS, capped | 87.2 | 135.1 | 9.4 ms |
 |  | RL baseline | 69.9 | 44.6 | 658.1 ms |
 | CEG Filtered | Selected A* | **92.0** | **2.3** | **0.8 ms** |
 |  | BFS, uncapped | 90.9 | 492.1 | 44.3 ms |
