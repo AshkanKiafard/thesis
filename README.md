@@ -181,7 +181,7 @@ The frontend loads 3d-force-graph and supporting UI libraries from CDNs, so the 
 │   ├── preprocessing/        # Dataset normalization and CEG filtering
 │   ├── web_demo/             # FastAPI API and 3d-force-graph frontend
 │   ├── tests/                # Cache, graph, registry, and reporting tests
-│   ├── data/                 # Local/Zenodo artifacts; ignored by Git except placeholders
+│   ├── data/                 # Local reproducibility artifacts; ignored by Git except placeholders
 │   │   ├── cache/            # Generated web-demo/report caches; contents are not released
 │   │   ├── checkpoints/      # Raw Lightning checkpoints; optional and not released
 │   │   ├── datasets/         # Raw and normalized evaluation datasets
@@ -189,7 +189,7 @@ The frontend loads 3d-force-graph and supporting UI libraries from CDNs, so the 
 │   │   ├── docs/             # SHA-256 checksum allowlist for the release archive
 │   │   ├── embeddings/       # Node indices and memory-mapped embedding matrices
 │   │   ├── evaluation/       # JSON/CSV results and p95 analyses
-│   │   ├── graphs/           # Provider-downloaded graph files; not in the Zenodo archive
+│   │   ├── graphs/           # Provider-downloaded graph files; not included in the artifact
 │   │   ├── lightning_logs/   # Generated training logs; not released
 │   │   ├── models/           # Exported v4 models and RL checkpoint
 │   │   ├── optuna_studies/   # Final v4 hyperparameter-search SQLite studies
@@ -220,9 +220,7 @@ A CUDA-capable GPU is recommended for training, embedding precomputation, and th
 
 ## Reproducibility artifacts and graphs
 
-Zenodo: TODO (the DOI will be added when the final record is published)
-
-Until the final Zenodo record is available, the v4 reproducibility artifact can be downloaded as [`datasets.zip` from Google Drive](https://drive.google.com/file/d/108g4Sz_kOrKyDriroRmI8R6oqoDdgNzl/view) (approximately 30.6 GiB). Extract the archive into `code/data/`. A correctly extracted copy starts with this layout:
+Download the v4 reproducibility artifact as [`datasets.zip` from Google Drive](https://drive.google.com/file/d/108g4Sz_kOrKyDriroRmI8R6oqoDdgNzl/view) (approximately 30.6 GiB). Extract the archive into `code/data/`. A correctly extracted copy starts with this layout:
 
 ```text
 code/data/
@@ -236,7 +234,7 @@ code/data/
 └── reports/
 ```
 
-The Google Drive artifact—and the forthcoming Zenodo release—contains:
+The Google Drive artifact contains:
 
 | Archive path | Contents and purpose |
 |---|---|
