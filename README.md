@@ -6,7 +6,7 @@ A Python/PyTorch project for binary causal question answering. Given a question 
 
 > Instead of learning a traversal policy, this project learns the heuristic used by A*.
 
-On the 12.2-million-node CauseNet Full graph, the selected A* configuration averages **7.5 visited nodes and 7.2 ms per MS MARCO query**. Uncapped BFS averages 30,099.3 visited nodes and 59.5 ms, with F1 scores of 82.9 and 89.9 respectively.
+On the 12.2-million-node CauseNet Full graph, the selected A* configuration achieves **82.9 F1** while averaging **7.5 visited nodes and 7.2 ms per MS MARCO query**. Uncapped BFS achieves **89.9 F1** while averaging **30,099.3 visited nodes and 59.5 ms per query**.
 
 ## Problem
 
