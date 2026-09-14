@@ -209,7 +209,7 @@ From the repository root:
 
 ```powershell
 python -m venv .venv
-# Activate .venv for your shell, then:
+# Activate .venv in the current shell, then:
 python -m pip install --upgrade pip
 python -m pip install -r code/requirements.txt
 python -m nltk.downloader punkt punkt_tab stopwords
@@ -218,13 +218,25 @@ cd code
 
 A CUDA-capable GPU is recommended for training, embedding precomputation, and the complete evaluation. CPU execution is supported by the relevant `--embedding-device cpu` options, but full-graph runs are resource intensive.
 
-## Data, graphs, and research artifacts
+## Reproducibility artifacts and graphs
 
-<!-- TODO: Add final Zenodo DOI/link -->
+Zenodo: TODO (the DOI will be added when the final record is published)
 
-Download the current v4 reproducibility archive from [Google Drive](https://drive.google.com/file/d/108g4Sz_kOrKyDriroRmI8R6oqoDdgNzl/view). After downloading the ZIP file, extract it and merge the archive's top-level folders directly into `code/data/`. For example, the archive's `datasets/` directory must become `code/data/datasets/`; do not leave the files inside an additional ZIP-named or `data/` directory.
+Until the final Zenodo record is available, the v4 reproducibility artifact can be downloaded as [`datasets.zip` from Google Drive](https://drive.google.com/file/d/108g4Sz_kOrKyDriroRmI8R6oqoDdgNzl/view) (approximately 30.6 GiB). Extract the archive into `code/data/`. A correctly extracted copy starts with this layout:
 
-The final v4 Zenodo archive has not been published yet. The prepared local artifact is rooted at `code/data/`; its large contents are intentionally ignored by Git. Upload the following folders/files, preserving these paths inside one archive:
+```text
+code/data/
+├── datasets/
+├── docs/
+├── embeddings/
+├── evaluation/
+├── models/
+├── optuna_studies/
+├── plots/
+└── reports/
+```
+
+The Google Drive artifact—and the forthcoming Zenodo release—contains:
 
 | Archive path | Contents and purpose |
 |---|---|
@@ -236,30 +248,15 @@ The final v4 Zenodo archive has not been published yet. The prepared local artif
 | `plots/` | Regenerated v4, ablation, tradeoff, and thesis plots |
 | `reports/` | Machine-readable and LaTeX dataset, graph, hyperparameter, and p95 reports |
 | `optuna_studies/hparam_search/` | The five final v4 Optuna SQLite studies used by `finetune_best` |
-| `docs/v4-sha256sums.txt` | SHA-256 checksums and the authoritative file-level upload allowlist |
+| `docs/v4-sha256sums.txt` | SHA-256 checksums for every payload file in the artifact |
 
-This explicitly includes the complete final `plots/` tree and the five studies under `optuna_studies/hparam_search/`. The authoritative file-level upload allowlist is `code/data/docs/v4-sha256sums.txt`: every payload file except the checksum file itself appears there.
+The complete `plots/` tree and the five final Optuna studies under `optuna_studies/hparam_search/` are included. External causal graph files are distributed by their original providers and are downloaded separately as described below. Runtime caches, raw Lightning checkpoints, and training logs are not part of the reproducibility artifact.
 
-Do **not** zip the current `code/data/` directory verbatim. It also contains provider-downloaded graphs, generated web-demo caches, logs, and other local-only workspace directories. Build a clean archive containing the paths in the table above, include `docs/v4-sha256sums.txt`, and exclude:
-
-```text
-cache/
-checkpoints/
-docker/
-graphs/
-lightning_logs/
-embeddings/glove.6B/glove.6B.50d.txt
-embeddings/glove.6B/glove.6B.100d.txt
-embeddings/glove.6B/glove.6B.200d.txt
-```
-
-`code/data/docs/setup.md` has already been removed and must not be included because it contained machine-specific/personal setup information. With those exclusions, creating one Zip64 archive whose root directly contains `datasets/`, `embeddings/`, `evaluation/`, `models/`, `optuna_studies/`, `plots/`, `reports/`, and `docs/` is the recommended Zenodo upload format. Do not put those folders inside an additional outer `data/` directory.
-
-Normal reproduction does not require retraining or recomputing embeddings. Extract the future archive so that its contents merge directly into `code/data/`. The released result JSON/CSV files are sufficient to inspect the measurements and regenerate plots. Re-running evaluation additionally requires the relevant graph files, model export, node index, embedding matrix, and—for RL—the checkpoint and 300-dimensional GloVe file.
+Retraining and embedding precomputation are not required to inspect the measurements or regenerate the plots. Re-running an evaluation additionally requires the corresponding graph, exported model, node index, and embedding matrix. RL evaluation also uses the included checkpoint and 300-dimensional GloVe vectors.
 
 ### Verify the downloaded archive
 
-`code/data/docs/v4-sha256sums.txt` uses the standard GNU `sha256sum` format. It lists every release payload file except itself. After extracting the archive, verify all files from `code/data/`:
+`code/data/docs/v4-sha256sums.txt` uses the standard GNU `sha256sum` format and lists every payload file except the checksum file itself. From `code/data/`, verify the extracted artifact with:
 
 ```bash
 sha256sum --check docs/v4-sha256sums.txt
@@ -408,7 +405,7 @@ python -m core.pre_embed --model data/models/lightning/granite-embedding-english
 python -m core.pre_embed --model data/models/lightning/granite-embedding-english-r2_relu_euclid_nonorm_matryoshka_v4_finetuned --dim 64 --run-suffix v4 --graph causenet_full
 ```
 
-Do not pre-embed `ceg` separately: CauseNet Precision and filtered CEG share `merged_causenet_ceg_nodes.jsonl`. CauseNet Full uses `causenet_full_nodes.jsonl` and a `_causenet_full_...` cache name.
+CauseNet Precision and filtered CEG share `merged_causenet_ceg_nodes.jsonl`, so CEG does not need a separate pre-embedding run. CauseNet Full uses `causenet_full_nodes.jsonl` and a `_causenet_full_...` cache name.
 
 </details>
 
